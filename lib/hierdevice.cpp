@@ -683,16 +683,18 @@ bool HierarchicalInstance::buildHierarchy(Circuit& circuit, RpnEvaluator& evalua
         }
     }
 
-    // Build root block
-    if (!buildBlock(circuit, evaluator, idata, parsedSubcircuit.root(), s)) {
-        return false;
-    }
-
-    // Build all active conditional blocks
+    // Build all active conditional blocks FIRST
+    // This ensures models defined in conditional blocks are available
+    // before instances in the root block try to use them
     for(auto condBlock : activeBlocks) {
         if (!buildBlock(circuit, evaluator, idata, *condBlock, s)) {
             return false;
         }
+    }
+
+    // Build root block
+    if (!buildBlock(circuit, evaluator, idata, parsedSubcircuit.root(), s)) {
+        return false;
     }
 
     // At this point all parameters of the hierarchical instance 
