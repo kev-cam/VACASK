@@ -66,6 +66,6 @@ analysis xf1 dcxf out=["outp", "outn"]
 
 - A file `<analysis>.*` containing the requested transfer functions, impedances, 
   and admittances.
-- If `writeop=1`, an additional `<analysis>.op.*raw*` file containing the operating
+- If `writeop=1`, an additional `<analysis>.op.*` file containing the operating
   point solution.
 
