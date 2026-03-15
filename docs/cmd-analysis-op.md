@@ -25,13 +25,13 @@ The analysis computes:
 | `store` | string | `""` | Name under which to store the computed solution for later use as nodesets/initial conditions in other analyses. |
 | `write` | boolean | `1` | Whether to write the results to the output file. Set to 0 to suppress output. |
 
-Nodesets are hnints to the solver specifying what the expected solution should be 
+Nodesets are hints to the solver specifying what the expected solution should be 
 (approximately). You can think of them as starting points for the Newton-Raphson algorithm. 
 The results can be used as nodesets or initial conditions for subsequent analyses like 
 AC, transient, or noise. For that purpose you can store them in a solution slot. The name of 
-the solution slot is specified by the `write` parameter.
+the solution slot is specified by the `store` parameter.
 
-## Save Directives
+## Save directives
 
 Operating point analysis supports the following save directives to control what data is written to the output file:
 
