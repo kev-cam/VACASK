@@ -70,7 +70,7 @@ analysis dc2 dcinc
 ## Output
 
 - A file `<analysis>.*` containing the requested incremental results.
-- If `writeop=1`, an additional `<analysis>.op.*raw*` file containing the operating
+- If `writeop=1`, an additional `<analysis>.op.*` file containing the operating
   point solution.
 
 ## Notes
