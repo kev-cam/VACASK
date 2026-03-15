@@ -143,6 +143,7 @@ symfiles = [
     [ "sg13g2_pr/diodevss_2kv.sym", patch_analog ],
     [ "sg13g2_pr/diodevss_4kv.sym", patch_analog ],
     [ "sg13g2_pr/dpantenna.sym", patch_analog ],
+    [ "sg13g2_pr/schottky_nbl1.sym", patch_analog ],
     [ "sg13g2_pr/nmoscl_2.sym", patch_analog ],
     [ "sg13g2_pr/nmoscl_4.sym", patch_analog ],
     [ "sg13g2_pr/npn13G2_5t.sym", patch_analog ],
