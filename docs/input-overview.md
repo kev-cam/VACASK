@@ -2,7 +2,7 @@
 
 VACASK input files describe circuits using a Spectre-like netlist syntax. The primary purposes of an input file are to define the circuit topology, configure simulations, and specify what results to save.
 
-## Basic Structure
+## Basic structure
 
 An input file contains the following elements:
 
@@ -21,7 +21,7 @@ The input file is case-sensitive.
 
 ## Whitespace and newlines
 
-VACASK uses a statement-based format where each statement ends with a newline. Whitespace is ignored except within strings. Newlines within parenthesis (`()`), square brackets (`[]`), or curly brackets (`{}`) are ignored in the sense that anything following such a newline is not considered to be the begining of a new line. If a line ends with a backslash `\` the charaters that follow in the next line are considered as part of the line with the backslash. Such a backslash itself is ignored. 
+VACASK uses a statement-based format where each statement ends with a newline. Whitespace is ignored except within strings. Newlines within parentheses (`()`), square brackets (`[]`), or curly brackets (`{}`) are ignored in the sense that anything following such a newline is not considered to be the beginning of a new line. If a line ends with a backslash `\`, the characters that follow in the next line are considered as part of the line with the backslash. Such a backslash itself is ignored. 
 
 ## Comments 
 
@@ -29,7 +29,7 @@ Comments begin with `//` and extend to end of line. Another way to specify comme
 
 ## Example
 
-```
+```text
 My first circuit
 
 ground 0              // Define ground node
