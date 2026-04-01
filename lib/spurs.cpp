@@ -83,7 +83,6 @@ bool Spurs::build(const std::vector<double>& fundamentals, const std::vector<Int
 
     // Compute immax
     auto immax = std::max(maxImOrder, nHarmMax);
-
     while (true) {
         // Do we need to build ranges
         if (lastChanged<n-1) {
