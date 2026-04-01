@@ -56,6 +56,17 @@ struct DevSourceInstanceParams {
     // AC, DC incremental
     Real mag;
     Real phase; // degrees (only for AC)
+    // (Quasi)cyclostationary small-signal excitation
+    Value csmixprod;    // spurs where small signal excitations are inserted
+                        // - scalar real spur frequency
+                        // - integer vector with tone weights defining a spur
+                        // - list holding reals (frequency), integers (only for 1-tone), integer vectors (tone weights)
+    RealVector csmag;   // magnitude corresponding to spurs
+                        // - scalar for single spur
+                        // - vector for multiple spurs
+    RealVector csphase; // phase in degrees corresponding to spurs
+                        // - scalar for single spur
+                        // - vector for multiple spurs
 
     DevSourceInstanceParams();
 };
