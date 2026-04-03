@@ -116,6 +116,9 @@ ContextStack::Builtins ContextStack::builtins = {
     { Id::createStatic("unif"),     { 2, 2, false, mcGenerator<FwSum, 2> } },
     { Id::createStatic("aunif"),    { 2, 2, false, mcGenerator<FwSum, 2> } },
     
+    // List functions
+    { Id::createStatic("flatten"),  { 1, 1, true, listFlatten } },
+
     // String
     /*
     { Id::createStatic("join"),     { 1, 2, true, nullptr} }, // string vector[, separator]

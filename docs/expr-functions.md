@@ -94,3 +94,9 @@ These functions operate on vectors. `min` and `max` also accept two scalar or ve
 | `range(to)` | Integer vector `[0, 1, ..., to-1]` |
 | `range(from, to)` | Integer vector `[from, from+1, ..., to-1]` |
 | `range(from, to, step)` | Vector from `from` to `to` (exclusive) with increment `step` |
+
+## List functions
+
+| Function | Description |
+|----------|-------------|
+| `flatten(x)` | Flatten list `x` by one level: elements that are themselves lists are unpacked into the result; other elements are passed through unchanged |
