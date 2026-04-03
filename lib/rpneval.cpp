@@ -178,15 +178,6 @@ bool RpnEvaluator::evaluate(const Rpn& rpn, Value& result, Status& s) {
                 }
                 break;
             }
-            case Rpn::TMergeList: {
-                auto& p = e->get<Rpn::MergeList>();
-                // Call
-                if (!listMerge(stack_, p.arity, s)) {
-                    appendLocation(s, loc);
-                    return false;
-                }
-                break;
-            }
             case Rpn::TJump: {
                 auto& p = e->get<Rpn::Jump>();
                 // Get offset, check for infinite loop
