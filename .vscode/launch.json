@@ -128,7 +128,7 @@
             // "args": [ "-df", "${workspaceFolder}/demo/control/runfatal.sim" ], 
             // "args": [ "-df", "${workspaceFolder}/demo/control/output.sim" ], 
             // "args": [ "-df", "${workspaceFolder}/demo/spice/test.sim" ], 
-             "args": [ "-df", "${workspaceFolder}/demo/rpn/parser.sim" ], 
+            // "args": [ "-df", "${workspaceFolder}/demo/rpn/parser.sim" ], 
             // "args": [ "-df", "${workspaceFolder}/demo/rpn/sipfx.sim" ], 
             // "args": [ "-df", "${workspaceFolder}/demo/sc/opamp.sim" ], 
             // "args": [ "-df", "${workspaceFolder}/demo/sc/lpfilter.sim" ], 
