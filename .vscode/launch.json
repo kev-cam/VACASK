@@ -59,7 +59,7 @@
             // "args": [ "-df", "-dt", "${workspaceFolder}/test/test_diode.sim" ],
             // "args": [ "-df", "${workspaceFolder}/test/timestep.sim" ],
             // "args": [ "-df", "${workspaceFolder}/test/resonator.sim" ],
-             "args": [ "-df", "-dp", "${workspaceFolder}/test/test_hb1.sim" ],
+            // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_hb1.sim" ],
             // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_hb2.sim" ],
             // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_hb3.sim" ],
             // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_hb4.sim" ],
