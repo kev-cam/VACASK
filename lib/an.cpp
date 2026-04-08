@@ -86,12 +86,12 @@ bool Analysis::addOutputDescriptors(Status& s) {
 
     // Add default saves if needed (no saves specified)
     // Ignore errors and conflicts
-    addDefaultOutputDescriptors();
+    addDefaultOutputDescriptors(s);
 
     return true;
 }
 
-bool Analysis::resolveOutputDescriptor(const OutputDescriptor& descr, Output::SourcesList& srcs, bool strict) {
+bool Analysis::resolveOutputDescriptor(const OutputDescriptor& descr, Output::SourcesList& srcs, bool strict, Status& s) {
     // Abstract analysis handles only sweep variables
     switch (descr.type) {
         case OutdSweepvar: 
@@ -288,7 +288,7 @@ AnalysisCoroutine Analysis::coroutine(Status& s) {
                     s.extend("Failed to bind analysis outputs.");
                     co_yield AnalysisState::Aborted;
                 }
-
+                
                 outputsBound = true;
                 systemChanged = true;
 
