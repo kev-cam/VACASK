@@ -84,7 +84,8 @@ std::tuple<bool, std::string, std::string> runProcess(
     auto procEnv = bp2::environment::current();
 
     std::map<std::string, std::string> customEnv;
-    for (const auto& kv : bp2::environment::current()) {
+    // for (const auto& kv : bp2::environment::current()) {
+    for (const auto& kv : procEnv) {
         if (kv.key().empty()) {
             continue;
         }
