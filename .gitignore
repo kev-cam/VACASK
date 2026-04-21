@@ -7,3 +7,5 @@ bug
 benchmark/rundir
 *.osdi
 theory
+build
+.cache
