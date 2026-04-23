@@ -8,4 +8,6 @@ benchmark/rundir
 *.osdi
 build
 .cache
-.raw
+*.raw
+runme.py
+*.origin
