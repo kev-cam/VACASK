@@ -9,3 +9,4 @@ benchmark/rundir
 theory
 build
 .cache
+.raw
