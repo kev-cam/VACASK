@@ -8,3 +8,4 @@ benchmark/rundir
 *.osdi
 build
 .cache
+.raw
