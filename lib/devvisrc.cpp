@@ -56,6 +56,11 @@ template<> int Introspection<DevSourceInstanceParams>::setup() {
     
     registerMember(mag);
     registerMember(phase);
+
+    registerMember(spurs);
+    registerMember(smag);
+    registerMember(sphase);
+
     return 0;
 }
 instantiateIntrospection(DevSourceInstanceParams);
@@ -109,6 +114,11 @@ DevSourceInstanceParams::DevSourceInstanceParams() {
     // small signal parameters
     mag = 0.0;
     phase = 0.0;
+
+    // (quasi)periodic small-signal excitation
+    spurs = ValueVector({});
+    smag = RealVector({});
+    sphase = RealVector({});
 }
 
 
