@@ -9,4 +9,6 @@ benchmark/rundir
 theory
 build
 .cache
-.raw
+*.raw
+runme.py
+*.origin
