@@ -198,6 +198,8 @@ SimulatorOptions::SimulatorOptions() {
     hb_skipinitial = 0; // 1 = no initial hb, go straight to homotopy
     hb_homotopy = { "src" }; // list of homotopy algorithms to apply in hb analysis
     
+    pss_debug = 0; // >0 = enables debugging
+
     rawfile = "binary"; // ascii or binary
     strictoutput = 2; // 0 = leave output files in place after error, 
                       // 1 = delete output files on error
@@ -306,6 +308,8 @@ template<> int Introspection<SimulatorOptions>::setup() {
     registerMember(hb_itlcont);
     registerMember(hb_skipinitial);
     registerMember(hb_homotopy);
+
+    registerMember(pss_debug);
     
     registerMember(rawfile);
     registerMember(strictoutput);
