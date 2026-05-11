@@ -253,10 +253,17 @@ std::tuple<double, double> sourceCompute(const InstanceParams& params, InstanceD
             nextBreak = params.delay;
         } else {
             // For t >= delay start sine at given phase
+            // Use two-product via fma to reduce freq*td to its fractional part
+            // with full precision, avoiding range reduction error for large t
+            auto td = time-params.delay;
+            auto prod = params.freq*td;
+            auto lo = std::fma(params.freq, td, -prod);
+            auto intpart = std::trunc(prod);
+            auto frac = (prod - intpart) + lo;
             val = params.sinedc+
                   params.ampl
-                    *std::sin(2*PI*params.freq*(time-params.delay)+params.sinephase*PI/180)
-                    *std::exp(-params.theta*(time-params.delay));
+                    *std::sin(2*PI*frac+params.sinephase*PI/180)
+                    *std::exp(-params.theta*td);
         }
         break;
     case IndependentSourceType::Exp:
