@@ -1717,12 +1717,12 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious) {
 
             setProgress(tSolve, tSolve);
 
-            // Store timestep and advance time before the hook so that
-            // pastTimesteps.at(0)==hk, tk==tSolve, and integCoeffs reflects
-            // this step when the hook fires.
+            // Store timestep
             pastTimesteps.add(hk);
-            tk = tSolve;
-
+            
+            // Advance time
+            tk = tSolve; 
+  
             // Notify subclasses (e.g. PssTranCore) of the accepted point.
             // Pass 'order' (the order used by integCoeffs at this step), not
             // 'newOrder' (the order chosen for the next step).  The PSS
@@ -1739,12 +1739,6 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious) {
                 finished = true;
                 break;
             }
-
-            // Store timestep
-            pastTimesteps.add(hk);
-            
-            // Advance time
-            tk = tSolve; 
 
             // Advance transient noise generators
             if (noisefmax) {
