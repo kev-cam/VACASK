@@ -197,7 +197,6 @@ add_library(simlib STATIC
     tdnzohflicker.cpp
     tdnsdewhite.cpp
     tdnsdeflicker.cpp
-    tdnvmcoeff.cpp
     corepsstran.cpp
     corepss.cpp
     anpss.cpp
