@@ -151,38 +151,24 @@ bool HBAC::rebuildCores(Status& s) {
 }
 
 bool HBAC::initializeOutputs(Status& s) {
-    if (!hbCore.initializeOutputs(std::string(name_)+".hb")) {
-        hbCore.formatError(s);
+    if (!hbCore.initializeOutputs(std::string(name_)+".hb", s)) {
         return false;
     }
-    if (!hbacCore.initializeOutputs(name_)) {
-        hbacCore.formatError(s);
+    if (!hbacCore.initializeOutputs(name_, s)) {
         return false;
     }
     return true;
 }
 
 bool HBAC::finalizeOutputs(Status& s) {
-    auto ok1 = hbCore.finalizeOutputs();
-    auto ok2 = hbacCore.finalizeOutputs();
-    if (!ok1) {
-        hbCore.formatError(s);
-    }
-    if (!ok2) {
-        hbacCore.formatError(s);
-    }
+    auto ok1 = hbCore.finalizeOutputs(s);
+    auto ok2 = hbacCore.finalizeOutputs(s);
     return ok1 && ok2;
 }
 
 bool HBAC::deleteOutputs(Status& s) {
-    auto ok1 = hbCore.deleteOutputs(std::string(name_)+".hb");
-    auto ok2 = hbacCore.deleteOutputs(name_);
-    if (!ok1) {
-        hbCore.formatError(s);
-    }
-    if (!ok2) {
-        hbacCore.formatError(s);
-    }
+    auto ok1 = hbCore.deleteOutputs(std::string(name_)+".hb", s);
+    auto ok2 = hbacCore.deleteOutputs(name_, s);
     return ok1 && ok2;
 }
 
