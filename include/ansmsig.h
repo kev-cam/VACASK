@@ -246,12 +246,10 @@ bool SmallSignal<CoreClass, DataMixin>::rebuildCores(Status& s) {
 template<typename CoreClass, typename DataMixin> 
 bool SmallSignal<CoreClass, DataMixin>::initializeOutputs(Status& s) {
     // Any error exits immediately
-    if (!opCore.initializeOutputs(std::string(name_)+".op")) {
-        opCore.formatError(s);
+    if (!opCore.initializeOutputs(std::string(name_)+".op", s)) {
         return false;
     }
-    if (!smsigCore.initializeOutputs(name_)) {
-        smsigCore.formatError(s);
+    if (!smsigCore.initializeOutputs(name_, s)) {
         return false;
     }
     return true;
@@ -277,13 +275,6 @@ bool SmallSignal<CoreClass, DataMixin>::deleteOutputs(Status& s) {
     // Output needs to be deleted for all cores
     auto ok1 = opCore.deleteOutputs(std::string(name_)+".op");
     auto ok2 = smsigCore.deleteOutputs(name_);
-    if (!ok1) {
-        opCore.formatError(s);
-    }
-    if (!ok2) {
-        // Error in smsigCore will mask the error in op core
-        smsigCore.formatError(s);
-    }
     return ok1 && ok2;
 }
 
