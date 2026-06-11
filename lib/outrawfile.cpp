@@ -1,6 +1,6 @@
 #include "outrawfile.h"
 #include <chrono>
-#include <format>
+#include <ctime>
 #include <iomanip>
 #include <filesystem>
 #include "common.h"
@@ -30,11 +30,17 @@ bool OutputRawfile::prologue(Status& s) {
         return false;
     }
     
-    // Thread-safe local timestamp; asctime/localtime use shared static buffers.
-    // floor<seconds> drops sub-second digits so %S matches asctime's layout.
-    auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
-    auto localTime = std::chrono::zoned_time{std::chrono::current_zone(), now};
-    outStream << "Date: " << std::format("{:%a %b %e %H:%M:%S %Y}", localTime) << "\n";
+    // Thread-safe local timestamp; asctime/localtime use shared static
+    // buffers, and std::chrono::zoned_time is unavailable on libc++ (e.g.
+    // Apple clang) unless libc++ was built with experimental tzdb support.
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm localTime;
+#ifdef _WIN32
+    localtime_s(&localTime, &now);
+#else
+    localtime_r(&now, &localTime);
+#endif
+    outStream << "Date: " << std::put_time(&localTime, "%a %b %e %H:%M:%S %Y") << "\n";
 
     outStream << "Plotname: " << plotname_ << "\n";
     outStream << "Flags: " << (checkFlags(Flags::Complex) ? "complex" : "real" ) 
