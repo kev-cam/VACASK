@@ -100,6 +100,7 @@ prepare_netlist_test(test_behavnoise.sim)
 if(VACASK_WITH_SPICE)
     prepare_netlist_test(test_spice_include.sim)
     prepare_netlist_test(test_spice_include_section.sim)
+    prepare_netlist_test(test_lang_include.sim)
 
     # Sky130 ngspice PDK include E2E: a native deck that includes the raw ngspice
     # Sky130 model sources directly (no Cadnip.jl conversion) and solves an nfet
