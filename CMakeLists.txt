@@ -109,7 +109,8 @@ set(STAGED_LIBRARY_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${PROGRAM_LIB_DIR}")
 message(STATUS "Staged library directory: ${STAGED_LIBRARY_DIRECTORY}")
 
 # Find Python (needed for tests)
-find_package(Python 3 COMPONENTS Interpreter)
+#find_package(Python 3 COMPONENTS Interpreter)
+find_package(Python REQUIRED COMPONENTS Interpreter Development)
 
 # Look for openvaf Verilog-A compiler
 message(CHECK_START "Looking for OpenVAF-reloaded Verilog-A compiler")
@@ -325,3 +326,12 @@ add_subdirectory(test)
 add_subdirectory(demo/api)
 
 include("packaging.cmake")
+
+
+# PyBIND11
+set(PYBIND11_FINDPYTHON ON)
+find_package(pybind11 CONFIG REQUIRED)
+pybind11_add_module(pyvacask lib/py_module.cpp)
+#target_link_options(pyvacask PRIVATE "-Wl,-Bstatic")
+target_link_libraries(pyvacask PRIVATE simlib ${SIM_EXE_LIBRARIES})
+install(TARGETS pyvacask LIBRARY DESTINATION .) 

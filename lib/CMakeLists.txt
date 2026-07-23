@@ -205,4 +205,7 @@ target_include_directories(simlib PUBLIC
     ${CMAKE_CURRENT_BINARY_DIR}
     ${FLEX_INCLUDE_DIRS}
 )
+set_target_properties(simlib PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
 # target_compile_definitions(dlib PRIVATE BUILDING_SIM_DLL)
