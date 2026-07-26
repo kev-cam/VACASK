@@ -2,13 +2,15 @@ SPICE library section include OP analysis
 
 ground 0
 
-// R1/R2 come from section `tt` of a SPICE-dialect library, pulled in via the
-// foreign-format include dispatch with a section selector. Section tt gives a
-// 1k/9k divider (V(2)=9); section ff would give 2k/8k (V(2)=8), so a correct
-// V(2) proves the right section was projected through parse_netlist_lib.
+// Both sections of the same library must be loaded. Path-only visitation used
+// to skip the second include, leaving rff unresolved.
 model vsource vsource
 
 include "spice_include_corners.lib" lang=ngspice section=tt
+include "spice_include_corners.lib" lang=ngspice section=ff
+
+r1 (1 2) rtt r=1k
+r2 (2 0) rff r=9k
 
 v1 (1 0) vsource dc=10
 
@@ -30,11 +32,11 @@ tests=[]
 
 op1 = rawread('op1.raw').get()
 
-# Section tt: 1k/9k divider from a 10 V supply -> V(2) = 9 V (ff would be 8 V).
+# The two section-local models form a 1k/9k divider.
 v = op1["2"]
 exact = 9.0
 status = (relDiff(v, exact, 1e-6) < 1e-3).all()
-print("V(2)=", v, "exact=", exact, "(tt section)", status)
+print("V(2)=", v, "exact=", exact, "(tt + ff sections)", status)
 tests.append(status)
 
 if isTest():

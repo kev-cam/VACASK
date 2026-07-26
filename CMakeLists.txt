@@ -37,8 +37,8 @@ if(VACASK_WITH_SPICE)
     FetchContent_MakeAvailable(Corrosion)
 
     # Where the netlist parser workspace lives. By default it is fetched at a
-    # pinned release; pass -DNETLIST_RS_DIR=/path/to/NetlistParse.rs to build
-    # against a local checkout instead (parser development loop).
+    # development branch; pass -DNETLIST_RS_DIR=/path/to/NetlistParse.rs to
+    # build against a local checkout instead (parser development loop).
     if(NETLIST_RS_DIR)
         set(_netlistrs_src "${NETLIST_RS_DIR}")
         message(STATUS "netlist parser: using local checkout ${_netlistrs_src}")
@@ -46,7 +46,8 @@ if(VACASK_WITH_SPICE)
         FetchContent_Declare(
             NetlistParseRs
             GIT_REPOSITORY https://github.com/NyanCAD/NetlistParse.rs.git
-            GIT_TAG v0.1.0
+            # TODO: Pin the next compatible release before this work leaves WIP.
+            GIT_TAG main
         )
         FetchContent_MakeAvailable(NetlistParseRs)
         set(_netlistrs_src "${netlistparsers_SOURCE_DIR}")

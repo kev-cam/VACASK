@@ -130,21 +130,29 @@ PTBlockSequence makeConditional(const netlist::Conditional& c, Parser& p) {
     return seq;
 }
 
+using IncludeKey = std::pair<std::filesystem::path, std::string>;
+using IncludeSet = std::set<IncludeKey>;
+
+static IncludeKey includeKey(const std::filesystem::path& path,
+                             const rust::String& section) {
+    return {path, lc(sv(section))};
+}
+
 // Forward declarations for mutual recursion: fillSubDef ↔ spiceBlockToTables ↔ mergeNetlist.
 static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefinition& into,
                                ParserTables& tab, Parser& p,
-                               std::set<std::string>& addedModels, Status& s,
+                               Status& s,
                                const std::filesystem::path& baseDir,
-                               std::set<std::filesystem::path>& visited,
+                               IncludeSet& visited,
                                bool projectAnalyses = true,
                                const std::string& language = "");
 
 // Fill a PTSubcircuitDefinition from a netlist::Subckt (has conditionals + ports).
 // Returns false (with `st` set) on any error in nested SPICE-block processing.
 static bool fillSubDef(PTSubcircuitDefinition& def, const netlist::Subckt& s, Parser& p,
-                       ParserTables& tab, std::set<std::string>& addedModels, Status& st,
+                       ParserTables& tab, Status& st,
                        const std::filesystem::path& baseDir,
-                       std::set<std::filesystem::path>& visited) {
+                       IncludeSet& visited) {
     auto sp = paramString(s.params);
     if (!sp.empty()) def.add(p.parseParameters(sp));
     for (const auto& m : s.models)       def.add(makeModel(m, p));
@@ -152,12 +160,12 @@ static bool fillSubDef(PTSubcircuitDefinition& def, const netlist::Subckt& s, Pa
     for (const auto& c : s.conditionals) def.add(makeConditional(c, p));
     for (const auto& sub : s.subckts) {
         PTSubcircuitDefinition child(Id(sv(sub.name).c_str()), nodeList(sub.ports));
-        if (!fillSubDef(child, sub, p, tab, addedModels, st, baseDir, visited)) return false;
+        if (!fillSubDef(child, sub, p, tab, st, baseDir, visited)) return false;
         def.add(std::move(child));
     }
     // Process any SPICE blocks nested inside this Spectre subckt body (Fix 1).
     for (const auto& sb : s.spice_blocks) {
-        if (!spiceBlockToTables(sb, def, tab, p, addedModels, st, baseDir, visited)) return false;
+        if (!spiceBlockToTables(sb, def, tab, p, st, baseDir, visited)) return false;
     }
     return true;
 }
@@ -493,11 +501,15 @@ static std::string spiceSourceParams(const netlist::SpiceSource& src) {
         }
     };
 
+    auto expr = [](const rust::String& value) {
+        return stripExprQuoting(sv(value));
+    };
+
     // DC value
-    if (!sv(src.dc).empty())        add("dc=" + sv(src.dc));
+    if (!sv(src.dc).empty())        add("dc=" + expr(src.dc));
     // AC small-signal
-    if (!sv(src.ac_mag).empty())    add("mag=" + sv(src.ac_mag));
-    if (!sv(src.ac_phase).empty())  add("phase=" + sv(src.ac_phase));
+    if (!sv(src.ac_mag).empty())    add("mag=" + expr(src.ac_mag));
+    if (!sv(src.ac_phase).empty())  add("phase=" + expr(src.ac_phase));
 
     // Transient function
     std::string tk = sv(src.tran_kind);
@@ -515,7 +527,7 @@ static std::string spiceSourceParams(const netlist::SpiceSource& src) {
                 "val0", "val1", "delay", "rise", "fall", "width", "period"
             };
             for (size_t i = 0; i < args.size() && i < 7; ++i) {
-                std::string v = sv(args[i]);
+                std::string v = expr(args[i]);
                 if (!v.empty()) add(std::string(names[i]) + "=" + v);
             }
         } else if (vaKind == "sine") {
@@ -524,7 +536,7 @@ static std::string spiceSourceParams(const netlist::SpiceSource& src) {
                 "sinedc", "ampl", "freq", "delay", "theta"
             };
             for (size_t i = 0; i < args.size() && i < 5; ++i) {
-                std::string v = sv(args[i]);
+                std::string v = expr(args[i]);
                 if (!v.empty()) add(std::string(names[i]) + "=" + v);
             }
         } else if (vaKind == "pwl") {
@@ -534,7 +546,7 @@ static std::string spiceSourceParams(const netlist::SpiceSource& src) {
                 os << "wave=[";
                 for (size_t i = 0; i < args.size(); ++i) {
                     if (i > 0) os << " ";
-                    os << sv(args[i]);
+                    os << expr(args[i]);
                 }
                 os << "]";
                 first = false;
@@ -545,7 +557,7 @@ static std::string spiceSourceParams(const netlist::SpiceSource& src) {
                 "val0", "val1", "delay", "tau1", "td2", "tau2"
             };
             for (size_t i = 0; i < args.size() && i < 6; ++i) {
-                std::string v = sv(args[i]);
+                std::string v = expr(args[i]);
                 if (!v.empty()) add(std::string(names[i]) + "=" + v);
             }
         }
@@ -556,23 +568,30 @@ static std::string spiceSourceParams(const netlist::SpiceSource& src) {
 
 // Fill a PTSubcircuitDefinition from one SpiceSubckt body (recursive).
 static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSubckt& s,
-                            Parser& p, std::set<std::string>& addedModels, Status& st);
+                            Parser& p, Status& st);
 
-// Ensure a self-alias model card is emitted once per block.
+// Ensure a self-alias model card is emitted once in its destination definition.
 // These mirror `model resistor resistor` / `model vsource vsource` in .sim files.
-static void ensureSpiceModel(PTSubcircuitDefinition& into, const std::string& master,
-                             std::set<std::string>& addedModels) {
-    if (addedModels.insert(master).second) {
-        into.add(PTModel(Id(master.c_str()), Id(master.c_str())));
+static void ensureSpiceModel(PTSubcircuitDefinition& into, const std::string& master) {
+    for (const auto& model : into.root().models()) {
+        if (std::string(model.name()) == master) return;
     }
+    into.add(PTModel(Id(master.c_str()), Id(master.c_str())));
+}
+
+static bool hasSpiceModel(const PTSubcircuitDefinition& into, const std::string& name) {
+    for (const auto& model : into.root().models()) {
+        if (std::string(model.name()) == name) return true;
+    }
+    return false;
 }
 
 // Process a single SpiceDevice into the given subcircuit definition.
 static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefinition& into,
-                           Parser& p, std::set<std::string>& addedModels, Status& s) {
+                           Parser& p, Status& s) {
     // SPICE-origin identifiers/expressions → lowercase (see lc/spiceId above).
     std::string name = lc(sv(dev.name));
-    std::string val  = lc(sv(dev.value));
+    std::string val  = lc(stripExprQuoting(sv(dev.value)));
     std::string mdl  = lc(sv(dev.model));
 
     switch (dev.kind) {
@@ -597,7 +616,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                 // the ngspice sp_resistor master so instance params like
                 // tc1/tc2/w/l are accepted (the generic 'resistor' has r only).
                 master = "sp_resistor";
-                ensureSpiceModel(into, "sp_resistor", addedModels);
+                ensureSpiceModel(into, "sp_resistor");
                 rval = val;
             }
             PTInstance inst(Id(name.c_str()), Id(master.c_str()), spiceNodeList(dev.nodes));
@@ -608,10 +627,22 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             break;
         }
         case netlist::SpiceDeviceKind::Capacitor: {
-            std::string master = mdl.empty() ? "capacitor" : mdl;
-            ensureSpiceModel(into, "capacitor", addedModels);
+            std::string master;
+            std::string cval;
+            if (!mdl.empty()) {
+                master = mdl;
+                cval = val;
+            } else if (!val.empty() &&
+                       (hasSpiceModel(into, val) ||
+                        spiceParamsHaveAny(dev.params, {"c", "w", "l"}))) {
+                master = val;
+            } else {
+                master = "sp_capacitor";
+                ensureSpiceModel(into, "sp_capacitor");
+                cval = val;
+            }
             PTInstance inst(Id(name.c_str()), Id(master.c_str()), spiceNodeList(dev.nodes));
-            if (!val.empty()) inst.add(p.parseParameters("c=" + val));
+            if (!cval.empty()) inst.add(p.parseParameters("c=" + cval));
             auto ps = lc(paramString(dev.params));
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
@@ -619,7 +650,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
         }
         case netlist::SpiceDeviceKind::Inductor: {
             std::string master = mdl.empty() ? "inductor" : mdl;
-            ensureSpiceModel(into, "inductor", addedModels);
+            ensureSpiceModel(into, "inductor");
             PTInstance inst(Id(name.c_str()), Id(master.c_str()), spiceNodeList(dev.nodes));
             if (!val.empty()) inst.add(p.parseParameters("l=" + val));
             auto ps = lc(paramString(dev.params));
@@ -628,7 +659,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             break;
         }
         case netlist::SpiceDeviceKind::VSource: {
-            ensureSpiceModel(into, "vsource", addedModels);
+            ensureSpiceModel(into, "vsource");
             PTInstance inst(Id(name.c_str()), Id("vsource"), spiceNodeList(dev.nodes));
             std::string srcParams = spiceSourceParams(dev.source);
             auto ps = lc(paramString(dev.params));
@@ -639,7 +670,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             break;
         }
         case netlist::SpiceDeviceKind::ISource: {
-            ensureSpiceModel(into, "isource", addedModels);
+            ensureSpiceModel(into, "isource");
             PTInstance inst(Id(name.c_str()), Id("isource"), spiceNodeList(dev.nodes));
             std::string srcParams = spiceSourceParams(dev.source);
             auto ps = lc(paramString(dev.params));
@@ -720,7 +751,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                                  << "' has too few nodes/ctrl_nodes (skipped)\n";
                 break;
             }
-            ensureSpiceModel(into, "vcvs", addedModels);
+            ensureSpiceModel(into, "vcvs");
             PTIdentifierList allNodes;
             for (const auto& n : dev.nodes)       allNodes.push_back(PTParsedIdentifier(lc(sv(n)).c_str()));
             for (const auto& cn : dev.ctrl_nodes) allNodes.push_back(PTParsedIdentifier(lc(sv(cn)).c_str()));
@@ -740,7 +771,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                                  << "' has too few nodes/ctrl_nodes (skipped)\n";
                 break;
             }
-            ensureSpiceModel(into, "vccs", addedModels);
+            ensureSpiceModel(into, "vccs");
             PTIdentifierList allNodes;
             for (const auto& n : dev.nodes)       allNodes.push_back(PTParsedIdentifier(lc(sv(n)).c_str()));
             for (const auto& cn : dev.ctrl_nodes) allNodes.push_back(PTParsedIdentifier(lc(sv(cn)).c_str()));
@@ -767,7 +798,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                                  << "' has no controlling source reference (skipped)\n";
                 break;
             }
-            ensureSpiceModel(into, "cccs", addedModels);
+            ensureSpiceModel(into, "cccs");
             PTInstance inst(Id(name.c_str()), Id("cccs"), spiceNodeList(dev.nodes));
             std::string ctlsrc  = lc(sv(dev.ctrl_nodes[0]));
             std::string gainVal = lc(sv(dev.ctrl_value));
@@ -796,7 +827,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                                  << "' has no controlling source reference (skipped)\n";
                 break;
             }
-            ensureSpiceModel(into, "ccvs", addedModels);
+            ensureSpiceModel(into, "ccvs");
             PTInstance inst(Id(name.c_str()), Id("ccvs"), spiceNodeList(dev.nodes));
             std::string ctlsrc  = lc(sv(dev.ctrl_nodes[0]));
             std::string gainVal = lc(sv(dev.ctrl_value));
@@ -838,18 +869,18 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
 }
 
 static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSubckt& s,
-                            Parser& p, std::set<std::string>& addedModels, Status& st) {
+                            Parser& p, Status& st) {
     auto sp = paramString(s.params);
     if (!sp.empty()) def.add(p.parseParameters(lc(sp)));
     // .model cards inside the .subckt body (e.g. Sky130 res subckts define
     // reshead/resbody locally). Emit BEFORE devices so instances resolve them.
     emitSpiceModels(s.models, def, p);
     for (const auto& dev : s.devices) {
-        if (!addSpiceDevice(dev, def, p, addedModels, st)) return false;
+        if (!addSpiceDevice(dev, def, p, st)) return false;
     }
     for (const auto& sub : s.subckts) {
         PTSubcircuitDefinition child(spiceId(sv(sub.name)), spiceNodeList(sub.ports));
-        if (!fillSpiceSubDef(child, sub, p, addedModels, st)) return false;
+        if (!fillSpiceSubDef(child, sub, p, st)) return false;
         def.add(std::move(child));
     }
     return true;
@@ -861,19 +892,17 @@ static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSub
 bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
                   ParserTables& tab, Parser& p,
                   const std::filesystem::path& baseDir,
-                  std::set<std::filesystem::path>& visited,
-                  std::set<std::string>& addedModels,
+                  IncludeSet& visited,
                   Status& s, bool projectAnalyses = true,
                   const std::string& language = "");
 
-// Map one SpiceBlock into a PTSubcircuitDefinition.  `addedModels` is shared
-// across repeated calls so self-alias model cards are emitted only once.
-// `baseDir` and `visited` thread through for .include resolution (Fix 2).
+// Map one SpiceBlock into a PTSubcircuitDefinition. `baseDir` and `visited`
+// thread through for .include resolution.
 static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefinition& into,
                                ParserTables& tab, Parser& p,
-                               std::set<std::string>& addedModels, Status& s,
+                               Status& s,
                                const std::filesystem::path& baseDir,
-                               std::set<std::filesystem::path>& visited,
+                               IncludeSet& visited,
                                bool projectAnalyses,
                                const std::string& language) {
     // Top-level .param declarations from the SPICE block.
@@ -885,7 +914,7 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
 
     // Devices (R/C/L/V/I + D/M/Q now handled; others warn+skip).
     for (const auto& dev : sb.devices) {
-        if (!addSpiceDevice(dev, into, p, addedModels, s)) return false;
+        if (!addSpiceDevice(dev, into, p, s)) return false;
     }
 
     // TODO: SPICE .tran / .dc / .ac analysis cards inside a SPICE block are not
@@ -896,7 +925,7 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
     // Nested .subckt definitions.
     for (const auto& sub : sb.subckts) {
         PTSubcircuitDefinition child(spiceId(sv(sub.name)), spiceNodeList(sub.ports));
-        if (!fillSpiceSubDef(child, sub, p, addedModels, s)) return false;
+        if (!fillSpiceSubDef(child, sub, p, s)) return false;
         into.add(std::move(child));
     }
 
@@ -910,8 +939,8 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
             absPath = std::filesystem::absolute(incPath);
         }
 
-        if (visited.count(absPath)) continue;
-        visited.insert(absPath);
+        IncludeKey key = includeKey(absPath, inc.section);
+        if (!visited.insert(key).second) continue;
 
         std::ifstream ifs(absPath);
         if (!ifs) {
@@ -921,12 +950,16 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
         std::stringstream incss; incss << ifs.rdbuf();
         std::string contents = incss.str();
 
+        // This include originated inside `simulator lang=spice`, regardless of
+        // the dialect used for the surrounding file.
+        static constexpr const char* kSpiceBlockDialect = "ngspice";
         netlist::Netlist sub;
         if (!inc.section.empty()) {
             sub = netlist::parse_netlist_lib(rust::Str(contents), rust::Str(sv(inc.section)),
-                                             rust::Str(language));
+                                             rust::Str(kSpiceBlockDialect));
         } else {
-            sub = netlist::parse_netlist(rust::Str(contents), rust::Str(language));
+            sub = netlist::parse_netlist(rust::Str(contents),
+                                         rust::Str(kSpiceBlockDialect));
         }
         if (!sub.errors.empty()) {
             std::ostringstream os;
@@ -938,8 +971,8 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
             return false;
         }
 
-        if (!mergeNetlist(sub, into, tab, p, absPath.parent_path(), visited, addedModels, s,
-                          projectAnalyses, language))
+        if (!mergeNetlist(sub, into, tab, p, absPath.parent_path(), visited, s,
+                          projectAnalyses, kSpiceBlockDialect))
             return false;
     }
     return true;
@@ -955,8 +988,7 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
 bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
                   ParserTables& tab, Parser& p,
                   const std::filesystem::path& baseDir,
-                  std::set<std::filesystem::path>& visited,
-                  std::set<std::string>& addedModels,
+                  IncludeSet& visited,
                   Status& s, bool projectAnalyses,
                   const std::string& language) {
     // Accumulate toplevel params/models/instances/subckts.
@@ -966,13 +998,13 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
     for (const auto& i : nl.instances) top.add(makeInstance(i, p));
     for (const auto& sub : nl.subckts) {
         PTSubcircuitDefinition child(Id(sv(sub.name).c_str()), nodeList(sub.ports));
-        if (!fillSubDef(child, sub, p, tab, addedModels, s, baseDir, visited)) return false;
+        if (!fillSubDef(child, sub, p, tab, s, baseDir, visited)) return false;
         top.add(std::move(child));
     }
 
     // SPICE blocks (R/C/L/V/I adapter + nested .subckt/.model + .include resolution).
     for (const auto& sb : nl.spice_blocks) {
-        if (!spiceBlockToTables(sb, top, tab, p, addedModels, s, baseDir, visited, projectAnalyses, language))
+        if (!spiceBlockToTables(sb, top, tab, p, s, baseDir, visited, projectAnalyses, language))
             return false;
     }
 
@@ -1017,8 +1049,8 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
             absPath = std::filesystem::absolute(incPath);
         }
 
-        if (visited.count(absPath)) continue;
-        visited.insert(absPath);
+        IncludeKey key = includeKey(absPath, inc.section);
+        if (!visited.insert(key).second) continue;
 
         std::ifstream in(absPath);
         if (!in) {
@@ -1045,7 +1077,7 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
             return false;
         }
 
-        if (!mergeNetlist(sub, top, tab, p, absPath.parent_path(), visited, addedModels, s,
+        if (!mergeNetlist(sub, top, tab, p, absPath.parent_path(), visited, s,
                           projectAnalyses, language))
             return false;
     }
@@ -1070,9 +1102,8 @@ bool buildParserTables(const std::string& source, bool startSpice,
 
     tab.defaultGround();
     PTSubcircuitDefinition top;
-    std::set<std::filesystem::path> visited;
-    std::set<std::string> addedModels;
-    if (!mergeNetlist(nl, top, tab, p, std::filesystem::current_path(), visited, addedModels, s,
+    IncludeSet visited;
+    if (!mergeNetlist(nl, top, tab, p, std::filesystem::current_path(), visited, s,
                       /*projectAnalyses=*/true, startSpice ? "ngspice" : "spectre"))
         return false;
     emitOsdiLoads(tab, top);
@@ -1110,8 +1141,7 @@ bool buildParserTablesFromFile(const std::string& path,
     } catch (...) {
         absPath = fs::absolute(fp);
     }
-    std::set<fs::path> visited{ absPath };
-    std::set<std::string> addedModels;
+    IncludeSet visited{{absPath, ""}};
     std::string dialect = (ext == ".scs" || ext == ".spectre") ? "spectre" : "ngspice";
     netlist::Netlist nl = netlist::parse_netlist(rust::Str(source), rust::Str(dialect));
     if (!nl.errors.empty()) {
@@ -1121,7 +1151,7 @@ bool buildParserTablesFromFile(const std::string& path,
         s.set(Status::Syntax, os.str());
         return false;
     }
-    if (!mergeNetlist(nl, top, tab, p, absPath.parent_path(), visited, addedModels, s,
+    if (!mergeNetlist(nl, top, tab, p, absPath.parent_path(), visited, s,
                       /*projectAnalyses=*/true, dialect))
         return false;
     emitOsdiLoads(tab, top);
@@ -1175,9 +1205,8 @@ bool mergeForeignFile(const std::string& path, const std::string& section,
     fs::path fp(path);
     fs::path absPath;
     try { absPath = fs::canonical(fp); } catch (...) { absPath = fs::absolute(fp); }
-    std::set<fs::path> visited{ absPath };
-    std::set<std::string> addedModels;
-    if (!mergeNetlist(nl, top, tab, p, absPath.parent_path(), visited, addedModels, s,
+    IncludeSet visited{{absPath, lc(section)}};
+    if (!mergeNetlist(nl, top, tab, p, absPath.parent_path(), visited, s,
                       /*projectAnalyses=*/false, language))
         return false;
     emitOsdiLoads(tab, top);

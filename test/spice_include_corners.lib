@@ -4,10 +4,8 @@
 * section was selected (and dispatched through the Rust adapter's
 * parse_netlist_lib path).
 .lib tt
-R1 1 2 1k
-R2 2 0 9k
+.model rtt r
 .endl tt
 .lib ff
-R1 1 2 2k
-R2 2 0 8k
+.model rff r
 .endl ff

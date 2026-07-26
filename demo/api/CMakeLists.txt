@@ -19,9 +19,9 @@ if (${SIM_PLATFORM} STREQUAL "Windows")
     target_link_options(demo_netlistrs PUBLIC -static)
 endif()
 
-# OSDI models live in the VACASK in-tree build directory.
-# No username-specific path: CMAKE_SOURCE_DIR is the root of this source tree.
-set(VACASK_MOD_DIR_DEFAULT "${CMAKE_SOURCE_DIR}/build/lib/vacask/mod")
+# OSDI models live in the active VACASK binary tree. STAGED_LIBRARY_DIRECTORY
+# already accounts for platform-specific PROGRAM_LIB_DIR values.
+set(VACASK_MOD_DIR_DEFAULT "${STAGED_LIBRARY_DIRECTORY}/mod")
 target_compile_definitions(demo_netlistrs PRIVATE
     VACASK_MOD_DIR="${VACASK_MOD_DIR_DEFAULT}")
 
@@ -250,6 +250,13 @@ add_test(NAME demo_netlistrs_spice_res_model
          COMMAND demo_netlistrs "${CMAKE_CURRENT_SOURCE_DIR}/spice_res_model.cir"
                                 "${VACASK_MOD_DIR_DEFAULT}")
 set_tests_properties(demo_netlistrs_spice_res_model PROPERTIES
+    WORKING_DIRECTORY "/tmp")
+
+# ── Parser/adapter regression deck ──────────────────────────────────────────
+add_test(NAME demo_netlistrs_spice_regressions
+         COMMAND demo_netlistrs "${CMAKE_CURRENT_SOURCE_DIR}/spice_regressions.cir"
+                                "${VACASK_MOD_DIR_DEFAULT}")
+set_tests_properties(demo_netlistrs_spice_regressions PROPERTIES
     WORKING_DIRECTORY "/tmp")
 
 # ── Warn-skip test (Minor 7) ─────────────────────────────────────────────────

@@ -2,13 +2,13 @@ SPICE include OP analysis
 
 ground 0
 
-// The resistors come from a SPICE-dialect file pulled in via the foreign-format
-// include dispatch (VACASK_WITH_SPICE). No explicit `load` for the resistor
-// OSDI is needed: the adapter auto-emits it for the sp_resistor master that the
-// included R devices reference. vsource is a native builtin.
+// The resistors come from two SPICE files merged into the same destination.
+// This also verifies that their synthetic sp_resistor alias is deduplicated
+// against that destination definition.
 model vsource vsource
 
 include "spice_include_models.cir" lang=ngspice
+include "spice_include_load.cir" lang=ngspice
 
 v1 (1 0) vsource dc=10
 
