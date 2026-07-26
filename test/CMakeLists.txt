@@ -11,11 +11,22 @@ macro(prepare_netlist_test simfile)
     foreach(item IN ITEMS ${TEST_DEPENDENCIES})
         file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/${item} DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/${simfile}")
     endforeach()
-    
-    add_test(NAME "${simfile}"
-        COMMAND $<TARGET_FILE:sim> -dp "${CMAKE_CURRENT_SOURCE_DIR}/${simfile}"
-        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${simfile}"
-    )
+
+    if(${ARGC} GREATER 1)
+        add_test(NAME "${simfile}"
+            COMMAND ${CMAKE_COMMAND}
+                "-DSIMULATOR=$<TARGET_FILE:sim>"
+                "-DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/${simfile}"
+                "-DEXPECTED_WARNING=${ARGV1}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/check_warning.cmake"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${simfile}"
+        )
+    else()
+        add_test(NAME "${simfile}"
+            COMMAND $<TARGET_FILE:sim> -dp "${CMAKE_CURRENT_SOURCE_DIR}/${simfile}"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${simfile}"
+        )
+    endif()
     
     # message("Adding netlist test ${simfile}")
     
@@ -102,6 +113,23 @@ if(VACASK_WITH_SPICE)
     prepare_netlist_test(test_spice_include_section.sim)
     prepare_netlist_test(test_lang_include.sim)
     prepare_netlist_test(test_lang_override.sim)
+    prepare_netlist_test(test_spectre_rc.sim)
+    prepare_netlist_test(test_spectre_include.sim)
+    prepare_netlist_test(test_spectre_subckt.sim)
+    prepare_netlist_test(test_spectre_bad_include.sim)
+    set_tests_properties(test_spectre_bad_include.sim PROPERTIES WILL_FAIL TRUE)
+    prepare_netlist_test(test_spice_rc.sim)
+    prepare_netlist_test(test_spice_diode.sim)
+    prepare_netlist_test(test_spice_subckt.sim)
+    prepare_netlist_test(test_spice_vcvs.sim)
+    prepare_netlist_test(test_spice_cccs.sim)
+    prepare_netlist_test(test_spice_nested_include.sim)
+    prepare_netlist_test(test_spice_res_model.sim)
+    prepare_netlist_test(test_spice_regressions.sim)
+    prepare_netlist_test(test_spice_mos.sim)
+    prepare_netlist_test(test_spice_binned_mos.sim)
+    prepare_netlist_test(test_spice_warnonly.sim "WARNING: SPICE device.*Behavioral.*skipped")
+    set_tests_properties(test_spice_warnonly.sim PROPERTIES LABELS "warning")
 
     # Sky130 ngspice PDK include E2E: a native deck that includes the raw ngspice
     # Sky130 model sources directly (no Cadnip.jl conversion) and solves an nfet

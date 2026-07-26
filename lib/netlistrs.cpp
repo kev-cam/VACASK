@@ -917,10 +917,9 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
         if (!addSpiceDevice(dev, into, p, s)) return false;
     }
 
-    // TODO: SPICE .tran / .dc / .ac analysis cards inside a SPICE block are not
-    // yet projected into PTAnalysis commands here.  The driver (e.g.
-    // demo_netlistrs.cpp) configures the analysis directly; consistent with the
-    // Spectre path where analyses are already skipped at the top-level merge.
+    // SPICE .tran / .dc / .ac cards in an included file are intentionally not
+    // projected. The native VACASK deck owns analysis and control configuration,
+    // consistent with the Spectre path at the top-level merge.
 
     // Nested .subckt definitions.
     for (const auto& sub : sb.subckts) {
@@ -1085,79 +1084,6 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
 }
 
 } // namespace
-
-bool buildParserTables(const std::string& source, bool startSpice,
-                       ParserTables& tab, Parser& p, Status& s) {
-    // Note: relative includes in `source` are resolved against CWD. Prefer
-    // buildParserTablesFromFile for sources that contain include directives.
-    netlist::Netlist nl = netlist::parse_netlist(rust::Str(source),
-                                                 rust::Str(startSpice ? "ngspice" : "spectre"));
-    if (!nl.errors.empty()) {
-        std::ostringstream os;
-        os << "netlist parse error(s): " << nl.errors.size()
-           << " (first at bytes [" << nl.errors[0].start << ", " << nl.errors[0].end << "))";
-        s.set(Status::Syntax, os.str());
-        return false;
-    }
-
-    tab.defaultGround();
-    PTSubcircuitDefinition top;
-    IncludeSet visited;
-    if (!mergeNetlist(nl, top, tab, p, std::filesystem::current_path(), visited, s,
-                      /*projectAnalyses=*/true, startSpice ? "ngspice" : "spectre"))
-        return false;
-    emitOsdiLoads(tab, top);
-    tab.setDefaultSubDef(std::move(top));
-    return true;
-}
-
-bool buildParserTablesFromFile(const std::string& path,
-                               ParserTables& tab, Parser& p, Status& s) {
-    namespace fs = std::filesystem;
-    fs::path fp(path);
-    std::string ext = fp.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-    if (ext == ".sim") {
-        // VACASK's own native parser fills tab directly.
-        // FileStack::addFile() registers the file and returns its index.
-        FileStackFileIndex idx = tab.fileStack().addFile(path);
-        return p.parseNetlistFile(idx, s);
-    }
-
-    std::ifstream in(path);
-    if (!in) {
-        s.set(Status::NotFound, "cannot open: " + path);
-        return false;
-    }
-    std::stringstream ss; ss << in.rdbuf();
-    std::string source = ss.str();
-
-    tab.defaultGround();
-    PTSubcircuitDefinition top;
-    fs::path absPath;
-    try {
-        absPath = fs::canonical(fp);
-    } catch (...) {
-        absPath = fs::absolute(fp);
-    }
-    IncludeSet visited{{absPath, ""}};
-    std::string dialect = (ext == ".scs" || ext == ".spectre") ? "spectre" : "ngspice";
-    netlist::Netlist nl = netlist::parse_netlist(rust::Str(source), rust::Str(dialect));
-    if (!nl.errors.empty()) {
-        std::ostringstream os;
-        os << "netlist parse error(s) in '" << path << "': " << nl.errors.size()
-           << " (first at bytes [" << nl.errors[0].start << ", " << nl.errors[0].end << "))";
-        s.set(Status::Syntax, os.str());
-        return false;
-    }
-    if (!mergeNetlist(nl, top, tab, p, absPath.parent_path(), visited, s,
-                      /*projectAnalyses=*/true, dialect))
-        return false;
-    emitOsdiLoads(tab, top);
-    tab.setDefaultSubDef(std::move(top));
-    return true;
-}
 
 // Parse a foreign-format netlist FILE and merge its models/subckts/devices into
 // the caller-provided `top` subcircuit definition (the native parser's in-progress

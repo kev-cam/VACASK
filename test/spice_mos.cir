@@ -1,4 +1,4 @@
-* NMOS resistor-load stage - SPICE Task 6 E2E test
+* NMOS resistor-load stage - SPICE E2E test
 * Vdd -> Rd -> out -> M1(drain) -> GND
 * Vin drives the gate; node "out" is the drain (output)
 * level=3 -> BSIM3v3 (maps to bsim3 OSDI master)

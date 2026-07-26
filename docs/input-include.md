@@ -95,18 +95,20 @@ netlist files. They are dispatched to the bundled Rust parser and their
 top-level circuit, exactly as if you had written them in native VACASK syntax:
 
 ```text
-include "sky130_models.spice"
-include "corner.lib" section=tt
+include "sky130_models.spice" lang=ngspice
+include "corner.lib" lang=ngspice section=tt
+include "models.scs" lang=spectre
 ```
 
-The format is chosen by file extension:
+The format is selected solely by the explicit `lang=` value; filename
+extensions are not used for dialect inference. Supported values are `ngspice`,
+`hspice`, `pspice`, `xyce`, and `spectre`. The `section=` selector works for
+SPICE-style `.lib`/`.endl` sections; it is not supported with `lang=spectre`.
+Native `.sim` files remain ordinary VACASK includes and do not use `lang=`.
 
-- **SPICE**: `.cir`, `.sp`, `.spice`, `.mod`, `.lib`
-- **Spectre**: `.scs`, `.spectre`
-
-Everything else (notably `.sim`) is treated as a native VACASK include and lexed
-directly, as described above. The `section=` selector works for foreign
-libraries too (SPICE `.lib`/`.endl` sections and Spectre `section` blocks).
+Foreign formats are supported as includes in a native VACASK deck, not as root
+input files to the `vacask` command. The native deck supplies the ground,
+analysis, control flow, and postprocessing configuration.
 
 Two behaviours are specific to foreign includes:
 

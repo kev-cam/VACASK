@@ -1,5 +1,5 @@
 simulator lang=spectre
-include "models.scs"
+include "spectre_models.scs"
 parameters c0=1u v0=5
 r1 (1 2) res r=1k
 c1 (2 0) cap c=2*c0

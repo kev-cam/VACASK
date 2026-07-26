@@ -1,4 +1,4 @@
-* SPICE subckt E2E test - Task 7
+* SPICE subckt E2E test
 * RC divider block instantiated via X call with param override
 * X1 overrides rval=2k (default 1k); cval stays at default 1u
 .subckt rcblock in out gnd rval=1k cval=1u
