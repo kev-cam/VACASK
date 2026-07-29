@@ -157,5 +157,84 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                                  return self.verify(level, status);
                              },
                              py::arg("level"));
+
+                py::class_<sim::PTInstance>(mod_parser_output, "PTInstance")
+                        // Constructors
+                        .def(py::init<>())
+                        .def(py::init([](sim::Id name,
+                                         sim::Id master,
+                                         sim::PTIdentifierList& terms,
+                                         const sim::Loc& loc) {
+                                return sim::PTInstance(
+                                    name,
+                                    master,
+                                    std::move(terms),
+                                    loc);
+                             }),
+                             py::arg("name"),
+                             py::arg("master"),
+                             py::arg("terms"),
+                             py::arg("location") = sim::Loc::bad)
+                        .def(py::init([](sim::Id name,
+                                         sim::Id master,
+                                         sim::PTIdentifierList& terms,
+                                         sim::PTParameters& params,
+                                         const sim::Loc& loc) {
+                                return sim::PTInstance(
+                                    name,
+                                    master,
+                                    std::move(terms),
+                                    std::move(params),
+                                    loc);
+                             }),
+                             py::arg("name"),
+                             py::arg("master"),
+                             py::arg("terms"),
+                             py::arg("parameters"),
+                             py::arg("location") = sim::Loc::bad)
+                        // Getters
+                        .def("location",
+                             &sim::PTInstance::location,
+                             py::return_value_policy::reference_internal)
+                        .def("name", &sim::PTInstance::name)
+                        .def("masterName", &sim::PTInstance::masterName)
+                        .def("isParameterized", &sim::PTInstance::isParameterized)
+                        .def("parameters",
+                             &sim::PTInstance::parameters,
+                             py::return_value_policy::reference_internal)
+                        .def("connections",
+                             &sim::PTInstance::connections,
+                             py::return_value_policy::reference_internal)
+                        // Fluent API
+                        .def("add",
+                             [](sim::PTInstance& self, sim::PTParameters& par)
+                                 -> sim::PTInstance& {
+                                 return self.add(std::move(par));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("add",
+                             [](sim::PTInstance& self, sim::PTParameterValue& value)
+                                 -> sim::PTInstance& {
+                                 return self.add(std::move(value));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("add",
+                             [](sim::PTInstance& self, sim::PTParameterExpression& expr)
+                                 -> sim::PTInstance& {
+                                 return self.add(std::move(expr));
+                             },
+                             py::return_value_policy::reference_internal)
+                        // Utilities
+                        .def("dump",
+                             [](const sim::PTInstance& self, int indent) {
+                                 self.dump(indent, std::cout);
+                             },
+                             py::arg("indent"))
+                        .def("verify",
+                             [](const sim::PTInstance& self, int level) {
+                                 sim::Status status;
+                                 return self.verify(level, status);
+                             },
+                             py::arg("level"));
 	}
 }
