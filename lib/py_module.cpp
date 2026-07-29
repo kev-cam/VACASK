@@ -65,10 +65,40 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
 		py::class_<sim::ParserTables>(mod_parser_output, "ParserTables")
 			.def(py::init<const std::string&>())
                         .def_property_readonly("title", &sim::ParserTables::title)
+                        .def_property_readonly("fileStack", &sim::ParserTables::fileStack)
+                        .def_property_readonly("loads", &sim::ParserTables::loads)
+                        .def_property_readonly("groundNodes", &sim::ParserTables::groundNodes)
+                        .def_property_readonly("globalNodes", &sim::ParserTables::globalNodes)
+                        .def_property_readonly("embed", &sim::ParserTables::embed)
+                        .def_property_readonly("accounting", &sim::ParserTables::accounting)
 			.def("setTitle",
                             [](sim::ParserTables& self, const std::string& t) -> sim::ParserTables& {
                                 return self.setTitle(t);
                             },
-                            py::return_value_policy::reference_internal);
+                            py::return_value_policy::reference_internal)
+                        .def("setDefaultSubDef",
+                             [](sim::ParserTables& self, sim::PTSubcircuitDefinition& def) -> sim::ParserTables& {
+                                 return self.setDefaultSubDef(std::move(def));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("add",
+                             [](sim::ParserTables& self, sim::PTLoad& ld) -> sim::ParserTables& {
+                                 return self.add(std::move(ld));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("addGround",
+                             [](sim::ParserTables& self, sim::PTParsedIdentifier& parsedId) -> sim::ParserTables& {
+                                 return self.addGround(std::move(parsedId));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("addGlobal",
+                            [](sim::ParserTables& self, sim::PTParsedIdentifier& parsedId) -> sim::ParserTables& {
+                                return self.addGlobal(std::move(parsedId));
+                            },
+                            py::return_value_policy::reference_internal)
+                        .def("defaultGround",
+                             [](sim::ParserTables& self) -> sim::ParserTables& { return self.defaultGround(); },
+                             py::return_value_policy::reference_internal
+                        );
 	}
 }
