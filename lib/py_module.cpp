@@ -236,5 +236,54 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                                  return self.verify(level, status);
                              },
                              py::arg("level"));
+
+                py::class_<sim::PTParameters>(mod_parser_output, "PTParameters")
+                        // Constructors
+                        .def(py::init<>())
+                        // Getters
+                        .def("valueCount", &sim::PTParameters::valueCount)
+                        .def("expressionCount", &sim::PTParameters::expressionCount)
+                        .def("count", &sim::PTParameters::count)
+                        .def("values",
+                             static_cast<const std::vector<sim::PTParameterValue>&
+                                 (sim::PTParameters::*)() const>(&sim::PTParameters::values),
+                             py::return_value_policy::reference_internal)
+                        .def("expressions",
+                             static_cast<const std::vector<sim::PTParameterExpression>&
+                                 (sim::PTParameters::*)() const>(&sim::PTParameters::expressions),
+                             py::return_value_policy::reference_internal)
+                        // Fluent API
+                        .def("add",
+                             [](sim::PTParameters& self,
+                                sim::PTParameterValue& value) -> sim::PTParameters& {
+                                 return self.add(std::move(value));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("add",
+                             [](sim::PTParameters& self,
+                                sim::PTParameterExpression& expr) -> sim::PTParameters& {
+                                 return self.add(std::move(expr));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("add",
+                             [](sim::PTParameters& self,
+                                sim::PTParameters& params) -> sim::PTParameters& {
+                                 return self.add(std::move(params));
+                             },
+                             py::return_value_policy::reference_internal)
+                        // Utilities
+                        .def("verify",
+                             [](const sim::PTParameters& self, int level) {
+                                 sim::Status status;
+                                 return self.verify(level, status);
+                             },
+                             py::arg("level"))
+                        .def("__repr__",
+                             [](const sim::PTParameters& self) {
+                                 std::ostringstream os;
+                                 os << self;
+                                 return os.str();
+                             });
+
 	}
 }
