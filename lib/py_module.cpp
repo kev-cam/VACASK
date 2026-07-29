@@ -100,5 +100,62 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                              [](sim::ParserTables& self) -> sim::ParserTables& { return self.defaultGround(); },
                              py::return_value_policy::reference_internal
                         );
+
+                py::class_<sim::PTModel>(mod_parser_output, "PTModel")
+                        .def(py::init<>())
+                        .def(py::init<sim::Id, sim::Id, const sim::Loc&>(),
+                             py::arg("name"),
+                             py::arg("device"),
+                             py::arg("location") = sim::Loc::bad)
+                        .def(py::init([](sim::Id name,
+                                         sim::Id device,
+                                         sim::PTParameters& params,
+                                         const sim::Loc& loc) {
+                                return sim::PTModel(
+                                    name,
+                                    device,
+                                    std::move(params),
+                                    loc);
+                             }),
+                             py::arg("name"),
+                             py::arg("device"),
+                             py::arg("parameters"),
+                             py::arg("location") = sim::Loc::bad)
+                        .def("location",
+                             &sim::PTModel::location,
+                             py::return_value_policy::reference_internal)
+                        .def("name", &sim::PTModel::name)
+                        .def("device", &sim::PTModel::device)
+                        .def("isParameterized", &sim::PTModel::isParameterized)
+                        .def("parameters",
+                             &sim::PTModel::parameters,
+                             py::return_value_policy::reference_internal)
+                        // Fluent API:
+                        .def("add",
+                             [](sim::PTModel& self, sim::PTParameters& par) -> sim::PTModel& {
+                                 return self.add(std::move(par));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("add",
+                             [](sim::PTModel& self, sim::PTParameterValue& value) -> sim::PTModel& {
+                                 return self.add(std::move(value));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("add",
+                             [](sim::PTModel& self, sim::PTParameterExpression& expr) -> sim::PTModel& {
+                                 return self.add(std::move(expr));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("dump",
+                             [](const sim::PTModel& self, int indent) {
+                                 self.dump(indent, std::cout);
+                             },
+                             py::arg("indent"))
+                        .def("verify",
+                             [](const sim::PTModel& self, int level) {
+                                 sim::Status status;
+                                 return self.verify(level, status);
+                             },
+                             py::arg("level"));
 	}
 }
