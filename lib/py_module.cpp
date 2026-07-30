@@ -158,6 +158,105 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                              },
                              py::arg("level"));
 
+                py::class_<sim::PTSubcircuitDefinition, sim::PTModel>(
+                        mod_parser_output, "PTSubcircuitDefinition")
+                        // Constructors
+                        .def(py::init<>())
+                        .def(py::init<sim::Id, const sim::Loc&>(),
+                             py::arg("name"),
+                             py::arg("location") = sim::Loc::bad)
+                        .def(py::init([](sim::Id name,
+                                         sim::PTIdentifierList& terms,
+                                         const sim::Loc& loc) {
+                                return sim::PTSubcircuitDefinition(
+                                    name,
+                                    std::move(terms),
+                                    loc);
+                             }),
+                             py::arg("name"),
+                             py::arg("terminals"),
+                             py::arg("location") = sim::Loc::bad)
+                        // Getters
+                        .def("terminals",
+                             &sim::PTSubcircuitDefinition::terminals,
+                             py::return_value_policy::reference_internal)
+                        .def("root",
+                             &sim::PTSubcircuitDefinition::root,
+                             py::return_value_policy::reference_internal)
+                        // subDefs accessors
+                        .def("subDefCount",
+                             [](const sim::PTSubcircuitDefinition& self) {
+                                 return self.subDefs().size();
+                             })
+                        .def("subDef",
+                             [](sim::PTSubcircuitDefinition& self, size_t i)
+                                 -> sim::PTSubcircuitDefinition& {
+                                 return *self.subDefs().at(i);
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("add",
+                             [](sim::PTSubcircuitDefinition& self,
+                                sim::PTSubcircuitDefinition& sub)
+                                 -> sim::PTSubcircuitDefinition& {
+                                 return self.add(std::move(sub));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("add",
+                             [](sim::PTSubcircuitDefinition& self,
+                                sim::PTModel& model)
+                                 -> sim::PTSubcircuitDefinition& {
+                                 return self.add(std::move(model));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("add",
+                             [](sim::PTSubcircuitDefinition& self,
+                                sim::PTInstance& inst)
+                                 -> sim::PTSubcircuitDefinition& {
+                                 return self.add(std::move(inst));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("add",
+                             [](sim::PTSubcircuitDefinition& self,
+                                sim::PTBlockSequence& seq)
+                                 -> sim::PTSubcircuitDefinition& {
+                                 return self.add(std::move(seq));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("add",
+                             [](sim::PTSubcircuitDefinition& self,
+                                sim::PTParameters& params)
+                                 -> sim::PTSubcircuitDefinition& {
+                                 return self.add(std::move(params));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("add",
+                             [](sim::PTSubcircuitDefinition& self,
+                                sim::PTParameterValue& value)
+                                 -> sim::PTSubcircuitDefinition& {
+                                 return self.add(std::move(value));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("add",
+                             [](sim::PTSubcircuitDefinition& self,
+                                sim::PTParameterExpression& expr)
+                                 -> sim::PTSubcircuitDefinition& {
+                                 return self.add(std::move(expr));
+                             },
+                             py::return_value_policy::reference_internal)
+                        .def("dump",
+                             [](const sim::PTSubcircuitDefinition& self, int indent) {
+                                 self.dump(indent, std::cout);
+                             },
+                             py::arg("indent"))
+                        .def("verify",
+                             [](const sim::PTSubcircuitDefinition& self, int level) {
+                                 sim::Status status;
+                                 return self.verify(level, status);
+                             },
+                             py::arg("level"));
+
+
+
                 py::class_<sim::PTInstance>(mod_parser_output, "PTInstance")
                         // Constructors
                         .def(py::init<>())
@@ -285,5 +384,51 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                                  return os.str();
                              });
 
+                py::class_<sim::PTParameterValue>(mod_parser_output, "PTParameterValue")
+                        .def(py::init([](sim::Id name,
+                                         sim::Value& value,
+                                         const sim::Loc& loc) {
+                                return sim::PTParameterValue(
+                                    name,
+                                    std::move(value),
+                                    loc);
+                             }),
+                             py::arg("name"),
+                             py::arg("value"),
+                             py::arg("location") = sim::Loc::bad)
+                        .def("name", &sim::PTParameterValue::name)
+                        .def("location", &sim::PTParameterValue::location)
+                        .def("val",
+                             &sim::PTParameterValue::val,
+                             py::return_value_policy::reference_internal)
+                        .def("dump",
+                             [](const sim::PTParameterValue& self, int indent) {
+                                 self.dump(indent, std::cout);
+                             });
+
+                py::class_<sim::PTParameterExpression>(m, "PTParameterExpression")
+                        .def(py::init([](sim::Id name,
+                                         sim::Rpn& rpn,
+                                         const sim::Loc& loc) {
+                                return sim::PTParameterExpression(
+                                    name,
+                                    std::move(rpn),
+                                    loc);
+                             }),
+                             py::arg("name"),
+                             py::arg("rpn"),
+                             py::arg("location") = sim::Loc::bad)
+                        .def("name",
+                             &sim::PTParameterExpression::name)
+                        .def("location",
+                             &sim::PTParameterExpression::location)
+                        .def("rpn",
+                             &sim::PTParameterExpression::rpn,
+                             py::return_value_policy::reference_internal)
+                        .def("dump",
+                             [](const sim::PTParameterExpression& self, int indent) {
+                                 self.dump(indent, std::cout);
+                             },
+                             py::arg("indent"));
 	}
 }
