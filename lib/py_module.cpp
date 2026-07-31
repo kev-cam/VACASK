@@ -407,7 +407,7 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                                  self.dump(indent, std::cout);
                              });
 
-                py::class_<sim::PTParameterExpression>(m, "PTParameterExpression")
+                py::class_<sim::PTParameterExpression>(mod_parser_output, "PTParameterExpression")
                         .def(py::init([](sim::Id name,
                                          sim::Rpn& rpn,
                                          const sim::Loc& loc) {
@@ -431,6 +431,102 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                                  self.dump(indent, std::cout);
                              },
                              py::arg("indent"));
+
+                py::class_<sim::PTSweep>(mod_parser_output, "PTSweep")
+                        .def(py::init<sim::Id, const sim::Loc&>(),
+                             py::arg("name"),
+                             py::arg("location") = sim::Loc::bad)
+                        .def(py::init([](sim::Id name,
+                                         sim::PTParameters &params,
+                                         const sim::Loc &loc) {
+                            return sim::PTSweep(name, std::move(params), loc);
+                        }),
+                        py::arg("name"),
+                        py::arg("parameters"),
+                        py::arg("loc") = sim::Loc::bad)
+                        .def_property_readonly("name", &sim::PTSweep::name)
+                        .def_property_readonly(
+                            "location",
+                            &sim::PTSweep::location,
+                            py::return_value_policy::reference_internal)
+                        .def_property_readonly(
+                            "parameters",
+                            &sim::PTSweep::parameters,
+                            py::return_value_policy::reference_internal)
+                        .def(
+                            "add",
+                            [](sim::PTSweep &self, sim::PTParameters &p) -> sim::PTSweep& {
+                                return self.add(std::move(p));
+                            },
+                            py::return_value_policy::reference_internal
+                        )
+                        .def(
+                            "add",
+                            [](sim::PTSweep &self, sim::PTParameterValue &v) -> sim::PTSweep& {
+                                return self.add(std::move(v));
+                            },
+                            py::return_value_policy::reference_internal
+                        )
+                        .def(
+                            "add",
+                            [](sim::PTSweep &self, sim::PTParameterExpression &e) -> sim::PTSweep& {
+                                return self.add(std::move(e));
+                            },
+                            py::return_value_policy::reference_internal
+                        )
+                        .def(
+                            "verify",
+                            [](const sim::PTSweep& self, int level) {
+                                sim::Status s; // TODO
+                                return self.verify(level, s);
+                            });
+                py::class_<sim::PTAnalysis>(mod_parser_output, "PTAnalysis")
+                        .def(py::init<>())
+                        .def(py::init<sim::Id, sim::Id, const sim::Loc&>(),
+                             py::arg("name"),
+                             py::arg("type_name"),
+                             py::arg("location") = sim::Loc::bad)
+                        .def_property_readonly(
+                            "location",
+                            &sim::PTAnalysis::location,
+                            py::return_value_policy::reference_internal)
+                        .def_property_readonly(
+                            "name",
+                            &sim::PTAnalysis::name)
+                        .def_property_readonly(
+                            "type_name",
+                            &sim::PTAnalysis::typeName)
+                        .def_property_readonly(
+                            "parameters",
+                            py::overload_cast<>(&sim::PTAnalysis::parameters),
+                            py::return_value_policy::reference_internal)
+                        .def_property_readonly(
+                            "sweeps",
+                            &sim::PTAnalysis::sweeps,
+                            py::return_value_policy::reference_internal)
+                        .def("add",
+                            [](sim::PTAnalysis &self, sim::PTParameters &p) -> sim::PTAnalysis& {
+                                return self.add(std::move(p));
+                            },
+                            py::return_value_policy::reference_internal)
+                        
+                        .def("add",
+                            [](sim::PTAnalysis &self, sim::PTParameterValue &v) -> sim::PTAnalysis& {
+                                return self.add(std::move(v));
+                            },
+                            py::return_value_policy::reference_internal)
+                        
+                        .def("add",
+                            [](sim::PTAnalysis &self, sim::PTParameterExpression &e) -> sim::PTAnalysis& {
+                                return self.add(std::move(e));
+                            },
+                            py::return_value_policy::reference_internal)
+                        .def(
+                            "verify",
+                            [](const sim::PTAnalysis& self, int level) {
+                                sim::Status s; // TODO
+                                return self.verify(level, s);
+                            });
 	}
 
 	{  // pyvacask.compiler
@@ -470,5 +566,44 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                             py::arg("load_directive_canonical_path"),
                             py::arg("file_name"),
                             py::arg("canonical_path"));
+	}
+
+	{ // pyvacask.circuit
+		auto mod_circuit = m.def_submodule("circuit");
+                py::class_<sim::Circuit, std::unique_ptr<sim::Circuit>>(mod_circuit, "Circuit")
+                        .def(py::init<sim::ParserTables&, sim::SourceCompiler*>(),
+                             py::arg("tables"),
+                             py::arg("compiler") = nullptr)
+                        .def("is_valid", &sim::Circuit::isValid)
+                        .def("needs_elaboration", &sim::Circuit::needsElaboration)
+                        .def("clear", &sim::Circuit::clear)
+                        .def("title",
+                             &sim::Circuit::title,
+                             py::return_value_policy::reference_internal)
+                        .def("set_title", &sim::Circuit::setTitle)
+                        .def("device_count", &sim::Circuit::deviceCount)
+                        .def("node_count", &sim::Circuit::nodeCount)
+                        .def("unknown_count", &sim::Circuit::unknownCount)
+                        .def("instance_count", &sim::Circuit::instanceCount)
+                        .def("subcircuit_instance_count", &sim::Circuit::subcircuitInstanceCount)
+                        .def("get_variable",
+                             [](const sim::Circuit& c, sim::Id name) -> py::object {
+                                 auto* v = c.getVariable(name);
+                                 if (v)
+                                     return py::cast(*v);
+                                 return py::none();
+                             })
+                        .def("set_variable",
+                             [](sim::Circuit& c, sim::Id name, const sim::Value& v) {
+                                 return c.setVariable(name, v);
+                             })
+                        .def("elaborate",
+                             [](sim::Circuit& c) {
+                                 return c.elaborate();
+                             })
+                        .def("elaborate_changes",
+                             [](sim::Circuit& c) {
+                                 return c.elaborateChanges(nullptr);
+                             });
 	}
 }
