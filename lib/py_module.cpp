@@ -631,4 +631,48 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                                  return c.elaborateChanges(nullptr);
                              });
 	}
+
+        { // pyvacask.analysis
+		auto mod_analysis = m.def_submodule("analysis");
+                py::class_<sim::Analysis>(mod_analysis, "Analysis")
+                    .def_property_readonly("name", &sim::Analysis::name)
+                    .def("sweep_count", &sim::Analysis::sweepCount)
+                    .def("update_sweeper", &sim::Analysis::updateSweeper)
+                    .def(
+                        "add",
+                        py::overload_cast<const sim::PTSave &>(&sim::Analysis::add),
+                        py::return_value_policy::reference_internal
+                    )
+                    .def(
+                        "add",
+                        py::overload_cast<const sim::PTSaves &>(&sim::Analysis::add),
+                        py::return_value_policy::reference_internal
+                    )
+                    .def(
+                        "add",
+                        py::overload_cast<const sim::PTParameters &>(&sim::Analysis::add),
+                        py::return_value_policy::reference_internal
+                    )
+                    .def(
+                        "add",
+                        [](sim::Analysis &self, sim::PTParameters &p) -> sim::Analysis& {
+                            return self.add(std::move(p));
+                        },
+                        py::return_value_policy::reference_internal
+                    )
+                    .def(
+                        "add",
+                        py::overload_cast<const sim::PTParameterMap &>(&sim::Analysis::add),
+                        py::return_value_policy::reference_internal
+                    )
+                    .def("start", &sim::Analysis::start)
+                    .def("is_running", &sim::Analysis::isRunning)
+                    .def("resume", &sim::Analysis::resume)
+                    .def("finish", &sim::Analysis::finish)
+                    .def("run", &sim::Analysis::run)
+                    .def("update_parameter_expressions", &sim::Analysis::updateParameterExpressions)
+                    .def("requests_rebuild", &sim::Analysis::requestsRebuild)
+                    .def("pre_mapping", &sim::Analysis::preMapping)
+                    .def("populate_structures", &sim::Analysis::populateStructures);
+        }
 }
