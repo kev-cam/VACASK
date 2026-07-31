@@ -2,7 +2,8 @@
 #include <pybind11/stl.h>
 #include <simulator.h>
 #include <circuit.h>
-#include "openvafcomp.h"
+#include <openvafcomp.h>
+#include <parser.h>
 
 namespace py = pybind11;
 
@@ -553,6 +554,32 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                             return oss.str();
                         });
 	}
+
+        { // pyvacask.parser
+		auto mod_parser = m.def_submodule("parser");
+                py::class_<sim::Parser>(mod_parser, "Parser")
+                        .def(py::init<sim::ParserTables&>(),
+                             py::arg("tables"),
+                             py::keep_alive<1, 2>())
+                        .def("parseNetlistFile",
+                             &sim::Parser::parseNetlistFile,
+                             py::arg("fileIndex"))
+                        .def("parseNetlistString",
+                             [](sim::Parser &self, const std::string &input) {
+                                 return self.parseNetlistString(input);
+                             },
+                             py::arg("input"))
+                        .def("parseExpression",
+                             [](sim::Parser &self, const std::string &input) {
+                                 return self.parseExpression(input);
+                             },
+                             py::arg("input"))
+                        .def("parseParameters",
+                             [](sim::Parser &self, const std::string &input) {
+                                 return self.parseParameters(input);
+                             },
+                             py::arg("input"));
+        }
 
 	{  // pyvacask.compiler
 		auto mod_compiler = m.def_submodule("compiler");
