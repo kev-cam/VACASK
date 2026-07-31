@@ -527,6 +527,31 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                                 sim::Status s; // TODO
                                 return self.verify(level, s);
                             });
+                py::class_<sim::PTSave>(mod_parser_output, "PTSave")
+                        .def(py::init<>())
+                        .def(py::init<sim::Id, const sim::Loc &>(),
+                             py::arg("type_name"),
+                             py::arg("loc") = sim::Loc::bad)
+                        .def(py::init<sim::Id, sim::Id, const sim::Loc &>(),
+                             py::arg("type_name"),
+                             py::arg("obj_name"),
+                             py::arg("loc") = sim::Loc::bad)
+                        .def(py::init<sim::Id, sim::Id, sim::Id, const sim::Loc &>(),
+                             py::arg("type_name"),
+                             py::arg("obj_name"),
+                             py::arg("sub_name"),
+                             py::arg("loc") = sim::Loc::bad)
+                
+                        .def_property_readonly("type_name", &sim::PTSave::typeName)
+                        .def_property_readonly("obj_name", &sim::PTSave::objName)
+                        .def_property_readonly("sub_name", &sim::PTSave::subName)
+                        .def_property_readonly("location", &sim::PTSave::location)
+                
+                        .def("__repr__", [](const sim::PTSave &s) {
+                            std::ostringstream oss;
+                            oss << s;
+                            return oss.str();
+                        });
 	}
 
 	{  // pyvacask.compiler
