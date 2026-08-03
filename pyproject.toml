@@ -5,6 +5,18 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "pyvacask"
 version = "0.1.0"
+authors = [
+  { name="Arpad Buermen", email="arpad.burmen@fe.uni-lj.si" },
+]
+description = "VACASK (Verilog-A Circuit Analysis Kernel) is an analog circuit simulator. "
+readme = "README.md"
+requires-python = ">=3.6"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "GNUv3"
+license-files = ["LICENSE"]
 
 [project.optional-dependencies]
 dev = [
