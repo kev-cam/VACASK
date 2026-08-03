@@ -8,3 +8,6 @@ benchmark/rundir
 *.osdi
 *.swp
 venv/
+tran1.raw
+tran1.jpg
+build/

@@ -1,21 +1,28 @@
 import os
 import sys
 
-from pyvacask.simulator import Simulator
+import pyvacask.simulator as sim
 from pyvacask.status import Status
+from pyvacask.parser import Parser
 from pyvacask.parser_output import ParserTables
 from pyvacask.parser_output import PTLoad
 from pyvacask.parser_output import PTSubcircuitDefinition
 from pyvacask.parser_output import PTModel
-from pyvacask.parser_output import PTParameter
+from pyvacask.parser_output import PTInstance
+from pyvacask.parser_output import PTParameters
 from pyvacask.parser_output import PTParameterValue
 from pyvacask.parser_output import PTParameterExpression
 from pyvacask.parser_output import PTAnalysis
 from pyvacask.parser_output import PTSave
+from pyvacask.parser_output import PTParsedIdentifier
 from pyvacask.compiler import OpenvafCompiler
 from pyvacask.circuit import Circuit
 from pyvacask.analysis import Analysis
+from pyvacask.id import Id
+from pyvacask.value import Value
 
+import numpy as np
+import matplotlib.pyplot as plt
 
 _THIS_FILE  = os.path.abspath(__file__)
 _TEST_DIR   = os.path.dirname(_THIS_FILE)
@@ -28,16 +35,22 @@ sys.path.append(PY_LIB_PATH)
 from rawfile import rawread
 
 
-def PV(name, value):
-    return PTParameterValue(name, value)
+def PV(ident:str, value:str):
+    ident = Id(ident)
+    value = Value(value)
+    return PTParameterValue(ident, value)
 
-def PE(ident, expr):
+def PE(ident:str, expr):
+    ident = Id(ident)
     return PTParameterExpression(ident, expr)
 
+
+def PTIds(ids):
+    return list(map(PTParsedIdentifier, ids))
+
 def test_demo1(): 
-    sim = Simulator()
     sim.setup()
-    sim.prependModulePath(MODULE_PATH)
+    sim.prependModulePath([MODULE_PATH])
 
     s   = Status()
     tab = ParserTables("RC transient")
@@ -47,13 +60,16 @@ def test_demo1():
     tab = tab.add(PTLoad("capacitor.osdi"))
     tab = tab.defaultGround()
     sub = PTSubcircuitDefinition()
-    sub = sub.add(PTParameters().add(PV("c0", 1e-6).add(PV("v0", 5))))
-    sub = sub.add(PTModel("res", "resistor"))
-    sub = sub.add(PTModel("cap", "capacitor"))
-    sub = sub.add(PTModel("vsrc", "vsource"))
-    sub = sub.add(PTInstance("r1", "res", ["1", "2"]).add(PV("r", 1000)))
-    sub = sub.add(PTInstance("c1", "cap", ["2", "0"]).add(PE("c", p.parseExpression("2*c0"))))
-    sub = sub.add(PTInstance("v1", "vsrc", {"1", "0"}).add(
+    par = PTParameters()
+    par = par.add(PV("c0", 1e-6))
+    par = par.add(PV("v0", 5))
+    sub = sub.add(par)
+    sub = sub.add(PTModel(Id("res"), Id("resistor")))
+    sub = sub.add(PTModel(Id("cap"), Id("capacitor")))
+    sub = sub.add(PTModel(Id("vsrc"), Id("vsource")))
+    sub = sub.add(PTInstance(Id("r1"), Id("res"), PTIds(["1", "2"])).add(PV("r", 1000)))
+    sub = sub.add(PTInstance(Id("c1"), Id("cap"), PTIds(["2", "0"])).add(PE("c", p.parseExpression("2*c0"))))
+    sub = sub.add(PTInstance(Id("v1"), Id("vsrc"), PTIds(["1", "0"])).add(
         p.parseParameters("type=\"pulse\" val0=0 val1=v0 delay=1m rise=1u fall=1u width=4m"))
     )
     tab = tab.setDefaultSubDef(sub)
@@ -63,21 +79,30 @@ def test_demo1():
 
     comp = OpenvafCompiler()
     cir  = Circuit(tab, comp, s)
-    assert cir.isValid()
+    assert cir.is_valid()
 
-    cir.setOption("reltol", 1e-4)
-    assert cir.elaborate([], "__topdef__", "__topinst__", None, s)
+    cir.setOption(Id("reltol"), Value(1e-4))
+    assert cir.elaborate([], "__topdef__", "__topinst__", status=s)
     cir.dumpHierarchy(0);
 
-    tran_desc = PTAnalysis("tran1", "tran")
+    tran_desc = PTAnalysis(Id("tran1"), Id("tran"))
     tran_desc.add(PV("step", 1e-6))
     tran_desc.add(PV("stop", 10e-3))
 
-    tran = Analysis().create(tran_desc, cir, s)
+    tran = Analysis.create(tran_desc, cir, s)
     assert tran
 
-    tran.add(PTSave("default"))
-    tran.add(PTSave("p", "r1", "i"))
+    tran.add(PTSave(Id("default")))
+    tran.add(PTSave(Id("p"), Id("r1"), Id("i")))
 
     (ok, can_resume) = tran.run(s)
     assert ok
+
+    tran1 = rawread('tran1.raw').get()
+    print("Vectors:", tran1.names)
+    fig1, ax1 = plt.subplots(1, 1, figsize=(6,4), dpi=100, constrained_layout=True)
+    fig1.axes[0].plot(tran1["time"], tran1["2"], "r", marker=".")
+    fig1.axes[0].plot(tran1["time"], tran1["1"], "b")
+    fig1.axes[0].plot(tran1["time"], tran1["r1.i"]*1000, "--")
+    fig1.savefig("tran1.jpg")
+

@@ -1,9 +1,12 @@
+#define PYBIND11_DETAILED_ERROR_MESSAGES
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/operators.h>
 #include <simulator.h>
 #include <circuit.h>
 #include <openvafcomp.h>
 #include <parser.h>
+#include <sourceloc.h>
 
 namespace py = pybind11;
 
@@ -18,6 +21,12 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
 			.def(py::init())
 			.def("message", &sim::Status::message);
 	}
+	
+        // pyvacask.elsetup
+        {
+		auto mod_elsetup = m.def_submodule("elsetup");
+                py::class_<sim::DeviceRequests>(mod_elsetup, "DeviceRequests");
+        }
 
 	// pyvacask.simulator
 	{
@@ -60,9 +69,89 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
 		    py::arg("paths")
 		);
 	}
-	
-	// pyvacask.parser_output
-	{
+        
+        { // pyvacask.loc
+            auto mod_loc = m.def_submodule("loc");
+        
+            py::class_<sim::Loc>(mod_loc, "Loc")
+                .def(py::init<>())
+                .def(py::init<
+                         sim::FileStackIndex,
+                         sim::FileStackFileIndex,
+                         sim::SourceLineNumber,
+                         sim::SourceColumnNumber>(),
+                     py::arg("file_stack"),
+                     py::arg("file"),
+                     py::arg("line"),
+                     py::arg("column"))
+                .def("data", &sim::Loc::data)
+                .def("toString", &sim::Loc::toString)
+                .def("__str__", &sim::Loc::toString)
+                .def("__repr__",
+                     [](const sim::Loc &self) {
+                         return "Loc('" + self.toString() + "')";
+                     })
+                .def("__bool__",
+                     [](const sim::Loc &self) {
+                         return static_cast<bool>(self);
+                     })
+                .def("__eq__",
+                     [](const sim::Loc &a, const sim::Loc &b) {
+                         return a == b;
+                     })
+                .def("__ne__",
+                     [](const sim::Loc &a, const sim::Loc &b) {
+                         return a != b;
+                     })
+                .def_readonly_static("bad", &sim::Loc::bad);
+        }
+
+        { // pyvacask.id
+            auto mod_id = m.def_submodule("id");
+            py::class_<sim::Id>(mod_id, "Id")
+                // Constructors
+                .def(py::init<>())
+                .def(py::init<sim::IdentifierIndex>(),
+                     py::arg("id"))
+                .def(py::init<const std::string &>(),
+                     py::arg("name"))
+                .def_property_readonly("id", &sim::Id::id)
+                .def("c_str", &sim::Id::c_str)
+                .def("__str__",
+                     [](const sim::Id &self) {
+                         return std::string(self);
+                     })
+                .def("__repr__",
+                     [](const sim::Id &self) {
+                         return "<Id '" + std::string(self) + "'>";
+                     })
+                .def("__bool__",
+                     [](const sim::Id &self) {
+                         return static_cast<bool>(self);
+                     })
+                .def(py::self == py::self)
+                .def(py::self != py::self)
+                .def_static("createStatic",
+                            &sim::Id::createStatic,
+                            py::arg("name"))
+                .def_readonly_static("none", &sim::Id::none);
+        }
+
+        { // pyvacsk.value
+		auto mod_value = m.def_submodule("value");
+                py::class_<sim::Value>(mod_value, "Value")
+                        .def(py::init<>())
+                        .def(py::init<sim::Int>())
+                        .def(py::init<sim::Real>())
+                        .def(py::init<const sim::String &>())
+                        .def(py::init<const char *>())
+                        .def(py::init<const sim::IntVector &>())
+                        .def(py::init<const sim::RealVector &>())
+                        .def(py::init<const sim::StringVector &>())
+                        .def(py::init<const sim::ValueVector &>());
+        }
+
+	{ // pyvacask.parser_output
 		auto mod_parser_output = m.def_submodule("parser_output");
 		py::class_<sim::ParserTables>(mod_parser_output, "ParserTables")
 			.def(py::init<const std::string&>())
@@ -101,6 +190,88 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                         .def("defaultGround",
                              [](sim::ParserTables& self) -> sim::ParserTables& { return self.defaultGround(); },
                              py::return_value_policy::reference_internal
+                        )
+                        .def("verify",
+                            [](sim::ParserTables& self, sim::Status& s) -> bool { return self.verify(s); },
+                            py::return_value_policy::reference_internal
+                        )
+                        .def("writeEmbedded",
+                            [](sim::ParserTables& self, int debug, sim::Status& s) -> bool { 
+                                return self.writeEmbedded(debug, s);
+                            },
+                            py::return_value_policy::reference_internal
+                        );
+
+                py::class_<sim::PTLoad>(mod_parser_output, "PTLoad")
+                        .def(py::init<>())
+                        .def(
+                            py::init([](const std::string& file, const sim::Loc& loc) {
+                                return sim::PTLoad(file, loc);
+                            }),
+                            py::arg("file"),
+                            py::arg("location") = sim::Loc::bad
+                        )
+                        .def(py::init([](const std::string &file,
+                                         sim::PTParameters &par,
+                                         const sim::Loc &loc) {
+                            return sim::PTLoad(file, std::move(par), loc);
+                        }),
+                        py::arg("file"),
+                        py::arg("parameters"),
+                        py::arg("location") = sim::Loc::bad)
+                        // Getters
+                        .def(
+                            "location",
+                            &sim::PTLoad::location,
+                            py::return_value_policy::reference_internal
+                        )
+                        .def(
+                            "file",
+                            &sim::PTLoad::file,
+                            py::return_value_policy::reference_internal
+                        )
+                        .def(
+                            "parameters",
+                            [](sim::PTLoad& self) -> sim::PTParameters& {
+                                return const_cast<sim::PTParameters&>(self.parameters());
+                            },
+                            py::return_value_policy::reference_internal
+                        )
+                        .def(
+                            "add",
+                            [](sim::PTLoad& self, sim::PTParameters& par) -> sim::PTLoad& {
+                                return self.add(std::move(par));
+                            },
+                            py::arg("parameters"),
+                            py::return_value_policy::reference_internal
+                        )
+                        
+                        .def(
+                            "add",
+                            [](sim::PTLoad& self, sim::PTParameterValue& v) -> sim::PTLoad& {
+                                return self.add(std::move(v));
+                            },
+                            py::arg("value"),
+                            py::return_value_policy::reference_internal
+                        )
+                        .def(
+                            "verify",
+                            [](const sim::PTLoad& self, int level, py::object obj) {
+                                if (obj.is_none())
+                                    return self.verify(level);
+                                return self.verify(level, obj.cast<sim::Status&>());
+                            },
+                            py::arg("level"),
+                            py::arg("status") = py::none()
+                        )
+                        .def(
+                            "dump",
+                            [](const sim::PTLoad& self, int indent) {
+                                std::ostringstream os;
+                                self.dump(indent, os);
+                                return os.str();
+                            },
+                            py::arg("indent")
                         );
 
                 py::class_<sim::PTModel>(mod_parser_output, "PTModel")
@@ -553,6 +724,23 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                             oss << s;
                             return oss.str();
                         });
+                py::class_<sim::PTParsedIdentifier>(mod_parser_output, "PTParsedIdentifier")
+                        .def(py::init<const char*, sim::Loc>(),
+                             py::arg("name"),
+                             py::arg("location") = sim::Loc::bad)
+                        .def(py::init<sim::Id, sim::Loc>(),
+                             py::arg("name"),
+                             py::arg("location") = sim::Loc::bad)
+                        .def("name",
+                             &sim::PTParsedIdentifier::name)
+                        .def("location",
+                             &sim::PTParsedIdentifier::location)
+                        .def("__repr__",
+                             [](const sim::PTParsedIdentifier& self) {
+                                 std::ostringstream os;
+                                 os << self;
+                                 return os.str();
+                             });
 	}
 
         { // pyvacask.parser
@@ -562,7 +750,9 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                              py::arg("tables"),
                              py::keep_alive<1, 2>())
                         .def("parseNetlistFile",
-                             &sim::Parser::parseNetlistFile,
+                             [](sim::Parser &self, sim::FileStackFileIndex fileIndex) {
+                                 return self.parseNetlistFile(fileIndex);
+                             },
                              py::arg("fileIndex"))
                         .def("parseNetlistString",
                              [](sim::Parser &self, const std::string &input) {
@@ -580,6 +770,109 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                              },
                              py::arg("input"));
         }
+	
+        { // pyvacask.circuit
+		auto mod_circuit = m.def_submodule("circuit");
+                py::class_<sim::Circuit, std::unique_ptr<sim::Circuit>>(mod_circuit, "Circuit")
+                        .def(py::init<sim::ParserTables&, sim::SourceCompiler*, sim::Status&>(),
+                             py::arg("tables"),
+                             py::arg("compiler") = nullptr,
+                             py::arg("status"),
+                             py::return_value_policy::reference_internal)
+                        .def("is_valid", &sim::Circuit::isValid)
+                        .def("needs_elaboration", &sim::Circuit::needsElaboration)
+                        .def("clear", &sim::Circuit::clear)
+                        .def("title",
+                             &sim::Circuit::title,
+                             py::return_value_policy::reference_internal)
+                        .def("set_title", &sim::Circuit::setTitle)
+                        .def("device_count", &sim::Circuit::deviceCount)
+                        .def("node_count", &sim::Circuit::nodeCount)
+                        .def("unknown_count", &sim::Circuit::unknownCount)
+                        .def("instance_count", &sim::Circuit::instanceCount)
+                        .def("subcircuit_instance_count", &sim::Circuit::subcircuitInstanceCount)
+                        .def("get_variable",
+                             [](const sim::Circuit& c, sim::Id name) -> py::object {
+                                 auto* v = c.getVariable(name);
+                                 if (v)
+                                     return py::cast(*v);
+                                 return py::none();
+                             })
+                        .def("set_variable",
+                             [](sim::Circuit& c, sim::Id name, const sim::Value& v) {
+                                 return c.setVariable(name, v);
+                             })
+                        .def("setOption",
+                             [](sim::Circuit& c, sim::Id name, const sim::Value& v) {
+                                 sim::Status s; // TODO
+                                 return c.setOption(name, v, s);
+                             })
+                        .def(
+                            "elaborate",
+                            [](sim::Circuit &self,
+                               const std::vector<sim::Id> &defs,
+                               const std::string &defName,
+                               const std::string &instName,
+                               sim::DeviceRequests *devReq,
+                               sim::Status &status)
+                            {
+                                return self.elaborate(defs, defName, instName, devReq, status);
+                            },
+                            py::arg("toplevel_definitions") = std::vector<sim::Id>{},
+                            py::arg("top_def_name") = "__topdef__",
+                            py::arg("top_inst_name") = "__topinst__",
+                            py::arg("dev_req") = nullptr,
+                            py::arg("status") 
+                        )
+                        .def("dumpDevices",                                   
+                            [](const sim::Circuit& self, int indent) {
+                                self.dumpDevices(indent, std::cout);
+                            },
+                            py::arg("indent")) 
+                        .def("dumpModels",                                   
+                            [](const sim::Circuit& self, int indent) {
+                                self.dumpModels(indent, std::cout);
+                            },
+                            py::arg("indent")) 
+                        .def("dumpVariables",                                   
+                            [](const sim::Circuit& self, int indent) {
+                                self.dumpVariables(indent, std::cout);
+                            },
+                            py::arg("indent"))
+                        .def("dumpOptions",                               
+                            [](const sim::Circuit& self, int indent) {
+                                self.dumpOptions(indent, std::cout);
+                            },
+                            py::arg("indent"))
+                        .def("dumpHierarchy",
+                            [](const sim::Circuit& self, int indent) {
+                                self.dumpHierarchy(indent, std::cout);
+                            },
+                            py::arg("indent"))
+                        .def("dumpNodes",
+                            [](const sim::Circuit& self, int indent) {
+                                self.dumpNodes(indent, std::cout);
+                            },
+                            py::arg("indent"))
+                        .def("dumpUnknowns",
+                            [](const sim::Circuit& self, int indent) {
+                                self.dumpUnknowns(indent, std::cout);
+                            },
+                            py::arg("indent"))
+                        .def("dumpSparsity",
+                            [](const sim::Circuit& self, int indent) {
+                                self.dumpSparsity(indent, std::cout);
+                            },
+                            py::arg("indent"))
+                        .def("dumpDeviceCounts",
+                            [](const sim::Circuit& self, int indent) {
+                                self.dumpDeviceCounts(indent, std::cout);
+                            },
+                            py::arg("indent"));
+
+
+                py::class_<sim::SourceCompiler>(mod_circuit, "SourceCompiler");
+	}
 
 	{  // pyvacask.compiler
 		auto mod_compiler = m.def_submodule("compiler");
@@ -620,45 +913,6 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                             py::arg("canonical_path"));
 	}
 
-	{ // pyvacask.circuit
-		auto mod_circuit = m.def_submodule("circuit");
-                py::class_<sim::Circuit, std::unique_ptr<sim::Circuit>>(mod_circuit, "Circuit")
-                        .def(py::init<sim::ParserTables&, sim::SourceCompiler*>(),
-                             py::arg("tables"),
-                             py::arg("compiler") = nullptr)
-                        .def("is_valid", &sim::Circuit::isValid)
-                        .def("needs_elaboration", &sim::Circuit::needsElaboration)
-                        .def("clear", &sim::Circuit::clear)
-                        .def("title",
-                             &sim::Circuit::title,
-                             py::return_value_policy::reference_internal)
-                        .def("set_title", &sim::Circuit::setTitle)
-                        .def("device_count", &sim::Circuit::deviceCount)
-                        .def("node_count", &sim::Circuit::nodeCount)
-                        .def("unknown_count", &sim::Circuit::unknownCount)
-                        .def("instance_count", &sim::Circuit::instanceCount)
-                        .def("subcircuit_instance_count", &sim::Circuit::subcircuitInstanceCount)
-                        .def("get_variable",
-                             [](const sim::Circuit& c, sim::Id name) -> py::object {
-                                 auto* v = c.getVariable(name);
-                                 if (v)
-                                     return py::cast(*v);
-                                 return py::none();
-                             })
-                        .def("set_variable",
-                             [](sim::Circuit& c, sim::Id name, const sim::Value& v) {
-                                 return c.setVariable(name, v);
-                             })
-                        .def("elaborate",
-                             [](sim::Circuit& c) {
-                                 return c.elaborate();
-                             })
-                        .def("elaborate_changes",
-                             [](sim::Circuit& c) {
-                                 return c.elaborateChanges(nullptr);
-                             });
-	}
-
         { // pyvacask.analysis
 		auto mod_analysis = m.def_submodule("analysis");
                 py::class_<sim::Analysis>(mod_analysis, "Analysis")
@@ -692,6 +946,14 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                         py::overload_cast<const sim::PTParameterMap &>(&sim::Analysis::add),
                         py::return_value_policy::reference_internal
                     )
+                    .def_static(
+                        "create",
+                        &sim::Analysis::create,
+                        py::arg("pt_analysis"),
+                        py::arg("circuit"),
+                        py::arg("status"),
+                        py::return_value_policy::take_ownership
+                    )
                     .def("start", &sim::Analysis::start)
                     .def("is_running", &sim::Analysis::isRunning)
                     .def("resume", &sim::Analysis::resume)
@@ -701,5 +963,10 @@ PYBIND11_MODULE(pyvacask, m, py::mod_gil_not_used()) {
                     .def("requests_rebuild", &sim::Analysis::requestsRebuild)
                     .def("pre_mapping", &sim::Analysis::preMapping)
                     .def("populate_structures", &sim::Analysis::populateStructures);
+        }
+
+        { // rpnexpr
+		auto mod_rpnexpr = m.def_submodule("rpnexpr");
+                py::class_<sim::Rpn>(mod_rpnexpr, "Rpn");
         }
 }
