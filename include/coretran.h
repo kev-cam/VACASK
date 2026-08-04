@@ -2,6 +2,7 @@
 #define __ANCORETRAN_DEFINED
 
 #include <random>
+#include <functional>
 #include "status.h"
 #include "circuit.h"
 #include "core.h"
@@ -129,10 +130,32 @@ public:
     void dump(std::ostream& os) const;
 
     TranNRSolver& solver() { return nrSolver; }
-    // Slot number used for ic forces, by default 2 
+    // Slot number used for ic forces, by default 2
     // Analysies like PSS, use slot 3 in continue mode
     // TranCore writes only slot 2
     void setIcForcesSlot(size_t n) { icForcesSlot = n; };
+
+    // Cosimulation: read current solution value by unknown index.
+    // Index 0 = ground. Use Node::unknownIndex() to map node names.
+    double solutionValue(size_t index) const {
+        return (index < solution.length()) ? solution.data()[index] : 0.0;
+    }
+    size_t solutionLength() const { return solution.length(); }
+
+    // Cosimulation callback: called at every accepted timestep with (time, stepsize).
+    // Return false to abort the analysis.
+    // The callback may call setExternalBreakPoint() to influence the next
+    // timestep.
+    using TimestepCallback = std::function<bool(double tSolve, double hk)>;
+    void setTimestepCallback(TimestepCallback cb) { timestepCallback_ = std::move(cb); }
+
+    // Inject a breakpoint for the next timestep. The solver will land at
+    // this time (or earlier if other constraints apply). Intended for use
+    // from within the TimestepCallback to forward-predict threshold crossings.
+    void setExternalBreakPoint(double t) {
+        if (t > 0 && (externalBreakPoint_ < 0 || t < externalBreakPoint_))
+            externalBreakPoint_ = t;
+    }
 
     static Id icmodeOp;
     static Id icmodeUic;
@@ -177,7 +200,10 @@ protected:
     // getIntegCoeffs()/getPastTimesteps() still reflect exactly the state
     // used to solve this step, not a history already advanced past it.
     // Return false to abort the analysis.
-    virtual bool onTimestepAccepted(double /*tSolve*/, double /*hk*/, Int /*order*/) { return true; }
+    virtual bool onTimestepAccepted(double tSolve, double hk, Int /*order*/) {
+        if (timestepCallback_) return timestepCallback_(tSolve, hk);
+        return true;
+    }
 
 protected:
     TranParameters& params;
@@ -208,7 +234,10 @@ private:
     size_t nPoints;
     double tk;
     size_t icForcesSlot;
-    
+
+    TimestepCallback timestepCallback_;
+    double externalBreakPoint_ = -1.0;
+
     // Transient noise
     std::mt19937_64 randomGenerator;
     std::unique_ptr<TimeDomainNoiseBlock<std::mt19937_64>> whiteBlock;

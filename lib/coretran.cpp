@@ -1783,6 +1783,19 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious) {
                 co_yield CoreState::Aborted;
             }
 
+            // Apply external breakpoint from callback. Keep it alive
+            // until the solver reaches or passes it — the callback may
+            // inject it many steps early.
+            if (externalBreakPoint_ > 0) {
+                if (externalBreakPoint_ <= tSolve) {
+                    externalBreakPoint_ = -1.0;  // passed
+                } else if (externalBreakPoint_ < tSolveNew) {
+                    tSolveNew = externalBreakPoint_;
+                    hkNew = tSolveNew - tSolve;
+                    externalBreakPoint_ = -1.0;  // consumed
+                }
+            }
+
             // Store timestep
             pastTimesteps.add(hk);
 
