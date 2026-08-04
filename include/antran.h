@@ -29,6 +29,9 @@ public:
     // Factory function for operating point analysis
     static Analysis* create(PTAnalysis& ptAnalysis, Circuit& circuit, Status& s=Status::ignore);
 
+    // Access the transient core (for setting cosimulation callbacks)
+    TranCore& core() { return tranCore; }
+
 protected:
     virtual bool addCommonOutputDescriptor(const OutputDescriptor& desc);
     virtual bool addCoreOutputDescriptors(Status& s);
