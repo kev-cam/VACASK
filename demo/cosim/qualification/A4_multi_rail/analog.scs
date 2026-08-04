@@ -1,0 +1,29 @@
+// A4 — Multi-rail simultaneous crossings
+//
+// Two signals crossing vth_hi=1.2V within the same analog timestep.
+//
+// RAIL_A:  fast step at 2.000µs (10 ns rise)
+//   Crosses 1.2V at 2000 + (1.2/1.8)*10 = 2006.667 ns
+//
+// RAIL_B:  fast step at 2.005µs (10 ns rise), 5 ns later
+//   Crosses 1.2V at 2005 + (1.2/1.8)*10 = 2011.667 ns
+//
+// Both crossings separated by 5 ns — must both be detected and
+// attributed to the correct rail.
+
+ground 0
+
+load "resistor.osdi"
+
+model vsrc vsource
+model res  resistor
+
+v_a (RAIL_A 0) vsrc type="pwl" wave=[0, 0, 2e-6, 0, 2.01e-6, 1.8]
+r_a (RAIL_A 0) res r=1e12
+
+v_b (RAIL_B 0) vsrc type="pwl" wave=[0, 0, 2.005e-6, 0, 2.015e-6, 1.8]
+r_b (RAIL_B 0) res r=1e12
+
+control
+tran tstop=4e-6 tstep=50e-9
+endc

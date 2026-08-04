@@ -1,0 +1,24 @@
+// A5 — Long-run drift: 2000 clock cycles at 1 MHz
+//
+// Clock: 1 MHz, 50% duty, 2 ns rise/fall
+//   Period = 1000 ns,  posedge at t = 5 + N*1000 ns (delay=5ns)
+//   For N in [0..1999]:  expected posedge = 5 + N*1000 ns
+//   Crosses vth_hi=1.2V on rising:
+//     t_cross = delay + N*period + (1.2/1.8)*rise = 5 + N*1000 + 1.333 ns
+//
+// After 2000 cycles the accumulated drift must be < 10 ns.
+
+ground 0
+
+load "resistor.osdi"
+
+model vsrc vsource
+model res  resistor
+
+v_clk (CLK 0) vsrc type="pulse" val0=0 val1=1.8 \
+    delay=5e-9 rise=2e-9 fall=2e-9 width=498e-9 period=1e-6
+r_clk (CLK 0) res r=1e12
+
+control
+tran tstop=2001e-6 tstep=50e-9
+endc

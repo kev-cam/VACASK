@@ -1,0 +1,35 @@
+// A3 — Rapid crossings: events closer than tstep (50 ns)
+//
+// Two tests:
+//   NARROW_30:  30 ns pulse (< tstep), rise/fall 1 ns
+//     Rising edge crosses vth_hi=1.2V at:
+//       t_rise = 2µs + (1.2/1.8)*1ns = 2000.667 ns
+//     Falling edge crosses vth_lo=0.6V at:
+//       t_fall = 2µs + 30ns + (1 - 0.6/1.8)*1ns = 2030.667 ns
+//     Gap between edges = 30 ns < 50 ns tstep
+//
+//   NARROW_10:  10 ns pulse (much < tstep), rise/fall 1 ns
+//     Rising: t = 4000.667 ns
+//     Falling: t = 4010.667 ns
+//     Gap = 10 ns — stress test for detection within single step
+
+ground 0
+
+load "resistor.osdi"
+
+model vsrc vsource
+model res  resistor
+
+// 30 ns pulse at 2µs
+v_30 (NARROW_30 0) vsrc type="pulse" val0=0 val1=1.8 \
+    delay=2e-6 rise=1e-9 fall=1e-9 width=30e-9 period=100e-6
+r_30 (NARROW_30 0) res r=1e12
+
+// 10 ns pulse at 4µs
+v_10 (NARROW_10 0) vsrc type="pulse" val0=0 val1=1.8 \
+    delay=4e-6 rise=1e-9 fall=1e-9 width=10e-9 period=100e-6
+r_10 (NARROW_10 0) res r=1e12
+
+control
+tran tstop=6e-6 tstep=50e-9
+endc

@@ -1,0 +1,47 @@
+// A7 — Hierarchical addressing test.
+//
+// TRIG and FB are internal nodes two levels deep: xcore -> xana -> {TRIG, FB}.
+// Neither is a subcircuit terminal, so the only way to reach them is the
+// fully-qualified path ("xcore:xana:TRIG" / "xcore:xana:FB") the bridge
+// builds by hand (Instance::translate() returns terminal names unprefixed
+// for a toplevel instance, see cosim_core.cpp).
+//
+// This is a loopback like A2_d2a_propagation, but entirely inside the
+// subcircuit: TRIG crosses vth_hi, the DUT sets its D2A output, the Norton
+// drives FB, and FB crossing vth_hi confirms the D2A actually reached the
+// real node deep in the hierarchy rather than silently creating a
+// duplicate ("getNode() created a second node and the D2A drives
+// nothing" -- REBUILD.md). A duplicate would show up as fb_rose never
+// asserting.
+//
+//   TRIG: PWL step at 1us, 1ns rise -> crosses vth_hi=1.2V at
+//     t = 1000 + (1.2/1.8) * 1 = 1000.667 ns
+//   FB:   Norton r=1000 c=1pF into R_load=100k -> tau_eff ~ 0.99 ns,
+//     V_final = 1.8 * 100k/101k = 1.782V, settles past vth_hi=1.2V at
+//     -tau_eff * ln(1 - 1.2/1.782) ~= 1.11 ns after the D2A write.
+
+ground 0
+
+load "resistor.osdi"
+load "capacitor.osdi"
+
+model vsrc vsource
+model res  resistor
+model cap  capacitor
+
+subckt ana ()
+    v_trig (TRIG 0) vsrc type="pwl" wave=[0, 0, 1e-6, 0, 1.001e-6, 1.8]
+    r_trig (TRIG 0) res r=1e12
+
+    r_fb (FB 0) res r=100e3
+ends
+
+subckt core ()
+    xana () ana
+ends
+
+xcore () core
+
+control
+tran tstop=5e-6 tstep=50e-9
+endc

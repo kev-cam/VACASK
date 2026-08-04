@@ -1,0 +1,59 @@
+// B_simo — Synthetic SIMO buck converter (open-loop power stage)
+//
+// Specs: VIN=3.6V, Fsw=1MHz
+//   Rail A: 1.8V / 200mA  →  D=0.528, R_load=9 Ω
+//   Rail B: 1.0V / 100mA  →  D=0.292, R_load=10 Ω
+//
+// Power stage is driven by fixed PWM vsources (no closed-loop switching
+// through the bridge — VACASK lacks ideal switch / inductor models).
+// The digital controller monitors output voltages via A2D feedback and
+// generates status / fault signals via D2A.
+//
+// Output filter: R_filt + C_out + R_load
+//   DC output ≈ D * VIN * R_load / (R_filt + R_load)
+//   R_filt_A = 0.5 Ω, C_out_A = 1µF → τ_out = 9 µs
+//   R_filt_B = 0.5 Ω, C_out_B = 1µF → τ_out = 10 µs
+//
+// Phases (for B-scenario functional tests):
+//   0-20 µs:   cold start (caps charge from 0V)
+//   20-100 µs: steady state
+//   100-101 µs: load step on Rail A (+200mA via isource)
+//   101-200 µs: recovery
+
+ground 0
+
+load "resistor.osdi"
+load "capacitor.osdi"
+
+model vsrc vsource
+model isrc isource
+model res  resistor
+model cap  capacitor
+
+// ---- Rail A power stage ----
+// PWM: D = 0.528 (width = 528 ns) for 1.8V from 3.6V through R_filt=0.5
+v_sw_a (SWA 0) vsrc type="pulse" val0=0 val1=3.6 \
+    delay=0 rise=2e-9 fall=2e-9 width=528e-9 period=1e-6
+
+r_filt_a (SWA OUTA) res r=0.5
+c_out_a  (OUTA 0)   cap c=1e-6
+r_load_a (OUTA 0)   res r=9
+
+// Load step at 100µs: extra 200 mA drawn from OUTA
+i_step_a (OUTA 0) isrc type="pwl" wave=[0, 0, 100e-6, 0, 100.05e-6, 0.2]
+
+// ---- Rail B power stage ----
+// PWM: D = 0.292 (width = 292 ns) for 1.0V from 3.6V through R_filt=0.5
+v_sw_b (SWB 0) vsrc type="pulse" val0=0 val1=3.6 \
+    delay=0 rise=2e-9 fall=2e-9 width=292e-9 period=1e-6
+
+r_filt_b (SWB OUTB) res r=0.5
+c_out_b  (OUTB 0)   cap c=1e-6
+r_load_b (OUTB 0)   res r=10
+
+// ---- D2A loopback load (for enable signal) ----
+r_d2a_load (EN_NODE 0) res r=100000
+
+control
+tran tstop=200e-6 tstep=50e-9
+endc

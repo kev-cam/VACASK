@@ -1,0 +1,38 @@
+// A2 — D2A propagation loopback
+//
+// Analog trigger ramp at 1µs causes digital DUT to toggle D2A output.
+// The D2A Norton source settles on node D2A_NODE, which is also an A2D
+// port for loopback measurement.
+//
+// D2A Norton parameters (from cosim_top.v): r=1000 Ω, c=1e-12 F
+//   τ_norton = R*C = 1 ns
+//   Settling to 1.8V (with R_load=100kΩ):
+//     V_final = 1.8 * 100k/(1k + 100k) = 1.782 V
+//     Crosses vth_hi=1.2V at t = -1ns * ln(1 - 1.2/1.782) = 1.118 ns
+//
+// A second trigger at 3µs toggles D2A OFF for falling-edge test.
+//   V falls from 1.782V to 0V with same τ.
+//   Crosses vth_lo=0.6V at t = -1ns * ln(0.6/1.782) = 1.089 ns
+
+ground 0
+
+load "resistor.osdi"
+load "capacitor.osdi"   // required: the D2A bridge instantiates a capacitor
+
+model vsrc vsource
+model res  resistor
+
+// Trigger ramp: step at 1µs drives digital toggle ON
+v_trig1 (TRIG_ON 0) vsrc type="pwl" wave=[0, 0, 1e-6, 0, 1.001e-6, 1.8]
+r_trig1 (TRIG_ON 0) res r=1e12
+
+// Trigger ramp: step at 3µs drives digital toggle OFF
+v_trig2 (TRIG_OFF 0) vsrc type="pwl" wave=[0, 0, 3e-6, 0, 3.001e-6, 1.8]
+r_trig2 (TRIG_OFF 0) res r=1e12
+
+// D2A loopback load — high impedance so Norton dominates
+r_d2a_load (D2A_NODE 0) res r=100000
+
+control
+tran tstop=5e-6 tstep=50e-9
+endc
