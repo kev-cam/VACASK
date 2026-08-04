@@ -1,0 +1,39 @@
+// Cosim example / hierarchy check.
+//
+// CLK and Q are internal nodes two levels deep: xcore -> xana -> {CLK, Q}.
+// Neither is a terminal of any subcircuit -- the only way to reach them
+// from outside is the fully-qualified path "xcore:xana:CLK" /
+// "xcore:xana:Q", exactly what the bridge uses. This exercises real
+// subcircuit nesting, not just the flat toplevel case.
+//
+// CLK: RC-filtered digital clock, read by A2D.
+// Q:   D2A Norton target; the resistor gives it a node identity to drive
+//      into (D2A only adds R/C/I to a node, it does not create the node).
+
+ground 0
+
+load "resistor.osdi"
+load "capacitor.osdi"
+
+model vsrc vsource
+model res  resistor
+model cap  capacitor
+
+subckt ana ()
+    v_clk (CLK_SRC 0) vsrc type="pulse" val0=0 val1=1.8 \
+        delay=5e-9 rise=2e-9 fall=2e-9 width=498e-9 period=1e-6
+    r_clk (CLK_SRC CLK) res r=1e3
+    c_clk (CLK 0)       cap c=1e-12
+
+    r_q (Q 0) res r=1e6
+ends
+
+subckt core ()
+    xana () ana
+ends
+
+xcore () core
+
+control
+tran tstop=2001u tstep=50n
+endc

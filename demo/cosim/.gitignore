@@ -1,0 +1,14 @@
+# Build artifacts
+*.vpi
+*.vvp
+test_vacask
+tb_ref.vvp
+
+# Simulation output
+*.vcd
+*.raw
+cosim_trace.csv
+report.json
+
+# Python cache
+__pycache__/
