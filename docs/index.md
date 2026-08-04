@@ -99,3 +99,4 @@ VACASK is developed at the EDA Laboratory, University of Ljubljana, and is relea
    1. [rawfile.py - Reading Raw Files](python-rawfile.md)
    2. [runtest.py - Test Helpers](python-runtest.md)
 9. [C++ API](cpp-api.md)
+10. [Digital Cosimulation](cosim-architecture.md)
