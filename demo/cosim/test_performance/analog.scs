@@ -1,0 +1,26 @@
+Performance stress test - analog clock driving a digital counter
+ground 0
+
+load "resistor.osdi"
+load "capacitor.osdi"
+
+model vsrc vsource
+model res resistor
+
+// 1MHz clock: period=1us, rise/fall=10ns, width=490ns
+// First rising edge at 5us (after reset release at 4us)
+v_clk (CLK 0) vsrc type="pulse" val0=0 val1=1.8 delay=5e-6 rise=10e-9 fall=10e-9 width=490e-9 period=1e-6
+
+// Reset: starts high, goes low at 1us, goes high at 4us (10ns ramps)
+v_rst (RST_N 0) vsrc type="pwl" wave=[0, 1.8, 1e-6, 1.8, 1.00001e-6, 0, 4e-6, 0, 4.00001e-6, 1.8]
+
+// Narrow pulse at 30us: only 50ns wide — shorter than the 100ns tstep
+// Tests whether the cosim detects pulses narrower than the analog timestep
+v_narrow (NARROW 0) vsrc type="pulse" val0=0 val1=1.8 delay=30e-6 rise=1e-9 fall=1e-9 width=50e-9 period=200e-6
+
+// Small load on NARROW to avoid floating node
+r_narrow (NARROW 0) res r=1e12
+
+control
+tran tstop=60e-6 tstep=100e-9
+endc
