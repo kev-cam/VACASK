@@ -92,7 +92,18 @@ PLI_INT32 a2d_compiletf(PLI_BYTE8*) {
     }
     // The target must be a variable: vpi_put_value on a net is not portable.
     PLI_INT32 t = vpi_get(vpiType, a[1]);
-    if (t != vpiReg && t != vpiRegBit && t != vpiIntegerVar) {
+    // A bit-select of a vector reg (e.g. `reg [7:0] x; ...; x[3]`) shows up
+    // as vpiPartSelect, not vpiRegBit -- vpiRegBit is only for bits of a
+    // reg *memory* array (`reg mem[0:7]`). Accept a part-select too, as
+    // long as it's a slice of an actual reg/integer (writable procedural
+    // storage) and not of a net (which vpi_put_value can't safely drive).
+    bool okPartSelect = false;
+    if (t == vpiPartSelect) {
+        vpiHandle parent = vpi_handle(vpiParent, a[1]);
+        PLI_INT32 pt = parent ? vpi_get(vpiType, parent) : -1;
+        okPartSelect = (pt == vpiReg || pt == vpiIntegerVar);
+    }
+    if (t != vpiReg && t != vpiRegBit && t != vpiIntegerVar && !okPartSelect) {
         vpi_printf("COSIM ERROR: $cosim_a2d target '%s' must be a reg, not a net\n",
                    vpi_get_str(vpiName, a[1]));
         vpi_control(vpiFinish, 1); return 1;

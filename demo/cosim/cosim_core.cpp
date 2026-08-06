@@ -11,9 +11,11 @@
 
 #include <ucontext.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <string>
@@ -75,6 +77,9 @@ struct VacaskState {
     Status        status;
     std::ofstream trace;
     bool          traceHeaderWritten = false;
+    double        tstop = 0.0;      // for progress reporting
+    int           lastProgressPct = -1;
+    std::chrono::steady_clock::time_point startTime;
 } vs;
 
 struct Crossing {
@@ -115,6 +120,17 @@ void yield_event(double t_s) {
 }
 
 bool timestep_cb(double tSolve, double hk) {
+    // Progress report: bridge otherwise runs silently until it finishes
+    // or errors (VACASK's own ProgressReporter is never installed here).
+    // Print only when the integer percentage advances, not every step.
+    if (vs.tstop > 0) {
+        int pct = (int)(100.0 * tSolve / vs.tstop);
+        if (pct > vs.lastProgressPct) {
+            vs.lastProgressPct = pct;
+            say("COSIM: progress %d%% (t=%g / %g s)\n", pct, tSolve, vs.tstop);
+        }
+    }
+
     auto& core = vs.tranCast->core();
     const int n = (int)a2d.size();
 
@@ -277,6 +293,30 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
 
     Simulator::setup();
     Simulator::prependModulePath({std::string(VACASK_MOD_PATH)});
+    // Bridge itself carries no PDK knowledge -- a project netlist that
+    // pulls in PDK model libs via bare filenames (e.g. `include
+    // "sg13g2_vacask_common.lib"`, `load "mosvar.osdi"`) needs those
+    // directories on VACASK's include/module search paths, same as the
+    // "vacask" CLI wrapper's toml [Paths] include_path_prefix /
+    // module_path_prefix do for a normal (non-cosim) run. Colon-separated,
+    // same convention as $PATH.
+    auto splitPathList = [](const char* env) {
+        std::vector<std::string> paths;
+        if (!env) return paths;
+        std::string s(env);
+        size_t start = 0;
+        while (start <= s.size()) {
+            size_t colon = s.find(':', start);
+            if (colon == std::string::npos) colon = s.size();
+            if (colon > start) paths.push_back(s.substr(start, colon - start));
+            start = colon + 1;
+        }
+        return paths;
+    };
+    if (auto paths = splitPathList(std::getenv("VACASK_INCLUDE_PATH")); !paths.empty())
+        Simulator::appendIncludePath(std::move(paths));
+    if (auto paths = splitPathList(std::getenv("VACASK_MODULE_PATH")); !paths.empty())
+        Simulator::appendModulePath(std::move(paths));
 
     vs.tab    = new ParserTables();
     vs.parser = new Parser(*vs.tab);
@@ -336,6 +376,7 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
         sim_->finish(1); return false;
     }
 
+    vs.tstop = tstop;
     vs.anDescriptor = PTAnalysis("cosim_tran", "tran");
     vs.anDescriptor.add(PV{"stop", tstop});
     if (tstep > 0) {
@@ -357,21 +398,24 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
         sim_->finish(1); return false;
     }
 
+    bool anyMissing = false;
     for (auto& p : a2d) {
         auto* node = vs.cir->findNode(Id(p.node.c_str()));
         if (!node) {
             say("COSIM ERROR: A2D node \"%s\" not found "
                 "(hierarchical paths use ':')\n", p.node.c_str());
-            sim_->finish(1); return false;
+            anyMissing = true;
+            continue;
         }
         p.sol = node->unknownIndex();
     }
     for (auto& p : d2a) {
         if (!vs.cir->findNode(Id(p.node.c_str()))) {
             say("COSIM ERROR: D2A node \"%s\" not found\n", p.node.c_str());
-            sim_->finish(1); return false;
+            anyMissing = true;
         }
     }
+    if (anyMissing) { sim_->finish(1); return false; }
 
     shared.v.assign(a2d.size(), 0.0);
     cx.init(a2d.size());
@@ -392,14 +436,17 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
 
     say("COSIM: %zu A2D, %zu D2A, tstop=%g tstep=%g, %g ticks/s\n",
         a2d.size(), d2a.size(), tstop, tstep, g_ticks_per_s);
+    vs.startTime = std::chrono::steady_clock::now();
     pump();
     return true;
 }
 
 void Core::pump() {
     if (!analog_resume()) {
-        say("COSIM: transient complete, %ld yields, %ld crossings\n",
-            shared.steps, cx.count);
+        double wallSec = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - vs.startTime).count();
+        say("COSIM: transient complete, %ld yields, %ld crossings, %.2fs wall\n",
+            shared.steps, cx.count, wallSec);
         if (vs.trace.is_open()) vs.trace.close();
         sim_->finish(0);
         return;
