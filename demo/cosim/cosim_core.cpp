@@ -369,6 +369,54 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
         say("COSIM ERROR: circuit: %s\n", vs.status.message().c_str());
         sim_->finish(1); return false;
     }
+
+    // The bridge builds its own "cosim_tran" analysis directly via the
+    // API (below) instead of running the netlist's own control block
+    // through VACASK's normal CommandInterpreter -- so none of that
+    // block's statements execute. That's fine for "tran"/"save" (the
+    // bridge doesn't need them), but a netlist's own `options
+    // reltol=... abstol=...` statement was being silently dropped too,
+    // confirmed empirically (a netlist with `options reltol=1e-9` and
+    // one without produced an identical, default reltol=1e-3 -- neither
+    // picked up the netlist's value). Replicate exactly what
+    // CommandInterpreter::elaborate() does for "options" (simulator/
+    // cmd.cpp): accumulate every "options" command's parameters (in
+    // netlist order, later entries override earlier ones by name, same
+    // as PTParameterMap's own insert_or_assign) and apply them as a
+    // single IStruct<SimulatorOptions> before elaboration.
+    PTParameterMap userOptions;
+    // Plain Id, not Id::createStatic(): by this point the netlist has
+    // already been parsed, so "options" may already be registered as
+    // an ordinary identifier -- createStatic() here (a local static,
+    // lazily initialized after parsing already ran) throws on that
+    // conflict. cmd.cpp's own idOptions is a *file-scope* static,
+    // initialized before any netlist is ever parsed, which is why it
+    // doesn't hit this.
+    Id idOptions("options");
+    for (auto& entry : vs.tab->control()) {
+        if (std::holds_alternative<PTCommand>(entry)) {
+            auto& cmd = std::get<PTCommand>(entry);
+            if (cmd.name() == idOptions) userOptions.add(cmd.args());
+        }
+    }
+    if (userOptions.size() > 0) {
+        IStruct<SimulatorOptions> opt;
+        RpnEvaluationNetlistContext ctx;
+        auto [ok, changed] = opt.setParameters(
+            userOptions, vs.cir->variableEvaluator(), ctx,
+            Parameterized::Write::All, vs.status);
+        if (!ok) {
+            say("COSIM ERROR: netlist 'options' statement: %s\n",
+                vs.status.message().c_str());
+            sim_->finish(1); return false;
+        }
+        vs.cir->setOptions(opt);
+    }
+    // gshunt is a cosim-specific numerical stabilizer, not something a
+    // project netlist should override -- set after (not before) the
+    // netlist's own options, and via the single-key setter (not the
+    // bulk IStruct path above, which would otherwise reset every other
+    // option back to compiled defaults on a second call).
     vs.cir->setOption("gshunt", 1e-12);
 
     if (!vs.cir->elaborate({}, "__topdef__", "__topinst__", nullptr, vs.status)) {

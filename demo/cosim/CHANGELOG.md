@@ -75,3 +75,41 @@ X.XXs wall`.
 **Verification:** all five changes were checked against
 `qualification/A1_ramp_crossing` (`check.py`, 6/6 tier-1/tier-2 checks)
 after each edit — no regressions.
+
+## 2026-08-11
+
+### A netlist's own `options reltol=... abstol=...` was silently dropped
+
+**File:** `cosim_core.cpp`, `Core::start()`.
+
+The bridge builds its own `cosim_tran` analysis directly via the API
+instead of running the netlist's control block through VACASK's normal
+`CommandInterpreter` — fine for `tran`/`save` (the bridge doesn't need
+them), but it meant a netlist's own `options reltol=... abstol=...`
+statement never took effect either. Confirmed empirically: a netlist
+with `options reltol=1e-9` and one without produced an identical
+default `reltol=1e-3` — neither picked up the netlist's value.
+
+Fixed by replicating what `CommandInterpreter::elaborate()` does for
+`options` (`simulator/cmd.cpp`): walk `vs.tab->control()`, accumulate
+every `options` command's parameters into a `PTParameterMap` (later
+entries override earlier ones by name), and apply them via a single
+`IStruct<SimulatorOptions>`/`setParameters()` before elaboration, right
+before the bridge's own `gshunt` override (applied after, via the
+single-key `setOption()`, so it isn't reset by a bulk options
+statement in the netlist).
+
+One gotcha: the lookup must use a plain `Id("options")`, not
+`Id::createStatic("options")` — by the time this code runs the netlist
+has already been parsed, so "options" may already be a registered
+ordinary identifier, and `createStatic()` (a local static, lazily
+initialized after parsing) throws on that conflict. `cmd.cpp`'s own
+`idOptions` is a *file-scope* static initialized before any parsing
+happens, which is why it doesn't hit this.
+
+**Verification:** debug print showed a netlist with `options
+reltol=1e-9 abstol=1e-15` correctly propagating those values, and a
+netlist with no `options` statement correctly falling back to VACASK's
+compiled defaults (`0.001`/`1e-12`); debug print removed after
+confirming. Re-checked against `qualification/A1_ramp_crossing`
+(6/6) — no regressions.
