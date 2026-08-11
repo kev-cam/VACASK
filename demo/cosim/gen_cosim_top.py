@@ -55,7 +55,9 @@ timing: any other netlist-level `options reltol=... abstol=...`
 changelog for that fix.
 """
 import argparse
+import ast
 import difflib
+import operator
 import os
 import re
 import sys
@@ -63,6 +65,16 @@ import sys
 
 # ---------------------------------------------------------------------------
 # Netlist parsing
+#
+# Bus connections in a VACASK netlist must appear as a single-quoted
+# token, e.g. "x2 ( ... 'data[3]' ... ) sar_adc" -- this isn't just a
+# convention of this tool, it's a real VACASK parser requirement
+# (unquoted "data[3]" is a hard netlist syntax error: "unexpected [,
+# expecting identifier or integer"). _tokenize()'s quote-aware split
+# below matches that convention when walking a netlist's own connection
+# lists, and the '<name>[<n>]' addresses this script emits into
+# $cosim_a2d/$cosim_d2a follow the same quoted form so they match what
+# VACASK's own elaborated node names actually look like.
 # ---------------------------------------------------------------------------
 
 _TOKEN_RE = re.compile(r"'[^']*'|\S+")
@@ -100,31 +112,61 @@ def _split_instantiation(line):
     return name, conns, inst_type
 
 
-_SPICE_SUFFIXES = [
-    # Longest/most-specific prefixes first -- "Meg" must be checked
-    # before the single-letter "m" (milli) or it'd be misread as
-    # milli+"eg" and fail to parse at all.
-    ("meg", 1e6), ("t", 1e12), ("g", 1e9), ("k", 1e3),
-    ("m", 1e-3), ("u", 1e-6), ("n", 1e-9), ("p", 1e-12),
-    ("f", 1e-15), ("a", 1e-18),
-]
+# Mirrors lib/dfllexer.l:580-626 exactly -- NOT generic SPICE convention,
+# which VACASK deliberately departs from. Matching is case-sensitive and
+# asymmetric: bare "M" is always mega, regardless of what follows it;
+# bare "m" is milli UNLESS followed by literal lowercase "eg" (mega) or
+# "il" (mil, 25.4 micron) -- "1mEG" (mixed case) is still milli, only
+# exact lowercase "eg" triggers mega for the "m" branch. Confirmed
+# against the lexer source, not assumed from SPICE norms (an earlier
+# version of this table used generic SPICE suffix matching and both
+# mis-set "600M" to milli instead of mega, and outright rejected legal
+# VACASK values like "1ms"/"600ns"/"20us" -- their trailing unit letter
+# was never accounted for at all).
+_NUM_SUFFIX_CHARS = set("munpfakKMGTxX")
+_MANTISSA_RE = re.compile(r"^(?:\.[0-9]+|(?:0|[1-9][0-9]*)(?:\.[0-9]*)?)")
 
 
 def _to_seconds(s):
-    """Parse a VACASK/SPICE-style engineering number ('600n', '1u',
-    '400e-9', 'Meg', plain floats, ...) into a plain float. Verilog has
-    no such suffix notation -- a bare 'tstop' pulled from the netlist's
-    own 'tran tstop=600n' and dropped into $cosim_run(...) as-is would
-    be a syntax error, not just wrong."""
+    """Parse a VACASK-native engineering-suffixed number ('600n', '1u',
+    '400e-9', '1Meg', '20ms', plain floats, ...) into a plain float.
+    Verilog has no such suffix notation -- a bare 'tstop' pulled from
+    the netlist's own 'tran tstop=600n' and dropped into
+    $cosim_run(...) as-is would be a syntax error, not just wrong.
+
+    Only the single character immediately after the numeric mantissa is
+    ever inspected (plus, for 'm', the next two literal characters) --
+    anything else trailing (e.g. the "s" in "1ms"/"600ns"/"20us") is
+    unit text and is discarded, exactly like the lexer it mirrors."""
     s = s.strip()
-    low = s.lower()
-    for suffix, mult in _SPICE_SUFFIXES:
-        if low.endswith(suffix):
-            head = s[:-len(suffix)]
-            try:
-                return float(head) * mult
-            except ValueError:
-                continue  # e.g. a unit like "s" swallowed part of a valid float
+    m = _MANTISSA_RE.match(s)
+    if m and m.end() < len(s) and s[m.end()] in _NUM_SUFFIX_CHARS:
+        mantissa = float(m.group(0))
+        c = s[m.end()]
+        if c == "M":
+            mult = 1e6
+        elif c == "m":
+            tail = s[m.end() + 1:m.end() + 3]
+            mult = 1e6 if tail == "eg" else 25.4e-6 if tail == "il" else 1e-3
+        elif c in ("k", "K"):
+            mult = 1e3
+        elif c in ("x", "X"):
+            mult = 1e6
+        elif c == "u":
+            mult = 1e-6
+        elif c == "n":
+            mult = 1e-9
+        elif c == "p":
+            mult = 1e-12
+        elif c == "f":
+            mult = 1e-15
+        elif c == "a":
+            mult = 1e-18
+        elif c == "G":
+            mult = 1e9
+        else:  # c == "T", the only character left in _NUM_SUFFIX_CHARS
+            mult = 1e12
+        return mantissa * mult
     return float(s)
 
 
@@ -297,22 +339,81 @@ _OLD_STYLE_DECL_RE = re.compile(
 _PARAMETER_RE = re.compile(
     r"\bparameter\b\s*(?:integer\s+|real\s+)?([A-Za-z_]\w*)\s*=\s*([^,;]+)")
 
+# ANSI parameter port list ("module foo #(parameter Bits = 4, Other = 2)
+# (...)"): "parameter"/"localparam" is only mandatory before the first
+# entry in a comma-separated run, later ones may omit it and just
+# continue the list -- unlike the old-style _PARAMETER_RE case, where
+# each is its own ";"-terminated statement.
+_ANSI_PARAM_KEYWORD_RE = re.compile(r"\b(?:parameter|localparam)\b\s*(?:integer\s+|real\s+)?")
+_ANSI_PARAM_ASSIGN_RE = re.compile(r"^([A-Za-z_]\w*)\s*=\s*(.+)$")
+
+
+def _parse_ansi_params(param_text):
+    """Parse a "#( parameter A = 1, B = A+1, parameter C = 2 )" block's
+    inner text into an ordered {name: value} dict, evaluating each
+    value against the params already defined earlier in the same list
+    (a later default referencing an earlier parameter is normal)."""
+    text = _ANSI_PARAM_KEYWORD_RE.sub("", param_text)
+    params = {}
+    for entry in text.split(","):
+        m = _ANSI_PARAM_ASSIGN_RE.match(entry.strip())
+        if not m:
+            continue  # not a "name = value" entry -- ignore rather than fail
+        name, expr = m.groups()
+        try:
+            params[name] = _eval_int_expr(expr, params)
+        except ValueError:
+            pass  # non-numeric default (e.g. a string) -- fine, not used for widths
+    return params
+
+
+_SAFE_BINOPS = {
+    ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+    ast.FloorDiv: operator.floordiv, ast.Div: operator.truediv,
+    ast.Mod: operator.mod,
+}
+_SAFE_UNARYOPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+
+
+def _safe_eval_node(node, params):
+    if isinstance(node, ast.Expression):
+        return _safe_eval_node(node.body, params)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    if isinstance(node, ast.Name):
+        if node.id in params:
+            return params[node.id]
+        raise ValueError(f"unknown identifier {node.id!r}")
+    if isinstance(node, ast.BinOp) and type(node.op) in _SAFE_BINOPS:
+        return _SAFE_BINOPS[type(node.op)](
+            _safe_eval_node(node.left, params), _safe_eval_node(node.right, params))
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_UNARYOPS:
+        return _SAFE_UNARYOPS[type(node.op)](_safe_eval_node(node.operand, params))
+    raise ValueError(f"disallowed expression element: {ast.dump(node)}")
+
 
 def _eval_int_expr(expr, params):
     """A bit-range bound: a plain int, or a small arithmetic expression
-    over already-known parameters (e.g. "Bits - 1"). No builtins in
-    scope -- this only ever runs on width expressions pulled from the
-    user's own local Verilog file, but there's no reason to expose more
-    than arithmetic."""
+    over already-known parameters (e.g. "Bits - 1"). Evaluated via a
+    whitelisted AST walk (only +, -, *, /, //, %, unary +/-, numeric
+    constants, and known parameter names) -- NOT Python's eval(), even
+    sandboxed with an empty __builtins__: that does not actually block
+    the classic object-graph escape
+    (`().__class__.__bases__[0].__subclasses__()`, confirmed reachable
+    with zero builtins in scope), so it provided no real restriction to
+    "just arithmetic" despite an earlier version of this function
+    claiming exactly that."""
     expr = expr.strip()
     try:
         return int(expr)
     except ValueError:
         pass
     try:
-        return int(eval(expr, {"__builtins__": {}}, dict(params)))
+        tree = ast.parse(expr, mode="eval")
+        value = _safe_eval_node(tree, dict(params))
     except Exception as e:
         raise ValueError(f"cannot evaluate bit-range expression {expr!r}: {e}")
+    return int(value)
 
 
 def _expand_bits(name, direction, msb_expr, lsb_expr, params):
@@ -360,13 +461,25 @@ def parse_verilog_ports(path, module_name):
     if not m:
         raise ValueError(f"module '{module_name}' not found in {path}")
     pos = m.end()
-    # Optional #( parameter ... ) block before the real port list.
+    # Optional #( parameter ... ) block before the real port list -- its
+    # parameters are in scope for ANSI-style [msb:lsb] bit-range
+    # expressions in the port list that follows (e.g. "#(parameter
+    # Bits = 4) (input wire [Bits-1:0] data, ...)").
+    ansi_params = {}
     ws_and_hash = re.match(r"\s*#\s*", text[pos:])
     if ws_and_hash:
         candidate = pos + ws_and_hash.end()
         if text[candidate] == "(":
-            pos = _skip_balanced(text, candidate) + 1
-    paren_pos = text.index("(", pos)
+            param_end = _skip_balanced(text, candidate)
+            ansi_params = _parse_ansi_params(text[candidate + 1:param_end])
+            pos = param_end + 1
+    try:
+        paren_pos = text.index("(", pos)
+    except ValueError:
+        raise ValueError(
+            f"module '{module_name}' has no port list -- no '(' found "
+            f"after its name (and optional #(...) parameter block) in "
+            f"{path}; a portless module has nothing for this tool to bind")
     end = _skip_balanced(text, paren_pos)
     port_section = text[paren_pos + 1:end]
     # Strip "// ..." comments from the WHOLE section before splitting on
@@ -389,7 +502,7 @@ def parse_verilog_ports(path, module_name):
                     f"ANSI-style 'input/output [wire|reg] [msb:lsb] name' "
                     f"declarations are supported)")
             direction, msb, lsb, name = pm.groups()
-            bits.extend(_expand_bits(name, direction, msb, lsb, {}))
+            bits.extend(_expand_bits(name, direction, msb, lsb, ansi_params))
         return bits
 
     # Old-style (Verilog-1995): the header lists bare port names only;
@@ -477,6 +590,12 @@ def _plan_one_dut(netlist, module_name, verilog_dir, path):
         except ValueError as e:
             raise ValueError(f"resolving '{bit_name}' of {module_name} "
                               f"at {':'.join(path)}: {e}")
+        if direction == "inout":
+            print(f"WARNING: {module_name}'s port '{bit_name}' is declared "
+                  f"inout; the bridge can't do real bidirectional "
+                  f"signaling, so it's bound as d2a (digital drives "
+                  f"analog) only. If the analog side needs to drive this "
+                  f"net back, bind it manually instead.", file=sys.stderr)
         (a2d if direction == "input" else d2a).append((bit_name, addr))
 
     def base_name(bit):
@@ -514,14 +633,22 @@ def generate(args):
 
     duts = []
     for module_name, subckt_name in modules:
-        paths = netlist.find_instance_paths(subckt_name)
+        try:
+            paths = netlist.find_instance_paths(subckt_name)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
         if not paths:
             msg = (f"ERROR: no subckt named '{subckt_name}' is instantiated "
                    f"anywhere in {args.netlist}")
             if subckt_name != module_name:
                 msg += f" (looking for Verilog module '{module_name}')"
+            # Suggest from what's actually INSTANTIATED (by_type), not
+            # from every subckt DEFINITION -- a defined-but-never-used
+            # subckt would otherwise get suggested right back as the
+            # "fix" for its own "not instantiated anywhere" error.
             close = difflib.get_close_matches(
-                subckt_name, netlist.subckt_ports.keys(), n=3, cutoff=0.6)
+                subckt_name, netlist.by_type.keys(), n=3, cutoff=0.6)
             if close:
                 msg += (f"\n  Did you mean one of: {', '.join(close)}? If the "
                         f"netlist's subckt/symbol name genuinely differs from "
