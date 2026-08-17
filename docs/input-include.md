@@ -110,7 +110,7 @@ Foreign formats are supported as includes in a native VACASK deck, not as root
 input files to the `vacask` command. The native deck supplies the ground,
 analysis, control flow, and postprocessing configuration.
 
-Four behaviours are specific to foreign includes:
+Five behaviours are specific to foreign includes:
 
 - **Commands are ignored.** Analysis/control directives inside an included SPICE
   or Spectre file (for example a SPICE `.tran` card or a Spectre analysis
@@ -166,6 +166,23 @@ Four behaviours are specific to foreign includes:
   has no `$mfactor` parameter, so for a current-defining one the multiplier is
   folded into its expression instead, which is exact because a flow scales
   linearly.
+
+- **SPICE `temper` becomes `$temp`.** ngspice names the simulation temperature
+  (in °C) `temper`; VACASK spells the same quantity in the same units
+  [`$temp`](expr-special.md). The identifier is rewritten wherever it appears in
+  an included SPICE expression — `.param` cards, model and instance parameters,
+  and behavioral source expressions alike — and then tracks option
+  [`temp`](cmd-options-temp.md), re-evaluating when it changes:
+
+  ```text
+  .param rt = '1000*(1+3.9e-3*(temper-27))'   //  rt=1000*(1+3.9e-3*($temp-27))
+  ```
+
+  Whole identifiers are matched, so a parameter named `temperature` or
+  `mytemper` is left alone, as is a node named `temper` inside a `v()`/`i()`
+  probe. The rewrite is unconditional: a SPICE file that declares its own
+  parameter named `temper` gets a warning, and expressions referencing it still
+  see the simulator temperature.
 
 Foreign includes are supported at the **top level** of the deck. An `include` of
 a foreign-format file inside a `subckt` body is merged into the top-level

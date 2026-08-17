@@ -103,13 +103,106 @@ std::string stripExprQuoting(const std::string& v) {
     return out;
 }
 
+// Rewrite ngspice-only spellings in a SPICE expression into VACASK's expression
+// language. The input has already been unquoted by the caller but may still be
+// mixed-case, so identifiers are matched case-insensitively.
+//
+//   temper → $temp    ngspice's simulation temperature (°C). VACASK's $temp is
+//                     the same quantity in the same units, backed by option
+//                     `temp` and re-evaluated whenever that option changes
+//                     (docs/expr-special.md), and available in every parameter
+//                     expression — including inside a `.subckt`, where an
+//                     enclosing `.param` would not be in scope. Sky130 writes
+//                     `temper` in the 20 V FETs' tempco `.param`s and in
+//                     res_iso_pw's behavioral resistance.
+//
+// `behavioral` adds the two rewrites that only make sense inside a behavioral
+// source expression:
+//
+//   ^     → **        ngspice B-sources spell exponentiation '^'. In VACASK
+//                     '^' is bitwise XOR, which has no Verilog-A equivalent,
+//                     so leaving it would fail the behavioral translation
+//                     rather than miscompute — but the right answer is known,
+//                     so rewrite it. ngspice's '**' needs no change.
+//   time  → $abstime  ngspice's transient-time variable. VACASK's $abstime is
+//                     available *only* inside behavioral source expressions,
+//                     which is exactly where such an expression ends up.
+//
+// Identifiers inside a v(...)/i(...) argument list name circuit nodes and
+// instances rather than variables, so they are copied verbatim. Whole
+// identifiers are matched, so `temperature`, `mytemper` and `timestep` survive.
+//
+// `hertz` has no VACASK equivalent at all.
+std::string spiceExpr(const std::string& in, bool behavioral) {
+    auto identChar = [](unsigned char c) {
+        return std::isalnum(c) || c == '_' || c == '$';
+    };
+    std::string out;
+    out.reserve(in.size() + 8);
+    std::vector<bool> callIsAccess;  // one entry per open '(' — true for v()/i()
+    int accessDepth = 0;             // number of `true` entries in callIsAccess
+    size_t i = 0;
+    while (i < in.size()) {
+        unsigned char c = in[i];
+        // Identifier (a leading digit means we are inside a numeric literal;
+        // let it fall through to the verbatim copy below).
+        if (identChar(c) && !std::isdigit(c)) {
+            size_t j = i;
+            while (j < in.size() && identChar(static_cast<unsigned char>(in[j]))) ++j;
+            std::string ident = in.substr(i, j - i);
+            std::string lower = lc(ident);
+            size_t k = j;
+            while (k < in.size() && std::isspace(static_cast<unsigned char>(in[k]))) ++k;
+            bool isCall = (k < in.size() && in[k] == '(');
+            bool isName = !isCall && accessDepth == 0;   // a variable, not a node/function
+            if (isName && lower == "temper") {
+                out += "$temp";
+            } else if (isName && behavioral && lower == "time") {
+                out += "$abstime";
+            } else {
+                out += ident;
+            }
+            if (!isCall) { i = j; continue; }
+            out.append(in, j, k - j);   // whitespace between name and '('
+            bool access = (lower == "v" || lower == "i");
+            callIsAccess.push_back(access);
+            if (access) ++accessDepth;
+            out += '(';
+            i = k + 1;
+            continue;
+        }
+        if (c == '(') { callIsAccess.push_back(false); out += '('; ++i; continue; }
+        if (c == ')') {
+            if (!callIsAccess.empty()) {
+                if (callIsAccess.back()) --accessDepth;
+                callIsAccess.pop_back();
+            }
+            out += ')'; ++i; continue;
+        }
+        if (behavioral && c == '^') { out += "**"; ++i; continue; }
+        out += static_cast<char>(c);
+        ++i;
+    }
+    return out;
+}
+
+// A SPICE-origin parameter value: unquoted, then run through the expression
+// rewrite above. Every value the SPICE adapter reads goes through here; native
+// and Spectre-origin values keep using stripExprQuoting() alone.
+std::string spiceValue(const rust::String& v) {
+    return spiceExpr(stripExprQuoting(sv(v)), false);
+}
+
 // "name=value name2=value2 …" from a list of Param, or "" if none.
-std::string paramString(const rust::Vec<netlist::Param>& params) {
+// `spiceValues` runs each value through the SPICE expression rewrite; leave it
+// false for native/Spectre-origin parameters.
+std::string paramString(const rust::Vec<netlist::Param>& params, bool spiceValues = false) {
     std::ostringstream os;
     bool first = true;
     for (const auto& p : params) {
         if (!first) os << " ";
-        os << sv(p.name) << "=" << stripExprQuoting(sv(p.value));
+        os << sv(p.name) << "="
+           << (spiceValues ? spiceValue(p.value) : stripExprQuoting(sv(p.value)));
         first = false;
     }
     return os.str();
@@ -209,7 +302,7 @@ static std::string paramStringExcluding(const rust::Vec<netlist::Param>& params,
         for (const auto& ex : exclude) { if (keylower == ex) { skip = true; break; } }
         if (skip) continue;
         if (!first) os << " ";
-        os << key << "=" << stripExprQuoting(sv(p.value));
+        os << key << "=" << spiceValue(p.value);
         first = false;
     }
     return os.str();
@@ -224,6 +317,20 @@ static bool spiceParamsHaveAny(const rust::Vec<netlist::Param>& params,
         for (const auto& k : keys) if (key == k) return true;
     }
     return false;
+}
+
+// spiceExpr()'s `temper` rewrite is unconditional: making it defer to a deck
+// that declares its own `temper` would mean threading the set of names in scope
+// through every param-string builder below. A declaration is therefore inert
+// for the expressions that reference it, which is worth saying out loud rather
+// than silently substituting the simulator temperature. `where` names the scope
+// that declares it.
+static void warnIfTemperDeclared(const rust::Vec<netlist::Param>& params,
+                                 const std::string& where) {
+    if (!spiceParamsHaveAny(params, {"temper"})) return;
+    Simulator::err() << "WARNING: " << where << " declares a parameter named 'temper', which"
+                     << " is ngspice's simulation temperature; expressions referencing it are"
+                     << " translated to $temp, so the declaration has no effect\n";
 }
 
 // C3: ngspice's `m` multiplier -> VACASK's `$mfactor`.
@@ -354,7 +461,7 @@ static std::string paramStringExcludingSet(const rust::Vec<netlist::Param>& para
         std::transform(keylower.begin(), keylower.end(), keylower.begin(), ::tolower);
         if (exclude.count(keylower)) continue;
         if (!first) os << " ";
-        os << key << "=" << stripExprQuoting(sv(p.value));
+        os << key << "=" << spiceValue(p.value);
         first = false;
     }
     return os.str();
@@ -367,7 +474,7 @@ static std::string spiceParamValue(const rust::Vec<netlist::Param>& params,
     for (const auto& p : params) {
         std::string k = sv(p.name);
         std::transform(k.begin(), k.end(), k.begin(), ::tolower);
-        if (k == key) return stripExprQuoting(sv(p.value));
+        if (k == key) return spiceValue(p.value);
     }
     return "";
 }
@@ -631,7 +738,7 @@ static std::string spiceSourceParams(const netlist::SpiceSource& src) {
     };
 
     auto expr = [](const rust::String& value) {
-        return stripExprQuoting(sv(value));
+        return spiceValue(value);
     };
 
     // DC value
@@ -695,73 +802,6 @@ static std::string spiceSourceParams(const netlist::SpiceSource& src) {
     return os.str();
 }
 
-// Rewrite an ngspice B-source expression into VACASK's expression language.
-// The input has already been lowercased and unquoted by the caller.
-//
-//   ^     → **        ngspice B-sources spell exponentiation '^'. In VACASK
-//                     '^' is bitwise XOR, which has no Verilog-A equivalent,
-//                     so leaving it would fail the behavioral translation
-//                     rather than miscompute — but the right answer is known,
-//                     so rewrite it. ngspice's '**' needs no change.
-//   time  → $abstime  ngspice's transient-time variable. VACASK's $abstime is
-//                     available *only* inside behavioral source expressions,
-//                     which is exactly where this expression ends up.
-//
-// Identifiers inside a v(...)/i(...) argument list name circuit nodes and
-// instances rather than variables, so they are copied verbatim.
-//
-// ngspice's `temper` is deliberately not handled here: it appears in ordinary
-// `.param` expressions too and belongs to the general identifier rewrite
-// (issue A7 in params.md). `hertz` has no VACASK equivalent at all.
-static std::string spiceBehavioralExpr(const std::string& in) {
-    auto identChar = [](unsigned char c) {
-        return std::isalnum(c) || c == '_' || c == '$';
-    };
-    std::string out;
-    out.reserve(in.size() + 8);
-    std::vector<bool> callIsAccess;  // one entry per open '(' — true for v()/i()
-    int accessDepth = 0;             // number of `true` entries in callIsAccess
-    size_t i = 0;
-    while (i < in.size()) {
-        unsigned char c = in[i];
-        // Identifier (a leading digit means we are inside a numeric literal;
-        // let it fall through to the verbatim copy below).
-        if (identChar(c) && !std::isdigit(c)) {
-            size_t j = i;
-            while (j < in.size() && identChar(static_cast<unsigned char>(in[j]))) ++j;
-            std::string ident = in.substr(i, j - i);
-            size_t k = j;
-            while (k < in.size() && std::isspace(static_cast<unsigned char>(in[k]))) ++k;
-            bool isCall = (k < in.size() && in[k] == '(');
-            if (!isCall && accessDepth == 0 && ident == "time") {
-                out += "$abstime";
-            } else {
-                out += ident;
-            }
-            if (!isCall) { i = j; continue; }
-            out.append(in, j, k - j);   // whitespace between name and '('
-            bool access = (ident == "v" || ident == "i");
-            callIsAccess.push_back(access);
-            if (access) ++accessDepth;
-            out += '(';
-            i = k + 1;
-            continue;
-        }
-        if (c == '(') { callIsAccess.push_back(false); out += '('; ++i; continue; }
-        if (c == ')') {
-            if (!callIsAccess.empty()) {
-                if (callIsAccess.back()) --accessDepth;
-                callIsAccess.pop_back();
-            }
-            out += ')'; ++i; continue;
-        }
-        if (c == '^') { out += "**"; ++i; continue; }
-        out += static_cast<char>(c);
-        ++i;
-    }
-    return out;
-}
-
 // True if `expr` contains a v(...) or i(...) probe, i.e. it reads the solution
 // and can only be evaluated per iteration, not once at elaboration time. Used
 // to tell an ordinary resistance apart from a behavioral one (issue A3).
@@ -791,12 +831,12 @@ static bool spiceExprHasProbe(const std::string& expr) {
 // Translate an ngspice expression and add it to `into` as a VACASK behavioral
 // source across `terms`. `what` names the device kind for the error message.
 static bool addSpiceBehavioral(const std::string& name, PTIdentifierList&& terms,
-                               const std::string& spiceExpr, bool currentSource,
+                               const std::string& ngspiceExpr, bool currentSource,
                                const char* what, PTSubcircuitDefinition& into,
                                Parser& p, Status& s) {
     Rpn expr;
     try {
-        expr = p.parseExpression(spiceBehavioralExpr(spiceExpr));
+        expr = p.parseExpression(spiceExpr(ngspiceExpr, /*behavioral=*/true));
     } catch (const std::exception&) {
         // parseExpression() already set `s` before throwing.
         s.extend(std::string("  in ") + what + " '" + name + "'.");
@@ -833,7 +873,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                            Parser& p, Status& s, const std::string& mfactorIn) {
     // SPICE-origin identifiers/expressions → lowercase (see lc/spiceId above).
     std::string name = lc(sv(dev.name));
-    std::string val  = lc(stripExprQuoting(sv(dev.value)));
+    std::string val  = lc(spiceValue(dev.value));
     std::string mdl  = lc(sv(dev.model));
 
     // The multiplier this line ends up carrying, "" if none (C3).
@@ -1189,7 +1229,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             bool haveV = false, haveI = false;
             for (const auto& prm : dev.params) {
                 std::string key = lc(sv(prm.name));
-                std::string val = lc(stripExprQuoting(sv(prm.value)));
+                std::string val = lc(spiceValue(prm.value));
                 if (key == "v")      { vexpr = val; haveV = true; }
                 else if (key == "i") { iexpr = val; haveI = true; }
                 else if (key == "m") { /* decided below, once v=/i= is known */ }
@@ -1247,7 +1287,8 @@ static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSub
     // C3: every SPICE .subckt accepts a multiplier and hands it to its contents,
     // so that an X-line's m= has somewhere to land no matter which file defines
     // the subcircuit. A subcircuit nobody multiplies keeps the default 1.
-    auto sp = lc(paramString(s.params));
+    warnIfTemperDeclared(s.params, "SPICE .subckt '" + lc(sv(s.name)) + "'");
+    auto sp = lc(paramString(s.params, /*spiceValues=*/true));
     if (!sp.empty()) sp += " ";
     sp += std::string(kMfactorParam) + "=1";
     def.add(p.parseParameters(sp));
@@ -1285,7 +1326,8 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
                                bool projectAnalyses,
                                const std::string& language) {
     // Top-level .param declarations from the SPICE block.
-    auto sp = paramString(sb.params);
+    warnIfTemperDeclared(sb.params, "SPICE block");
+    auto sp = paramString(sb.params, /*spiceValues=*/true);
     if (!sp.empty()) into.add(p.parseParameters(lc(sp)));
 
     // .model cards: emit PTModel BEFORE instances (VACASK resolves by name).
