@@ -380,24 +380,64 @@ static void addSpiceModelCard(const netlist::SpiceModel& m,
     if (mod) into.add(std::move(*mod));
 }
 
-// True if the card carries all four numeric binning bounds.
+// Strip a trailing ".N" bin suffix; nullopt if the name carries none.
+// "nshort_model.7" -> "nshort_model", "nshortesd_model" -> nullopt.
+//
+// The suffix is what makes a card a bin, exactly as in ngspice: an M-line's
+// model reference is first looked up by exact name (inp2m.c:81), and only a
+// miss falls through to the binning search, which accepts a candidate whose
+// name is the reference plus a `.<digits>` extension (model_name_match,
+// string.c:1015). A card carrying lmin/lmax/wmin/wmax but no suffix is an
+// ordinary model card whose bounds are inert -- the shape all four Sky130 ESD
+// FETs have.
+static std::optional<std::string> binBaseName(const std::string& name) {
+    auto pos = name.find_last_of('.');
+    if (pos == std::string::npos || pos + 1 >= name.size()) return std::nullopt;
+    for (size_t i = pos + 1; i < name.size(); ++i)
+        if (!std::isdigit(static_cast<unsigned char>(name[i]))) return std::nullopt;
+    return name.substr(0, pos);
+}
+
+// True if the card takes part in binning: a ".N" name suffix plus all four
+// numeric bounds (ngspice skips a candidate whose line lacks any of them,
+// inpgmod.c:319).
 static bool isBinnedModel(const netlist::SpiceModel& m) {
-    return !spiceParamValue(m.params, "lmin").empty()
+    return binBaseName(sv(m.name)).has_value()
+        && !spiceParamValue(m.params, "lmin").empty()
         && !spiceParamValue(m.params, "lmax").empty()
         && !spiceParamValue(m.params, "wmin").empty()
         && !spiceParamValue(m.params, "wmax").empty();
 }
 
-// Strip a trailing ".N" or "_N" bin suffix. "nshort_model.7" -> "nshort_model".
-static std::string binBaseName(const std::string& name) {
-    auto pos = name.find_last_of("._");
-    if (pos != std::string::npos && pos + 1 < name.size()) {
-        bool digits = true;
-        for (size_t i = pos + 1; i < name.size(); ++i)
-            if (!std::isdigit(static_cast<unsigned char>(name[i]))) { digits = false; break; }
-        if (digits) return name.substr(0, pos);
+// The l/w a bin guard has to be written against: the expressions the M-line
+// itself passes, defaulted to bare `l`/`w`.
+struct BinGeometry {
+    std::string l = "l";
+    std::string w = "w";
+};
+
+// Collect, per referenced model base name, the geometry of the first M-line
+// naming it. ngspice bins on the l/w of the *instance* (inpgmod.c:288-291), and
+// those need not be plain subcircuit parameters: Sky130's 20 V FETs pass
+// `l=hvnel_sky130_fd_pr__nfet_20v0`, a local .param, and never declare `l` at
+// all. Only the first M-line per model counts -- a second one with a different
+// geometry would need a distinct model per instance, which the @if-guarded
+// single definition cannot express.
+static std::map<std::string, BinGeometry> collectBinGeometry(
+        const rust::Vec<netlist::SpiceDevice>& devices) {
+    std::map<std::string, BinGeometry> geom;
+    for (const auto& dev : devices) {
+        if (dev.kind != netlist::SpiceDeviceKind::Mosfet) continue;
+        std::string mdl = lc(sv(dev.model));
+        if (mdl.empty() || geom.count(mdl)) continue;
+        BinGeometry g;
+        std::string l = lc(spiceParamValue(dev.params, "l"));
+        std::string w = lc(spiceParamValue(dev.params, "w"));
+        if (!l.empty()) g.l = "(" + l + ")";
+        if (!w.empty()) g.w = "(" + w + ")";
+        geom[mdl] = g;
     }
-    return name;
+    return geom;
 }
 
 // Emit one bin group as an @if/@elseif PTBlockSequence. Each branch defines a
@@ -405,6 +445,7 @@ static std::string binBaseName(const std::string& name) {
 // sorted by (lmin, wmin); first matching branch wins. No @else fallback.
 static void emitBinnedModelGroup(std::vector<const netlist::SpiceModel*>& bins,
                                  const std::string& baseName,
+                                 const BinGeometry& geom,
                                  PTSubcircuitDefinition& into, Parser& p) {
     std::sort(bins.begin(), bins.end(),
               [](const netlist::SpiceModel* a, const netlist::SpiceModel* b) {
@@ -422,10 +463,10 @@ static void emitBinnedModelGroup(std::vector<const netlist::SpiceModel*>& bins,
         auto mod = buildSpiceModelCard(*m, baseName, {"lmin", "lmax", "wmin", "wmax"}, p);
         if (!mod) continue; // no master; warning already emitted
         std::string guard =
-            "l*$scale >= "  + spiceParamValue(m->params, "lmin") +
-            " && l*$scale < " + spiceParamValue(m->params, "lmax") +
-            " && w*$scale >= " + spiceParamValue(m->params, "wmin") +
-            " && w*$scale < " + spiceParamValue(m->params, "wmax");
+            geom.l + "*$scale >= "  + spiceParamValue(m->params, "lmin") +
+            " && " + geom.l + "*$scale < " + spiceParamValue(m->params, "lmax") +
+            " && " + geom.w + "*$scale >= " + spiceParamValue(m->params, "wmin") +
+            " && " + geom.w + "*$scale < " + spiceParamValue(m->params, "wmax");
         PTBlock block;
         block.add(std::move(*mod));
         seq.add(p.parseExpression(guard), std::move(block));
@@ -438,19 +479,26 @@ static void emitBinnedModelGroup(std::vector<const netlist::SpiceModel*>& bins,
 // cards are grouped by base name (first-seen order) into @if chains, emitted
 // after the non-binned cards but before any instances (caller ordering).
 static void emitSpiceModels(const rust::Vec<netlist::SpiceModel>& models,
+                            const rust::Vec<netlist::SpiceDevice>& devices,
                             PTSubcircuitDefinition& into, Parser& p) {
     std::vector<std::string> order;
     std::map<std::string, std::vector<const netlist::SpiceModel*>> groups;
     for (const auto& m : models) {
+        auto base = binBaseName(sv(m.name));
         if (isBinnedModel(m)) {
-            std::string base = binBaseName(sv(m.name));
-            if (!groups.count(base)) order.push_back(base);
-            groups[base].push_back(&m);
+            if (!groups.count(*base)) order.push_back(*base);
+            groups[*base].push_back(&m);
         } else {
             addSpiceModelCard(m, into, p);
         }
     }
-    for (const auto& base : order) emitBinnedModelGroup(groups[base], base, into, p);
+    if (order.empty()) return;
+    auto geom = collectBinGeometry(devices);
+    for (const auto& base : order) {
+        auto it = geom.find(lc(base));
+        emitBinnedModelGroup(groups[base], base,
+                             it == geom.end() ? BinGeometry{} : it->second, into, p);
+    }
 }
 
 // --- OSDI auto-load ---------------------------------------------------------
@@ -1089,7 +1137,7 @@ static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSub
     if (!sp.empty()) def.add(p.parseParameters(lc(sp)));
     // .model cards inside the .subckt body (e.g. Sky130 res subckts define
     // reshead/resbody locally). Emit BEFORE devices so instances resolve them.
-    emitSpiceModels(s.models, def, p);
+    emitSpiceModels(s.models, s.devices, def, p);
     for (const auto& dev : s.devices) {
         if (!addSpiceDevice(dev, def, p, st)) return false;
     }
@@ -1125,7 +1173,7 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
     if (!sp.empty()) into.add(p.parseParameters(lc(sp)));
 
     // .model cards: emit PTModel BEFORE instances (VACASK resolves by name).
-    emitSpiceModels(sb.models, into, p);
+    emitSpiceModels(sb.models, sb.devices, into, p);
 
     // Devices (R/C/L/V/I + D/M/Q now handled; others warn+skip).
     for (const auto& dev : sb.devices) {
