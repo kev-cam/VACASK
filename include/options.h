@@ -94,6 +94,7 @@ typedef struct SimulatorOptions  {
     Real pss_tolscale;
     Int pss_itl;
     Int pss_debug;
+    Id unknownparam;
     Id rawfile;
     Int strictoutput;
     Int strictsave;
@@ -120,8 +121,15 @@ typedef struct SimulatorOptions  {
     static Id relrefSigglobal;
     static Id relrefAllglobal;
 
+    static Id unknownparamError;
+    static Id unknownparamWarn;
+    static Id unknownparamIgnore;
+
     static Id rawfileAscii;
-    static Id rawfileBinary; 
+    static Id rawfileBinary;
+
+    // Translate the unknownparam option into the policy Parameterized understands
+    Parameterized::UnknownParam unknownParameterPolicy() const;
 
     // Options that affect mapping (node collapsing)
     static std::unordered_map<Id, ParameterIndex> mappingAffectingOptions;

@@ -18,6 +18,11 @@ The options `temp` and `scale` are exposed as the special identifiers `$temp` an
 options temp=85   // $temp becomes 85 everywhere in the netlist
 ```
 
+The option `unknownparam` is classified here as well. It decides whether a
+parameter name a master does not declare is an error or is dropped (see
+[Parameter Handling Options](cmd-options-params.md)), so changing it changes the
+outcome of applying parameters and the hierarchy must be re-parametrized.
+
 ## Tolerance-affecting options
 
 The following options control how tolerances are assigned to circuit unknowns:
