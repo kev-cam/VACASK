@@ -19,28 +19,28 @@ void InitCompilerModule(py::module &m);
 void InitAnalysisModule(py::module &m);
 
 PYBIND11_MODULE(_pyvacask, m, py::mod_gil_not_used()) {
-	m.doc() = "VACASK Simulator.";
-	m.def("startupPath", &sim::Simulator::startupPath, "Simulator start-up path.");
-	
-	// pyvacask.status
-	{
-		auto mod_status = m.def_submodule("status");
-		py::class_<sim::Status>(mod_status, "Status")
-			.def(py::init())
-			.def("message", &sim::Status::message);
-	}
-	
+    m.doc() = "VACASK Simulator.";
+    m.def("startupPath", &sim::Simulator::startupPath, "Simulator start-up path.");
+    
+    // pyvacask.status
+    {
+        auto mod_status = m.def_submodule("status");
+        py::class_<sim::Status>(mod_status, "Status")
+            .def(py::init())
+            .def("message", &sim::Status::message);
+    }
+    
     // pyvacask.elsetup
     {
         auto mod_elsetup = m.def_submodule("elsetup");
         py::class_<sim::DeviceRequests>(mod_elsetup, "DeviceRequests");
     }
 
-	// pyvacask.simulator
-	{
-		auto mod_sim = m.def_submodule("simulator");
+    // pyvacask.simulator
+    {
+        auto mod_sim = m.def_submodule("simulator");
         InitSimulatorModule(mod_sim);
-	}
+    }
         
     { // pyvacask.loc
         auto mod_loc = m.def_submodule("loc");
@@ -66,10 +66,10 @@ PYBIND11_MODULE(_pyvacask, m, py::mod_gil_not_used()) {
             .def(py::init<const sim::ValueVector &>());
     }
 
-	{ // pyvacask.parser_output
-		auto mod_parser_output = m.def_submodule("parser_output");
-		InitParserOutputModule(mod_parser_output);
-	}
+    { // pyvacask.parser_output
+        auto mod_parser_output = m.def_submodule("parser_output");
+        InitParserOutputModule(mod_parser_output);
+    }
 
     { // pyvacask.parser
         auto mod_parser = m.def_submodule("parser");
@@ -98,16 +98,16 @@ PYBIND11_MODULE(_pyvacask, m, py::mod_gil_not_used()) {
                     },
                     py::arg("input"));
     }
-	
+    
     { // pyvacask.circuit
-		auto mod_circuit = m.def_submodule("circuit");
+        auto mod_circuit = m.def_submodule("circuit");
         InitCircuitModule(mod_circuit);
-	}
+    }
 
-	{  // pyvacask.compiler
-		auto mod_compiler = m.def_submodule("compiler");
+    {  // pyvacask.compiler
+        auto mod_compiler = m.def_submodule("compiler");
         InitCompilerModule(mod_compiler);
-	}
+    }
 
     { // pyvacask.analysis
         auto mod_analysis = m.def_submodule("analysis");

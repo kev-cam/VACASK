@@ -17,20 +17,6 @@ PY_LIB_PATH = os.path.join(SITE_PATH, "lib", "vacask", "python")
 sys.path.append(PY_LIB_PATH)
 from rawfile import rawread
 
-
-def PV(ident:str, value:str):
-    ident = Id(ident)
-    value = Value(value)
-    return PTParameterValue(ident, value)
-
-def PE(ident:str, expr):
-    ident = Id(ident)
-    return PTParameterExpression(ident, expr)
-
-
-def PTIds(ids):
-    return list(map(PTParsedIdentifier, ids))
-
 def test_demo1(): 
     sim.setup()
     sim.prependModulePath([MODULE_PATH])
