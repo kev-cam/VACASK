@@ -1,25 +1,8 @@
 import os
 import sys
 
-import pyvacask.simulator as sim
-from pyvacask.status import Status
-from pyvacask.parser import Parser
-from pyvacask.parser_output import ParserTables
-from pyvacask.parser_output import PTLoad
-from pyvacask.parser_output import PTSubcircuitDefinition
-from pyvacask.parser_output import PTModel
-from pyvacask.parser_output import PTInstance
-from pyvacask.parser_output import PTParameters
-from pyvacask.parser_output import PTParameterValue
-from pyvacask.parser_output import PTParameterExpression
-from pyvacask.parser_output import PTAnalysis
-from pyvacask.parser_output import PTSave
-from pyvacask.parser_output import PTParsedIdentifier
-from pyvacask.compiler import OpenvafCompiler
-from pyvacask.circuit import Circuit
-from pyvacask.analysis import Analysis
-from pyvacask.id import Id
-from pyvacask.value import Value
+from pyvacask import *
+from pyvacask import simulator as sim
 
 import numpy as np
 import matplotlib.pyplot as plt
