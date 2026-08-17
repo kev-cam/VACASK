@@ -331,7 +331,7 @@ include("packaging.cmake")
 # PyBIND11
 set(PYBIND11_FINDPYTHON ON)
 find_package(pybind11 CONFIG REQUIRED)
-pybind11_add_module(pyvacask lib/py_module.cpp)
+pybind11_add_module(pyvacask pyvacask/csrc/py_module.cpp)
 #target_link_options(pyvacask PRIVATE "-Wl,-Bstatic")
 target_link_libraries(pyvacask PRIVATE simlib ${SIM_EXE_LIBRARIES})
 install(TARGETS pyvacask LIBRARY DESTINATION .) 
