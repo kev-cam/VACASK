@@ -211,16 +211,15 @@ static std::string spiceModelMaster(const std::string& model_type_raw,
     std::string mt = model_type_raw;
     std::transform(mt.begin(), mt.end(), mt.begin(), ::tolower);
 
-    // Diode: d -> generic diode (diode.osdi, module diode(A,C)) when no level
-    // is given. ngspice diodes with an explicit level (1/3) — e.g. Sky130
-    // sky130_fd_pr__diode_* models — need the fuller ngspice sp_diode master
-    // (spice/diode.osdi), which has js/jsw/cj/cjsw/tlevc/gap/… params the
-    // generic diode lacks.
-    if (mt == "d") {
-        int dlevel = 0;
-        try { dlevel = std::stoi(level_str); } catch (...) {}
-        return (dlevel > 0) ? "sp_diode" : "diode";
-    }
+    // Diode: d -> the ngspice sp_diode master (spice/diode.osdi), always.
+    // An ngspice `.model … D` card is an ngspice diode, so it gets the master
+    // that implements ngspice's parameter set (84 params: ikf/isr/nr/js/jsw/
+    // cj/cjsw/tlevc/gap/…). The native `diode` master (diode.osdi) declares
+    // only 18 and is reachable from native `.sim` decks; it is not a SPICE
+    // dispatch target. `level` on the card is not a master selector here — it
+    // is a real sp_diode model parameter (junction-cap selector) and is
+    // re-appended as such by addSpiceModelCardNamed.
+    if (mt == "d") return "sp_diode";
 
     // MOSFET: nmos/pmos by level
     if (mt == "nmos" || mt == "pmos") {
