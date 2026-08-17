@@ -8,6 +8,7 @@
 #include <set>
 #include <sstream>
 #include <optional>
+#include <vector>
 #include <cstdlib>
 #include <cctype>
 
@@ -565,6 +566,73 @@ static std::string spiceSourceParams(const netlist::SpiceSource& src) {
     return os.str();
 }
 
+// Rewrite an ngspice B-source expression into VACASK's expression language.
+// The input has already been lowercased and unquoted by the caller.
+//
+//   ^     → **        ngspice B-sources spell exponentiation '^'. In VACASK
+//                     '^' is bitwise XOR, which has no Verilog-A equivalent,
+//                     so leaving it would fail the behavioral translation
+//                     rather than miscompute — but the right answer is known,
+//                     so rewrite it. ngspice's '**' needs no change.
+//   time  → $abstime  ngspice's transient-time variable. VACASK's $abstime is
+//                     available *only* inside behavioral source expressions,
+//                     which is exactly where this expression ends up.
+//
+// Identifiers inside a v(...)/i(...) argument list name circuit nodes and
+// instances rather than variables, so they are copied verbatim.
+//
+// ngspice's `temper` is deliberately not handled here: it appears in ordinary
+// `.param` expressions too and belongs to the general identifier rewrite
+// (issue A7 in params.md). `hertz` has no VACASK equivalent at all.
+static std::string spiceBehavioralExpr(const std::string& in) {
+    auto identChar = [](unsigned char c) {
+        return std::isalnum(c) || c == '_' || c == '$';
+    };
+    std::string out;
+    out.reserve(in.size() + 8);
+    std::vector<bool> callIsAccess;  // one entry per open '(' — true for v()/i()
+    int accessDepth = 0;             // number of `true` entries in callIsAccess
+    size_t i = 0;
+    while (i < in.size()) {
+        unsigned char c = in[i];
+        // Identifier (a leading digit means we are inside a numeric literal;
+        // let it fall through to the verbatim copy below).
+        if (identChar(c) && !std::isdigit(c)) {
+            size_t j = i;
+            while (j < in.size() && identChar(static_cast<unsigned char>(in[j]))) ++j;
+            std::string ident = in.substr(i, j - i);
+            size_t k = j;
+            while (k < in.size() && std::isspace(static_cast<unsigned char>(in[k]))) ++k;
+            bool isCall = (k < in.size() && in[k] == '(');
+            if (!isCall && accessDepth == 0 && ident == "time") {
+                out += "$abstime";
+            } else {
+                out += ident;
+            }
+            if (!isCall) { i = j; continue; }
+            out.append(in, j, k - j);   // whitespace between name and '('
+            bool access = (ident == "v" || ident == "i");
+            callIsAccess.push_back(access);
+            if (access) ++accessDepth;
+            out += '(';
+            i = k + 1;
+            continue;
+        }
+        if (c == '(') { callIsAccess.push_back(false); out += '('; ++i; continue; }
+        if (c == ')') {
+            if (!callIsAccess.empty()) {
+                if (callIsAccess.back()) --accessDepth;
+                callIsAccess.pop_back();
+            }
+            out += ')'; ++i; continue;
+        }
+        if (c == '^') { out += "**"; ++i; continue; }
+        out += static_cast<char>(c);
+        ++i;
+    }
+    return out;
+}
+
 // Fill a PTSubcircuitDefinition from one SpiceSubckt body (recursive).
 static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSubckt& s,
                             Parser& p, Status& st);
@@ -847,10 +915,54 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             Simulator::err() << "WARNING: SPICE device '" << name
                              << "' (MutualInductor) has no VACASK equivalent; skipped\n";
             break;
-        case netlist::SpiceDeviceKind::Behavioral:
-            Simulator::err() << "WARNING: SPICE device '" << name
-                             << "' (Behavioral/B-source) has no VACASK equivalent; skipped\n";
+        case netlist::SpiceDeviceKind::Behavioral: {
+            // B<name> <p> <n> v=<expr> | i=<expr>
+            // → VACASK behavioral source. ParserTables::processBehaviorals()
+            //   compiles the expression into a synthesized Verilog-A module
+            //   and instantiates it; v(node)/v(a,b)/i(inst) inside the
+            //   expression are wired up as extra terminals there.
+            //   See docs/dev-builtin-behavioral.md.
+            if (dev.nodes.size() != 2) {
+                Simulator::err() << "WARNING: B-source '" << name
+                                 << "' needs exactly 2 nodes (skipped)\n";
+                break;
+            }
+            std::string vexpr, iexpr, dropped;
+            bool haveV = false, haveI = false;
+            for (const auto& prm : dev.params) {
+                std::string key = lc(sv(prm.name));
+                std::string val = lc(stripExprQuoting(sv(prm.value)));
+                if (key == "v")      { vexpr = val; haveV = true; }
+                else if (key == "i") { iexpr = val; haveI = true; }
+                else {
+                    if (!dropped.empty()) dropped += ", ";
+                    dropped += key;
+                }
+            }
+            if (haveV == haveI) {
+                Simulator::err() << "WARNING: B-source '" << name
+                                 << "' needs exactly one of v= or i= (skipped)\n";
+                break;
+            }
+            if (!dropped.empty()) {
+                // tc1/tc2/noisy/dtemp/reciproctc and friends: ngspice B-source
+                // modifiers with no behavioral-source counterpart in VACASK.
+                Simulator::err() << "WARNING: B-source '" << name
+                                 << "' parameter(s) " << dropped << " ignored\n";
+            }
+            std::string src = spiceBehavioralExpr(haveI ? iexpr : vexpr);
+            Rpn expr;
+            try {
+                expr = p.parseExpression(src);
+            } catch (const std::exception&) {
+                // parseExpression() already set `s` before throwing.
+                s.extend("  in B-source '" + name + "'.");
+                return false;
+            }
+            into.add(PTBehavioral(Id(name.c_str()), spiceNodeList(dev.nodes),
+                                  std::move(expr), haveI));
             break;
+        }
         case netlist::SpiceDeviceKind::Switch:
             Simulator::err() << "WARNING: SPICE device '" << name
                              << "' (Switch) has no VACASK equivalent; skipped\n";
