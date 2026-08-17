@@ -226,6 +226,33 @@ static bool spiceParamsHaveAny(const rust::Vec<netlist::Param>& params,
     return false;
 }
 
+// C3: ngspice's `m` multiplier -> VACASK's `$mfactor`.
+//
+// ngspice implements the subcircuit multiplier as a source-to-source rewrite
+// (inp_fix_subckt_multiplier, inpcom.c:4118): an X-line carrying `m=` makes
+// ngspice append `m=1` to the called `.subckt` and `m={m}` to every device
+// line inside it. This adapter does the same against `$mfactor`, which VACASK
+// documents as the per-instance parallel multiplier and which a subcircuit
+// must declare and forward to its contents by hand (docs/cir-mfactor.md). The
+// adapter writes that forwarding so a SPICE deck does not have to.
+//
+// Two deliberate departures from ngspice:
+//
+//  - Unconditional. ngspice rewrites only a `.subckt` that some X-line
+//    actually multiplies. Sky130 calls its parasitic subcircuits from a
+//    different file than the one defining them and this adapter resolves
+//    includes lazily, so "is this subcircuit ever multiplied?" is not knowable
+//    when the call site is translated. A `$mfactor` that stays 1 costs one
+//    instance parameter and nothing else.
+//  - An X-line's `m=` always becomes the multiplier, even when the called
+//    subcircuit declares a parameter of its own named `m`. ngspice hands the
+//    value down as that parameter instead and does not multiply. Both land on
+//    the same answer for the shape this occurs in — Sky130's 20 V FETs, which
+//    declare `m=1` and forward it by hand to their devices, where our
+//    multiplier reaches the same devices by the other route. They differ only
+//    if a subcircuit uses `m` for something that is not device multiplicity.
+static constexpr const char* kMfactorParam = "$mfactor";
+
 // Map SPICE model_type + level to a VACASK OSDI master name.
 // Returns "" if there is no known VACASK master for the given type.
 // Emits a warning if the level is unknown for the model type and falls back
@@ -343,6 +370,18 @@ static std::string spiceParamValue(const rust::Vec<netlist::Param>& params,
         if (k == key) return stripExprQuoting(sv(p.value));
     }
     return "";
+}
+
+// The multiplier that applies to one SPICE device line (see kMfactorParam):
+// whatever the enclosing `.subckt` forwards (empty at the top level, which has
+// nothing to inherit) times the line's own `m=`, if it carries one. "" when
+// there is neither.
+static std::string spiceMfactorExpr(const std::string& inherited,
+                                    const rust::Vec<netlist::Param>& params) {
+    std::string own = lc(spiceParamValue(params, "m"));
+    if (own.empty())       return inherited;
+    if (inherited.empty()) return own;
+    return "(" + inherited + ")*(" + own + ")";
 }
 
 // Build a PTModel from a SPICE `.model` card. Returns nullopt if there is no
@@ -788,12 +827,42 @@ static bool hasSpiceModel(const PTSubcircuitDefinition& into, const std::string&
 }
 
 // Process a single SpiceDevice into the given subcircuit definition.
+// `mfactorIn` is the multiplier the enclosing block forwards to its contents:
+// kMfactorParam inside a SPICE `.subckt`, "" at the top level (see kMfactorParam).
 static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefinition& into,
-                           Parser& p, Status& s) {
+                           Parser& p, Status& s, const std::string& mfactorIn) {
     // SPICE-origin identifiers/expressions → lowercase (see lc/spiceId above).
     std::string name = lc(sv(dev.name));
     std::string val  = lc(stripExprQuoting(sv(dev.value)));
     std::string mdl  = lc(sv(dev.model));
+
+    // The multiplier this line ends up carrying, "" if none (C3).
+    std::string mfac = spiceMfactorExpr(mfactorIn, dev.params);
+
+    // Instance parameters with ngspice's `m` removed — it is not a parameter of
+    // any VACASK master — and $mfactor appended in its place.
+    auto paramsWithMfactor = [&]() {
+        std::string ps = lc(paramStringExcluding(dev.params, {"m"}));
+        if (!mfac.empty()) {
+            if (!ps.empty()) ps += " ";
+            ps += std::string(kMfactorParam) + "=" + mfac;
+        }
+        return ps;
+    };
+
+    // Same, for the device kinds ngspice excludes from the multiplier
+    // (inp_fix_subckt_multiplier skips lines starting with v/e/h among others):
+    // these impose a potential, so replicating them in parallel changes neither
+    // the imposed voltage nor any node current, only the per-instance branch
+    // current that gets reported. An `m=` written on such a line has nowhere to
+    // go and is dropped, as it is in ngspice.
+    auto paramsWithoutMfactor = [&](const char* what) {
+        if (!spiceParamValue(dev.params, "m").empty()) {
+            Simulator::err() << "WARNING: " << what << " '" << name
+                             << "' does not take a multiplier; m= ignored\n";
+        }
+        return lc(paramStringExcluding(dev.params, {"m"}));
+    };
 
     switch (dev.kind) {
         case netlist::SpiceDeviceKind::Resistor: {
@@ -829,7 +898,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                 if (valIsModel || !mdl.empty()) dropped = "model " + (mdl.empty() ? val : mdl);
                 for (const auto& prm : dev.params) {
                     std::string key = lc(sv(prm.name));
-                    if (key == "r") continue;
+                    if (key == "r" || key == "m") continue;   // m is honored below
                     if (!dropped.empty()) dropped += ", ";
                     dropped += key;
                 }
@@ -837,8 +906,14 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                     Simulator::err() << "WARNING: behavioral resistor '" << name
                                      << "' has no place for " << dropped << "; ignored\n";
                 }
+                // A behavioral source takes no $mfactor instance parameter, but
+                // its contribution is a flow, which scales linearly: m parallel
+                // conductances pass m times the current. Fold the multiplier
+                // into the expression, where it resolves against the enclosing
+                // subcircuit's $mfactor parameter like any other identifier.
                 std::string src = "v(" + lc(sv(dev.nodes[0])) + "," + lc(sv(dev.nodes[1])) +
                                   ")/max(" + rexpr + ", 1e-12)";
+                if (!mfac.empty()) src = "(" + src + ")*(" + mfac + ")";
                 if (!addSpiceBehavioral(name, spiceNodeList(dev.nodes), src, true,
                                         "behavioral resistor", into, p, s)) {
                     return false;
@@ -860,7 +935,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             }
             PTInstance inst(Id(name.c_str()), Id(master.c_str()), spiceNodeList(dev.nodes));
             if (!rval.empty()) inst.add(p.parseParameters("r=" + rval));
-            auto ps = lc(paramString(dev.params));
+            auto ps = paramsWithMfactor();
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
             break;
@@ -882,7 +957,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             }
             PTInstance inst(Id(name.c_str()), Id(master.c_str()), spiceNodeList(dev.nodes));
             if (!cval.empty()) inst.add(p.parseParameters("c=" + cval));
-            auto ps = lc(paramString(dev.params));
+            auto ps = paramsWithMfactor();
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
             break;
@@ -892,7 +967,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             ensureSpiceModel(into, "inductor");
             PTInstance inst(Id(name.c_str()), Id(master.c_str()), spiceNodeList(dev.nodes));
             if (!val.empty()) inst.add(p.parseParameters("l=" + val));
-            auto ps = lc(paramString(dev.params));
+            auto ps = paramsWithMfactor();
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
             break;
@@ -901,7 +976,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             ensureSpiceModel(into, "vsource");
             PTInstance inst(Id(name.c_str()), Id("vsource"), spiceNodeList(dev.nodes));
             std::string srcParams = spiceSourceParams(dev.source);
-            auto ps = lc(paramString(dev.params));
+            auto ps = paramsWithoutMfactor("voltage source");
             if (!srcParams.empty() && !ps.empty()) srcParams += " ";
             srcParams += ps;
             if (!srcParams.empty()) inst.add(p.parseParameters(lc(srcParams)));
@@ -912,7 +987,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             ensureSpiceModel(into, "isource");
             PTInstance inst(Id(name.c_str()), Id("isource"), spiceNodeList(dev.nodes));
             std::string srcParams = spiceSourceParams(dev.source);
-            auto ps = lc(paramString(dev.params));
+            auto ps = paramsWithMfactor();
             if (!srcParams.empty() && !ps.empty()) srcParams += " ";
             srcParams += ps;
             if (!srcParams.empty()) inst.add(p.parseParameters(lc(srcParams)));
@@ -930,7 +1005,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             }
             PTInstance inst(Id(name.c_str()), spiceModelId(mdl), spiceNodeList(dev.nodes));
             // Note: Rust Diode projects value="" (area not a named OSDI param in diode.va).
-            auto ps = lc(paramString(dev.params));
+            auto ps = paramsWithMfactor();
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
             break;
@@ -945,7 +1020,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                 break;
             }
             PTInstance inst(Id(name.c_str()), spiceModelId(mdl), spiceNodeList(dev.nodes));
-            auto ps = lc(paramString(dev.params));
+            auto ps = paramsWithMfactor();
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
             break;
@@ -972,7 +1047,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                 break;
             }
             PTInstance inst(Id(name.c_str()), spiceModelId(mdl), spiceNodeList(dev.nodes));
-            auto ps = lc(paramString(dev.params));
+            auto ps = paramsWithMfactor();
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
             break;
@@ -986,7 +1061,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                 break;
             }
             PTInstance inst(Id(name.c_str()), Id(mdl.c_str()), spiceNodeList(dev.nodes));
-            auto ps = lc(paramString(dev.params));
+            auto ps = paramsWithMfactor();
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
             break;
@@ -1008,7 +1083,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             PTInstance inst(Id(name.c_str()), Id("vcvs"), std::move(allNodes));
             std::string gainVal = lc(sv(dev.ctrl_value));
             if (!gainVal.empty()) inst.add(p.parseParameters("gain=" + gainVal));
-            auto ps = lc(paramString(dev.params));
+            auto ps = paramsWithoutMfactor("VCVS");
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
             break;
@@ -1028,7 +1103,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             PTInstance inst(Id(name.c_str()), Id("vccs"), std::move(allNodes));
             std::string gainVal = lc(sv(dev.ctrl_value));
             if (!gainVal.empty()) inst.add(p.parseParameters("gain=" + gainVal));
-            auto ps = lc(paramString(dev.params));
+            auto ps = paramsWithMfactor();
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
             break;
@@ -1057,7 +1132,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             std::string prms = "ctlinst=\"" + ctlsrc + "\"";
             if (!gainVal.empty()) prms += " gain=" + gainVal;
             inst.add(p.parseParameters(prms));
-            auto ps = lc(paramString(dev.params));
+            auto ps = paramsWithMfactor();
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
             break;
@@ -1085,7 +1160,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             std::string prms = "ctlinst=\"" + ctlsrc + "\"";
             if (!gainVal.empty()) prms += " gain=" + gainVal;
             inst.add(p.parseParameters(prms));
-            auto ps = lc(paramString(dev.params));
+            auto ps = paramsWithoutMfactor("CCVS");
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
             break;
@@ -1117,6 +1192,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                 std::string val = lc(stripExprQuoting(sv(prm.value)));
                 if (key == "v")      { vexpr = val; haveV = true; }
                 else if (key == "i") { iexpr = val; haveI = true; }
+                else if (key == "m") { /* decided below, once v=/i= is known */ }
                 else {
                     if (!dropped.empty()) dropped += ", ";
                     dropped += key;
@@ -1126,6 +1202,17 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                 Simulator::err() << "WARNING: B-source '" << name
                                  << "' needs exactly one of v= or i= (skipped)\n";
                 break;
+            }
+            // ngspice multiplies a current-defining B-source and skips a
+            // voltage-defining one (inp_fix_subckt_multiplier), for the same
+            // reason V/E/H are skipped: replicating an imposed potential in
+            // parallel changes nothing observable. A flow scales linearly, so
+            // fold the multiplier into the expression.
+            if (haveI) {
+                if (!mfac.empty()) iexpr = "(" + iexpr + ")*(" + mfac + ")";
+            } else if (!spiceParamValue(dev.params, "m").empty()) {
+                Simulator::err() << "WARNING: voltage-defining B-source '" << name
+                                 << "' does not take a multiplier; m= ignored\n";
             }
             if (!dropped.empty()) {
                 // tc1/tc2/noisy/dtemp/reciproctc and friends: ngspice B-source
@@ -1157,13 +1244,18 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
 
 static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSubckt& s,
                             Parser& p, Status& st) {
-    auto sp = paramString(s.params);
-    if (!sp.empty()) def.add(p.parseParameters(lc(sp)));
+    // C3: every SPICE .subckt accepts a multiplier and hands it to its contents,
+    // so that an X-line's m= has somewhere to land no matter which file defines
+    // the subcircuit. A subcircuit nobody multiplies keeps the default 1.
+    auto sp = lc(paramString(s.params));
+    if (!sp.empty()) sp += " ";
+    sp += std::string(kMfactorParam) + "=1";
+    def.add(p.parseParameters(sp));
     // .model cards inside the .subckt body (e.g. Sky130 res subckts define
     // reshead/resbody locally). Emit BEFORE devices so instances resolve them.
     emitSpiceModels(s.models, s.devices, def, p);
     for (const auto& dev : s.devices) {
-        if (!addSpiceDevice(dev, def, p, st)) return false;
+        if (!addSpiceDevice(dev, def, p, st, kMfactorParam)) return false;
     }
     for (const auto& sub : s.subckts) {
         PTSubcircuitDefinition child(spiceId(sv(sub.name)), spiceNodeList(sub.ports));
@@ -1200,8 +1292,9 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
     emitSpiceModels(sb.models, sb.devices, into, p);
 
     // Devices (R/C/L/V/I + D/M/Q now handled; others warn+skip).
+    // Top level: no enclosing subcircuit, so nothing to inherit a multiplier from.
     for (const auto& dev : sb.devices) {
-        if (!addSpiceDevice(dev, into, p, s)) return false;
+        if (!addSpiceDevice(dev, into, p, s, "")) return false;
     }
 
     // SPICE .tran / .dc / .ac cards in an included file are intentionally not

@@ -110,7 +110,7 @@ Foreign formats are supported as includes in a native VACASK deck, not as root
 input files to the `vacask` command. The native deck supplies the ground,
 analysis, control flow, and postprocessing configuration.
 
-Three behaviours are specific to foreign includes:
+Four behaviours are specific to foreign includes:
 
 - **Commands are ignored.** Analysis/control directives inside an included SPICE
   or Spectre file (for example a SPICE `.tran` card or a Spectre analysis
@@ -143,6 +143,29 @@ Three behaviours are specific to foreign includes:
   matches the convention of the Cadnip converter. Subcircuit names and
   references to them are left unchanged. Names of SPICE model cards also appear
   prefixed in `print device(...)` output.
+
+- **SPICE `m=` becomes `$mfactor`.** SPICE spells the parallel-device
+  multiplier `m`, both on a device line and on a subcircuit call, where it
+  multiplies every device the subcircuit contains. VACASK spells it
+  [`$mfactor`](cir-mfactor.md), and a subcircuit must declare it and forward it
+  to its contents. The adapter writes that forwarding: every included SPICE
+  `.subckt` gains a `$mfactor` parameter defaulting to 1, each device inside it
+  receives `$mfactor` multiplied by its own `m=` if it has one, and an `m=` on
+  a subcircuit call is passed down the same way, so nested calls compose.
+
+  ```text
+  .subckt rblk a b                      parameters $mfactor=1
+  rr a b 1k                 becomes     rr (a b) sp_resistor r=1k $mfactor=$mfactor
+  .ends
+  x1 out 0 rblk m=4                     x1 (out 0) rblk $mfactor=4
+  ```
+
+  Devices that impose a potential — `V`, `E`, `H`, and a `B` source written
+  `v=` — take no multiplier, matching ngspice: replicating them in parallel
+  changes neither the imposed voltage nor any node current. A behavioral source
+  has no `$mfactor` parameter, so for a current-defining one the multiplier is
+  folded into its expression instead, which is exact because a flow scales
+  linearly.
 
 Foreign includes are supported at the **top level** of the deck. An `include` of
 a foreign-format file inside a `subckt` body is merged into the top-level
