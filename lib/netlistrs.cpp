@@ -633,6 +633,50 @@ static std::string spiceBehavioralExpr(const std::string& in) {
     return out;
 }
 
+// True if `expr` contains a v(...) or i(...) probe, i.e. it reads the solution
+// and can only be evaluated per iteration, not once at elaboration time. Used
+// to tell an ordinary resistance apart from a behavioral one (issue A3).
+// Identifiers are scanned whole, so `vth`, `iref` or `div(...)` do not match.
+static bool spiceExprHasProbe(const std::string& expr) {
+    auto identChar = [](unsigned char c) {
+        return std::isalnum(c) || c == '_' || c == '$';
+    };
+    size_t i = 0;
+    while (i < expr.size()) {
+        unsigned char c = expr[i];
+        if (!identChar(c)) { ++i; continue; }
+        size_t j = i;
+        while (j < expr.size() && identChar(static_cast<unsigned char>(expr[j]))) ++j;
+        // A leading digit means this run is a numeric literal (1e-12), not a name.
+        if (!std::isdigit(c)) {
+            std::string ident = expr.substr(i, j - i);
+            size_t k = j;
+            while (k < expr.size() && std::isspace(static_cast<unsigned char>(expr[k]))) ++k;
+            if (k < expr.size() && expr[k] == '(' && (ident == "v" || ident == "i")) return true;
+        }
+        i = j;
+    }
+    return false;
+}
+
+// Translate an ngspice expression and add it to `into` as a VACASK behavioral
+// source across `terms`. `what` names the device kind for the error message.
+static bool addSpiceBehavioral(const std::string& name, PTIdentifierList&& terms,
+                               const std::string& spiceExpr, bool currentSource,
+                               const char* what, PTSubcircuitDefinition& into,
+                               Parser& p, Status& s) {
+    Rpn expr;
+    try {
+        expr = p.parseExpression(spiceBehavioralExpr(spiceExpr));
+    } catch (const std::exception&) {
+        // parseExpression() already set `s` before throwing.
+        s.extend(std::string("  in ") + what + " '" + name + "'.");
+        return false;
+    }
+    into.add(PTBehavioral(Id(name.c_str()), std::move(terms), std::move(expr), currentSource));
+    return true;
+}
+
 // Fill a PTSubcircuitDefinition from one SpiceSubckt body (recursive).
 static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSubckt& s,
                             Parser& p, Status& st);
@@ -671,12 +715,51 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             // explicit r= param ("Parameter 'r' redefinition"). The Rust
             // projection always leaves `model` empty for R (no model slot in
             // the AST), so the decision is made here from value + params.
+            bool valIsModel = mdl.empty() && !val.empty() &&
+                              spiceParamsHaveAny(dev.params, {"r", "l"});
+            std::string rval = valIsModel ? "" : val;
+
+            // A3: a resistance that probes the solution (Sky130's 20 V FETs use
+            // r='...v(g,s)...') has no sp_resistor equivalent — R is no longer a
+            // constant of the elaborated circuit. Emit it as a behavioral flow
+            // source instead: i = v(p,n)/max(r, RMIN), an explicit conductance
+            // stamp adding no unknowns, and per-iteration re-evaluation just as
+            // ngspice does it. max() floors the division at the same 1e-12 as
+            // sp_resistor's own too-small-resistance clamp (spice/resistor.va).
+            std::string rexpr = rval.empty() ? lc(spiceParamValue(dev.params, "r")) : rval;
+            if (spiceExprHasProbe(rexpr)) {
+                if (dev.nodes.size() != 2) {
+                    Simulator::err() << "WARNING: behavioral resistor '" << name
+                                     << "' needs exactly 2 nodes (skipped)\n";
+                    break;
+                }
+                // A behavioral source carries the expression and nothing else:
+                // a model card and modifiers like tc1/tc2/w/l have nowhere to go.
+                std::string dropped;
+                if (valIsModel || !mdl.empty()) dropped = "model " + (mdl.empty() ? val : mdl);
+                for (const auto& prm : dev.params) {
+                    std::string key = lc(sv(prm.name));
+                    if (key == "r") continue;
+                    if (!dropped.empty()) dropped += ", ";
+                    dropped += key;
+                }
+                if (!dropped.empty()) {
+                    Simulator::err() << "WARNING: behavioral resistor '" << name
+                                     << "' has no place for " << dropped << "; ignored\n";
+                }
+                std::string src = "v(" + lc(sv(dev.nodes[0])) + "," + lc(sv(dev.nodes[1])) +
+                                  ")/max(" + rexpr + ", 1e-12)";
+                if (!addSpiceBehavioral(name, spiceNodeList(dev.nodes), src, true,
+                                        "behavioral resistor", into, p, s)) {
+                    return false;
+                }
+                break;
+            }
+
             std::string master;
-            std::string rval;
             if (!mdl.empty()) {
                 master = mdl;   // explicit model reference (future-proofing)
-                rval = val;
-            } else if (!val.empty() && spiceParamsHaveAny(dev.params, {"r", "l"})) {
+            } else if (valIsModel) {
                 master = val;   // value is a model card name
             } else {
                 // Plain resistor: value (if any) is the resistance. Default to
@@ -684,7 +767,6 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                 // tc1/tc2/w/l are accepted (the generic 'resistor' has r only).
                 master = "sp_resistor";
                 ensureSpiceModel(into, "sp_resistor");
-                rval = val;
             }
             PTInstance inst(Id(name.c_str()), Id(master.c_str()), spiceNodeList(dev.nodes));
             if (!rval.empty()) inst.add(p.parseParameters("r=" + rval));
@@ -950,17 +1032,10 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                 Simulator::err() << "WARNING: B-source '" << name
                                  << "' parameter(s) " << dropped << " ignored\n";
             }
-            std::string src = spiceBehavioralExpr(haveI ? iexpr : vexpr);
-            Rpn expr;
-            try {
-                expr = p.parseExpression(src);
-            } catch (const std::exception&) {
-                // parseExpression() already set `s` before throwing.
-                s.extend("  in B-source '" + name + "'.");
+            if (!addSpiceBehavioral(name, spiceNodeList(dev.nodes), haveI ? iexpr : vexpr,
+                                    haveI, "B-source", into, p, s)) {
                 return false;
             }
-            into.add(PTBehavioral(Id(name.c_str()), spiceNodeList(dev.nodes),
-                                  std::move(expr), haveI));
             break;
         }
         case netlist::SpiceDeviceKind::Switch:

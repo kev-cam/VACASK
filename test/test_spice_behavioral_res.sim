@@ -1,0 +1,39 @@
+SPICE behavioral resistors (r= referencing v()/i()) translated to flow sources
+
+ground 0
+include "spice_behavioral_res.cir" lang=ngspice
+
+control
+  abort always
+  options rawfile="binary"
+  analysis op1 op
+  postprocess(PYTHON, "runme.py")
+endc
+
+embed "runme.py" <<<FILE
+from rawfile import rawread
+from runtest import *
+import sys
+
+p = rawread("op1.raw").get()
+
+tests = []
+for node, expected, what in (
+    ("out0", 1.5, "plain numeric r= still uses the resistor master"),
+    ("out1", 2.0, "r= probing v(node)"),
+    ("out2", 3.0, "r= in a subcircuit, subckt parameter + v(a,b) probe"),
+    ("out3", 1.0, "r= probing i(instance)"),
+):
+    ok = bool((relDiff(p[node], expected, 1e-9) < 1e-6).all())
+    print(what, ok)
+    tests.append(ok)
+
+# A resistance expression evaluating to 0 must not divide by zero: the
+# synthesized flow source clamps it, so the node voltage stays finite and tiny.
+ok = bool((abs(p["out4"]) < 1e-6).all())
+print("degenerate r=0 expression stays finite", ok)
+tests.append(ok)
+
+if isTest():
+    sys.exit(not all(tests))
+>>>FILE
