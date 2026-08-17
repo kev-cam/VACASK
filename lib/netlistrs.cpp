@@ -116,6 +116,26 @@ std::string stripExprQuoting(const std::string& v) {
 //                     `temper` in the 20 V FETs' tempco `.param`s and in
 //                     res_iso_pw's behavioral resistance.
 //
+//   pwr(x,y)          ngspice's power function, which means *two different
+//                     things* depending on where it is written, so it is
+//                     rewritten differently in the two cases:
+//                       .param/.model  pow(fabs(z), x)  (numparam,
+//                                      frontend/numparam/xpressn.c XFU_PWR)
+//                                      → pow(abs(x), y)
+//                       behavioral     x<0 ? -pow(-x,y) : pow(x,y)
+//                                      (PTpwr, spicelib/parser/ptfuncs.c),
+//                                      i.e. signum(x)*|x|**y, with zero
+//                                      counting as positive
+//                                      → sgn(x)*pow(abs(x), y)
+//                     VACASK's sgn() is (x>=0) ? 1 : -1, which is PTpwr's
+//                     convention exactly. Both forms evaluate x twice; it is
+//                     side-effect free, so that is only extra text.
+//                     ngspice has no native `pwrs` — it exists solely as a
+//                     PSPICE-compatibility .func (frontend/inpcompat.c), a
+//                     mode this adapter does not implement — so `pwrs` is left
+//                     alone and fails as an unknown function, as it does in
+//                     ngspice itself.
+//
 // `behavioral` adds the two rewrites that only make sense inside a behavioral
 // source expression:
 //
@@ -139,8 +159,19 @@ std::string spiceExpr(const std::string& in, bool behavioral) {
     };
     std::string out;
     out.reserve(in.size() + 8);
-    std::vector<bool> callIsAccess;  // one entry per open '(' — true for v()/i()
-    int accessDepth = 0;             // number of `true` entries in callIsAccess
+    // One frame per open '(' in the input. A pwr() frame emits none of its own
+    // text while its arguments are scanned; the whole call is rewritten in
+    // place once the closing ')' arrives and both arguments are known.
+    struct Frame {
+        bool        access;    // a v(...)/i(...) access, whose argument list names nodes
+        bool        pwr;       // a pwr(...) call awaiting rewrite
+        std::string name;      // the pwr call's original spelling, to restore on a bad arity
+        size_t      argStart;  // index in `out` where this call's argument text begins
+        size_t      comma;     // index in `out` of its only top-level ',', npos if none
+        int         commas;    // how many top-level ',' have been seen
+    };
+    std::vector<Frame> frames;
+    int accessDepth = 0;             // number of access frames currently open
     size_t i = 0;
     while (i < in.size()) {
         unsigned char c = in[i];
@@ -155,27 +186,64 @@ std::string spiceExpr(const std::string& in, bool behavioral) {
             while (k < in.size() && std::isspace(static_cast<unsigned char>(in[k]))) ++k;
             bool isCall = (k < in.size() && in[k] == '(');
             bool isName = !isCall && accessDepth == 0;   // a variable, not a node/function
+            // A pwr() call outside an access argument list; inside one the
+            // identifier names a node, so it is copied like any other.
+            bool isPwr = isCall && accessDepth == 0 && lower == "pwr";
             if (isName && lower == "temper") {
                 out += "$temp";
             } else if (isName && behavioral && lower == "time") {
                 out += "$abstime";
-            } else {
+            } else if (!isPwr) {
                 out += ident;
             }
             if (!isCall) { i = j; continue; }
-            out.append(in, j, k - j);   // whitespace between name and '('
             bool access = (lower == "v" || lower == "i");
-            callIsAccess.push_back(access);
+            if (!isPwr) {
+                out.append(in, j, k - j);   // whitespace between name and '('
+                out += '(';
+            }
+            frames.push_back({access, isPwr, ident, out.size(), std::string::npos, 0});
             if (access) ++accessDepth;
-            out += '(';
             i = k + 1;
             continue;
         }
-        if (c == '(') { callIsAccess.push_back(false); out += '('; ++i; continue; }
+        if (c == '(') {
+            frames.push_back({false, false, {}, out.size(), std::string::npos, 0});
+            out += '('; ++i; continue;
+        }
+        if (c == ',' && !frames.empty() && frames.back().pwr) {
+            Frame& f = frames.back();
+            if (f.commas == 0) f.comma = out.size();
+            ++f.commas;
+            out += ','; ++i; continue;
+        }
         if (c == ')') {
-            if (!callIsAccess.empty()) {
-                if (callIsAccess.back()) --accessDepth;
-                callIsAccess.pop_back();
+            if (!frames.empty()) {
+                Frame f = frames.back();
+                frames.pop_back();
+                if (f.access) --accessDepth;
+                if (f.pwr) {
+                    // The arguments are now in out[f.argStart..], already
+                    // rewritten themselves (a nested pwr() closed first, and
+                    // only ever rewrote text past f.comma).
+                    if (f.commas == 1) {
+                        std::string x = out.substr(f.argStart, f.comma - f.argStart);
+                        std::string y = out.substr(f.comma + 1);
+                        out.resize(f.argStart);
+                        if (behavioral) {
+                            out += "(sgn(" + x + ")*pow(abs(" + x + ")," + y + "))";
+                        } else {
+                            out += "pow(abs(" + x + ")," + y + ")";
+                        }
+                    } else {
+                        // Not the 2-argument pwr() ngspice defines: put the
+                        // call back verbatim and let the parser complain.
+                        std::string args = out.substr(f.argStart);
+                        out.resize(f.argStart);
+                        out += f.name + "(" + args + ")";
+                    }
+                    ++i; continue;
+                }
             }
             out += ')'; ++i; continue;
         }
@@ -189,8 +257,13 @@ std::string spiceExpr(const std::string& in, bool behavioral) {
 // A SPICE-origin parameter value: unquoted, then run through the expression
 // rewrite above. Every value the SPICE adapter reads goes through here; native
 // and Spectre-origin values keep using stripExprQuoting() alone.
-std::string spiceValue(const rust::String& v) {
-    return spiceExpr(stripExprQuoting(sv(v)), false);
+//
+// A value destined for a behavioral source must be read with `behavioral` set
+// and read only once: the two rewrites of pwr() differ, and the first one
+// consumes the call, so running the ordinary rewrite first would silently pin
+// the .param meaning onto a behavioral expression.
+std::string spiceValue(const rust::String& v, bool behavioral = false) {
+    return spiceExpr(stripExprQuoting(sv(v)), behavioral);
 }
 
 // "name=value name2=value2 …" from a list of Param, or "" if none.
@@ -470,11 +543,11 @@ static std::string paramStringExcludingSet(const rust::Vec<netlist::Param>& para
 // Value of the first parameter whose name matches `key` (case-insensitive),
 // brace/quote-stripped; "" if absent.
 static std::string spiceParamValue(const rust::Vec<netlist::Param>& params,
-                                   const std::string& key) {
+                                   const std::string& key, bool behavioral = false) {
     for (const auto& p : params) {
         std::string k = sv(p.name);
         std::transform(k.begin(), k.end(), k.begin(), ::tolower);
-        if (k == key) return spiceValue(p.value);
+        if (k == key) return spiceValue(p.value, behavioral);
     }
     return "";
 }
@@ -925,8 +998,14 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             // stamp adding no unknowns, and per-iteration re-evaluation just as
             // ngspice does it. max() floors the division at the same 1e-12 as
             // sp_resistor's own too-small-resistance clamp (spice/resistor.va).
-            std::string rexpr = rval.empty() ? lc(spiceParamValue(dev.params, "r")) : rval;
+            bool rFromParam = rval.empty();
+            std::string rexpr = rFromParam ? lc(spiceParamValue(dev.params, "r")) : rval;
             if (spiceExprHasProbe(rexpr)) {
+                // Re-read the resistance with the behavioral spelling of the
+                // rewrite (pwr() differs between the two); `rexpr` above is the
+                // ordinary one, which only ever served the probe test.
+                rexpr = rFromParam ? lc(spiceParamValue(dev.params, "r", /*behavioral=*/true))
+                                   : lc(spiceValue(dev.value, /*behavioral=*/true));
                 if (dev.nodes.size() != 2) {
                     Simulator::err() << "WARNING: behavioral resistor '" << name
                                      << "' needs exactly 2 nodes (skipped)\n";
@@ -1229,7 +1308,8 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             bool haveV = false, haveI = false;
             for (const auto& prm : dev.params) {
                 std::string key = lc(sv(prm.name));
-                std::string val = lc(spiceValue(prm.value));
+                bool isExpr = (key == "v" || key == "i");
+                std::string val = lc(spiceValue(prm.value, /*behavioral=*/isExpr));
                 if (key == "v")      { vexpr = val; haveV = true; }
                 else if (key == "i") { iexpr = val; haveI = true; }
                 else if (key == "m") { /* decided below, once v=/i= is known */ }

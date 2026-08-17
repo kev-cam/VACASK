@@ -184,6 +184,21 @@ Five behaviours are specific to foreign includes:
   parameter named `temper` gets a warning, and expressions referencing it still
   see the simulator temperature.
 
+- **SPICE `pwr()` is expanded, and it means two different things.** ngspice has
+  two expression parsers and they do not agree on `pwr`. In `.param` and
+  `.model` values it is `|x|`<sup>`y`</sup>, discarding the sign of the base; in
+  a behavioral expression (a `B` source, or a resistance written `r=`) it keeps
+  the sign, as `sgn(x)*|x|`<sup>`y`</sup>. Each is expanded to match its own
+  context:
+
+  ```text
+  .param k = 'pwr(-2,3)'          //  k=pow(abs(-2),3)               -> +8
+  b1 out 0 v='pwr(v(in),3)'       //  sgn(v(in))*pow(abs(v(in)),3)   -> -8 at v(in)=-2
+  ```
+
+  ngspice's `pwrs` is *not* accepted: it is not an ngspice function at all, only
+  a PSPICE-compatibility definition, and VACASK does not implement that mode.
+
 Foreign includes are supported at the **top level** of the deck. An `include` of
 a foreign-format file inside a `subckt` body is merged into the top-level
 definition rather than that subcircuit.
