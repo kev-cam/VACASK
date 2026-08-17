@@ -204,7 +204,7 @@ static bool spiceParamsHaveAny(const rust::Vec<netlist::Param>& params,
 
 // Map SPICE model_type + level to a VACASK OSDI master name.
 // Returns "" if there is no known VACASK master for the given type.
-// Emits a warning if the level is unknown for a MOSFET type and falls back
+// Emits a warning if the level is unknown for the model type and falls back
 // to the nearest available master.
 static std::string spiceModelMaster(const std::string& model_type_raw,
                                     const std::string& level_str,
@@ -252,9 +252,26 @@ static std::string spiceModelMaster(const std::string& model_type_raw,
         return "bsim3";
     }
 
-    // BJT: npn/pnp -> vbic13 (3-terminal, vbic_1p3.osdi, module vbic13(c,b,e))
-    // Use 4-terminal variant (vbic13_4t) when the instance has a substrate node.
-    if (mt == "npn" || mt == "pnp") return "vbic13";
+    // BJT: npn/pnp by level, mirroring ngspice's inpdomod.c:46-79.
+    //   0/1/2 -> sp_bjt  (Gummel-Poon, spice/bjt.osdi, module sp_bjt(c,b,e,sub))
+    //   4/9   -> vbic13  (vbic_1p3.osdi, module vbic13(c,b,e); the 4-terminal
+    //            vbic13_4t variant for cards with a substrate node is deferred)
+    //   8     -> HICUM2, which VACASK does not ship
+    // An absent `level=` means level 1 in ngspice, i.e. Gummel-Poon — so an
+    // ordinary unlevelled `.model … NPN` card is an sp_bjt, not a VBIC.
+    if (mt == "npn" || mt == "pnp") {
+        int level = 0;
+        try { level = std::stoi(level_str); } catch (...) {}
+        if (level == 4 || level == 9) return "vbic13";
+        if (level == 8) {
+            Simulator::err() << "WARNING: BJT level=8 (HICUM2) has no VACASK master; "
+                                "falling back to Gummel-Poon sp_bjt\n";
+        } else if (level != 0 && level != 1 && level != 2) {
+            Simulator::err() << "WARNING: BJT level=" << level
+                             << " not in known dispatch table; falling back to sp_bjt\n";
+        }
+        return "sp_bjt";
+    }
 
     // Semiconductor resistor: .model <name> R ... (ngspice). Maps to the
     // ngspice-flavour sp_resistor master (spice/resistor.osdi), which supports
@@ -449,6 +466,7 @@ static const std::map<std::string, std::string>& osdiFileForMaster() {
         {"diode",      "diode.osdi"},          {"sp_diode",    "spice/diode.osdi"},
         {"sp_bsim4v8", "spice/bsim4v8.osdi"},  {"bsim3",       "bsim3v3.osdi"},
         {"bsim4",      "bsim4v8.osdi"},        {"vbic13",      "vbic_1p3.osdi"},
+        {"sp_bjt",     "spice/bjt.osdi"},
         {"bsimbulk",   "bsimbulk106.osdi"},    {"psp103va",    "psp103v4.osdi"},
     };
     return t;
@@ -863,8 +881,19 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
         case netlist::SpiceDeviceKind::Bjt: {
             // Q<name> <c> <b> <e> [<s>] <model> [params]
             // Instance master = model card name; nodes = [c,b,e,(s)]
-            // (vbic13 module vbic13(c,b,e) — 3 terminals; 4-terminal variant
-            //  vbic13_4t if a substrate node is present — deferred)
+            //
+            // sp_bjt is sp_bjt(c,b,e,sub) — 4 terminals — so a 3-node Q card
+            // leaves the substrate terminal unconnected. That needs no fix-up
+            // here: an unconnected trailing OSDI terminal already resolves to
+            // ground, which is exactly what ngspice does with a short Q card
+            // (inp2q.c:80-82 ties the missing ports to gnode). Verified against
+            // sp_bjt with a substrate junction large enough to dominate the bias
+            // point — `Q c b e` and `Q c b e 0` give bit-identical operating
+            // points, both differing from a substrate tied elsewhere.
+            //
+            // A level=4/9 card dispatches to vbic13, which is vbic13(c,b,e) — a
+            // Q card carrying a substrate node is rejected for too many
+            // terminals until the 4-terminal vbic13_4t variant is wired up.
             if (mdl.empty()) {
                 Simulator::err() << "WARNING: BJT '" << name
                                  << "' has no model reference (skipped)\n";

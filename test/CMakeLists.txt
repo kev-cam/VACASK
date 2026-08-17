@@ -131,6 +131,7 @@ if(VACASK_WITH_SPICE)
     prepare_netlist_test(test_spice_binned_mos.sim)
     prepare_netlist_test(test_spice_bsource.sim)
     prepare_netlist_test(test_spice_behavioral_res.sim)
+    prepare_netlist_test(test_spice_bjt.sim)
     prepare_netlist_test(test_spice_warnonly.sim "WARNING: SPICE device.*MutualInductor.*skipped")
     set_tests_properties(test_spice_warnonly.sim PROPERTIES LABELS "warning")
 
