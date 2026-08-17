@@ -110,7 +110,7 @@ Foreign formats are supported as includes in a native VACASK deck, not as root
 input files to the `vacask` command. The native deck supplies the ground,
 analysis, control flow, and postprocessing configuration.
 
-Two behaviours are specific to foreign includes:
+Three behaviours are specific to foreign includes:
 
 - **Commands are ignored.** Analysis/control directives inside an included SPICE
   or Spectre file (for example a SPICE `.tran` card or a Spectre analysis
@@ -123,6 +123,26 @@ Two behaviours are specific to foreign includes:
   for a device a foreign file uses — VACASK emits the required `load` directives
   automatically for the masters it references (built-in devices such as voltage
   and current sources need no load).
+
+- **SPICE `.model` names get an `m_` prefix.** SPICE keeps `.model` and
+  `.subckt` in separate name scopes, so the same name may denote both; a PDK
+  such as Sky130 does exactly that. VACASK registers models and subcircuits in
+  one scope (an instance may name either), so every name coming from a SPICE
+  `.model` card is registered as `m_<name>`. References from within the same
+  foreign file are rewritten to match, so nothing has to change in the included
+  netlist. It matters only when the **native** deck names a model card itself:
+
+  ```text
+  include "models.spice" lang=ngspice   // contains: .model resr r
+
+  r1 (n1 0) m_resr r=1k                 // native reference needs the prefix
+  ```
+
+  The prefix is applied unconditionally, not only on collision, so the name a
+  card gets never depends on what some other file happens to define. It also
+  matches the convention of the Cadnip converter. Subcircuit names and
+  references to them are left unchanged. Names of SPICE model cards also appear
+  prefixed in `print device(...)` output.
 
 Foreign includes are supported at the **top level** of the deck. An `include` of
 a foreign-format file inside a `subckt` body is merged into the top-level

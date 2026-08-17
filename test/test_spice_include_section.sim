@@ -9,8 +9,9 @@ model vsource vsource
 include "spice_include_corners.lib" lang=ngspice section=tt
 include "spice_include_corners.lib" lang=ngspice section=ff
 
-r1 (1 2) rtt r=1k
-r2 (2 0) rff r=9k
+// m_ prefix on a SPICE `.model` name -- see test_lang_include.sim.
+r1 (1 2) m_rtt r=1k
+r2 (2 0) m_rff r=9k
 
 v1 (1 0) vsource dc=10
 

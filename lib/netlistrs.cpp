@@ -46,6 +46,30 @@ std::string lc(std::string s) {
 // Lowercased Id / node list for SPICE-origin identifiers.
 Id spiceId(const std::string& s) { return Id(lc(s).c_str()); }
 
+// C2: ngspice keeps `.model` and `.subckt` in separate name scopes, so one name
+// may denote both. VACASK interns them into a single Circuit::modelMap (a model
+// and a subcircuit are both things an instance can name), so such a PDK aborts
+// the load with "A model/subcircuit with name '…' already exists" — Sky130's tt
+// corner trips it nine times (`short` plus eight `sky130_fd_pr__diode_*`).
+//
+// Resolve it in the adapter, which is the only layer that still knows whether a
+// name came from a `.model` card or a `.subckt`: prefix every `.model`-origin
+// name — definition and reference alike — with "m_", the convention the
+// Cadnip.jl converter already established (:model_prefix => "m_",
+// :ckt_prefix => ""). Unconditional rather than collision-driven, so `.model
+// foo` is always `m_foo` and never contingent on what some other file defines.
+//
+// Scope: names originating from a `.model` card only. Subcircuit names and
+// X-call references stay bare, and so do the VACASK master names
+// ensureSpiceModel synthesizes (sp_resistor, vsource, …) — those are master
+// names, not PDK identifiers.
+//
+// Cost: the prefixed name is what `print device(…)` and any save/print written
+// against a model name see — uniformly, and matching what Cadnip users already
+// see today.
+std::string spiceModelName(const std::string& s) { return "m_" + lc(s); }
+Id spiceModelId(const std::string& s) { return Id(spiceModelName(s).c_str()); }
+
 // Strip ngspice expression quoting (`{expr}` braces, `'expr'` quotes) and
 // collapse SPICE continuation markers (`\n+`) from parameter values.
 //
@@ -335,7 +359,7 @@ static std::optional<PTModel> buildSpiceModelCard(const netlist::SpiceModel& m,
     if (master.empty()) return std::nullopt;
 
     std::string modelName = nameOverride.empty() ? sv(m.name) : nameOverride;
-    PTModel mod(spiceId(modelName), Id(master.c_str()));
+    PTModel mod(spiceModelId(modelName), Id(master.c_str()));
 
     std::set<std::string> excl = extraExclude;
     excl.insert("level");
@@ -824,9 +848,9 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
 
             std::string master;
             if (!mdl.empty()) {
-                master = mdl;   // explicit model reference (future-proofing)
+                master = spiceModelName(mdl);   // explicit model reference (future-proofing)
             } else if (valIsModel) {
-                master = val;   // value is a model card name
+                master = spiceModelName(val);   // value is a model card name
             } else {
                 // Plain resistor: value (if any) is the resistance. Default to
                 // the ngspice sp_resistor master so instance params like
@@ -845,12 +869,12 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             std::string master;
             std::string cval;
             if (!mdl.empty()) {
-                master = mdl;
+                master = spiceModelName(mdl);
                 cval = val;
             } else if (!val.empty() &&
-                       (hasSpiceModel(into, val) ||
+                       (hasSpiceModel(into, spiceModelName(val)) ||
                         spiceParamsHaveAny(dev.params, {"c", "w", "l"}))) {
-                master = val;
+                master = spiceModelName(val);
             } else {
                 master = "sp_capacitor";
                 ensureSpiceModel(into, "sp_capacitor");
@@ -864,7 +888,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             break;
         }
         case netlist::SpiceDeviceKind::Inductor: {
-            std::string master = mdl.empty() ? "inductor" : mdl;
+            std::string master = mdl.empty() ? "inductor" : spiceModelName(mdl);
             ensureSpiceModel(into, "inductor");
             PTInstance inst(Id(name.c_str()), Id(master.c_str()), spiceNodeList(dev.nodes));
             if (!val.empty()) inst.add(p.parseParameters("l=" + val));
@@ -904,7 +928,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                                  << "' has no model reference (skipped)\n";
                 break;
             }
-            PTInstance inst(Id(name.c_str()), Id(mdl.c_str()), spiceNodeList(dev.nodes));
+            PTInstance inst(Id(name.c_str()), spiceModelId(mdl), spiceNodeList(dev.nodes));
             // Note: Rust Diode projects value="" (area not a named OSDI param in diode.va).
             auto ps = lc(paramString(dev.params));
             if (!ps.empty()) inst.add(p.parseParameters(ps));
@@ -920,7 +944,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                                  << "' has no model reference (skipped)\n";
                 break;
             }
-            PTInstance inst(Id(name.c_str()), Id(mdl.c_str()), spiceNodeList(dev.nodes));
+            PTInstance inst(Id(name.c_str()), spiceModelId(mdl), spiceNodeList(dev.nodes));
             auto ps = lc(paramString(dev.params));
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
@@ -947,7 +971,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                                  << "' has no model reference (skipped)\n";
                 break;
             }
-            PTInstance inst(Id(name.c_str()), Id(mdl.c_str()), spiceNodeList(dev.nodes));
+            PTInstance inst(Id(name.c_str()), spiceModelId(mdl), spiceNodeList(dev.nodes));
             auto ps = lc(paramString(dev.params));
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
