@@ -65,18 +65,43 @@ std::ostream& operator<<(std::ostream& os, const PTParameters& obj) {
     return os;
 }
 
-
 void PTModel::dump(int indent, std::ostream& os) const {
     std::string pfx = std::string(indent, ' ');
-    os << pfx << "model " << (modelName_) << " " << (deviceName_) << " ";
+    os << pfx;
+    os << "model " << (modelName_) << " " << (deviceName_) << " ";
     os << parameters_ << "\n";
 }
 
 
 void PTInstance::dump(int indent, std::ostream& os) const {
     std::string pfx = std::string(indent, ' ');
-    os << pfx << (instanceName_) << " (" << connections_ << ") ";
+    os << pfx << (instanceName_);
+    if (behavioralData_.get()) {
+        os << " (" << connections_[0].name() << " " << connections_[1].name();
+        for(auto& n : behavioralData_->node) {
+            auto& [nId, nVaName, ndx] = n;
+            os << " " << nId;
+        }
+        for(auto& f : behavioralData_->flow) {
+            auto& [fId, fVaName, ndx] = f;
+            os << " " << fId << ":flow(br)";
+        }
+        os << ") ";
+    } else {
+        os << " (" << connections_ << ") ";
+    }
     os << masterName_ << " " << parameters_ << "\n";
+}
+
+void PTBehavioral::dump(int indent, std::ostream& os) const {
+    std::string pfx = std::string(indent, ' ');
+    os << pfx << "// " << (instanceName_) << " (" << connections_ << ")";
+    os << (currentSource_ ? " flow=" : " potential=" );
+    os << expr_.str() << " discipline=[";
+    os << "\"" << discipline_ << "\", ";
+    os << "\"" << potentialAccessor_ << "\", ";
+    os << "\"" << flowAccessor_ << "\"";
+    os << "]\n";
 }
 
 
@@ -107,6 +132,9 @@ void PTBlock::dump(int indent, std::ostream& os) const {
     }
     for(auto& inst : instances_) {
         inst.dump(indent, os);
+    }
+    for(auto& behav : behaviorals_) {
+        behav.dump(indent, os);
     }
     if (hasBlockSequences()) {
         for(auto& seq: *blockSequences_) {
@@ -280,6 +308,10 @@ bool PTInstance::verify(int level, Status& s) const {
     return true;
 }
 
+bool PTBehavioral::verify(int level, Status& s) const {
+    return true;
+}
+
 bool PTBlock::verify(int level, Status& s) const {
     // Check models
     for(auto& mod : models_) {
@@ -291,6 +323,13 @@ bool PTBlock::verify(int level, Status& s) const {
     // Check instances
     for(auto& inst : instances_) {
         if (!inst.verify(level, s)) {
+            return false;
+        }
+    }
+    
+    // Check behaviorals
+    for(auto& behav : behaviorals_) {
+        if (!behav.verify(level, s)) {
             return false;
         }
     }
@@ -436,6 +475,18 @@ bool PTAnalysis::verify(int level, Status& s) const {
     return true;
 }
 
+/*
+// Extract canonical name of the file that contains the behavioral source instance
+    std::string canonicalFileName;
+    Loc instanceLoc = @1.loc();
+    if (instanceLoc) {
+      auto [fileStack, fileIndex, line, col] = instanceLoc.data();
+      if (fileStack) {
+        canonicalFileName = fileStack->canonicalName(fileIndex);
+      }
+    }
+*/
+
 bool ParserTables::verifyWorker(int level, Status& s) const {
     // Check for duplicate analyses (all levels)
     std::unordered_map<Id,const PTAnalysis*> anmap;
@@ -473,77 +524,242 @@ bool ParserTables::verifyWorker(int level, Status& s) const {
     return true;
 }
 
+// Determine whether dumpedFile needs to be (re)written, given the set of
+// canonical paths of the files it depends on. The decision is based on a
+// side-car "<dumpedFile>.origin" file that records the dependency set used
+// to produce the current dumpedFile (one path per line): a dump is needed
+// if there are no known dependencies, dumpedFile or its origin file is
+// missing, the recorded dependency set differs from the current one, or
+// any dependency is newer than dumpedFile.
+static bool needsDump(const std::string& dumpedFile, const std::unordered_set<std::string>& dependencies) {
+    if (dependencies.empty()) {
+        // No known dependency, always dump
+        return true;
+    }
 
-bool ParserTables::writeEmbedded(int debug, Status& s) {
-    for(auto& e : embed_) {
-        // Do we have a valid location of the embed directive
-        bool dump = false;
-        std::string originFilePath;
-        std::string directiveLocationCanonicalPath;
-        if (!e.location()) {
-            // Location not available, always dump
-            dump = true;
-        } else {
-            // Get canonical path of file with the embed directive
-            auto [fs, pos, line, offset] = e.location().data();
-            directiveLocationCanonicalPath = fs->canonicalName(pos);
+    std::string originFilePath = dumpedFile + ".origin";
+    if (!std::filesystem::exists(originFilePath) || !std::filesystem::exists(dumpedFile)) {
+        return true;
+    }
 
-            // Build name of origin file - add .origin to dumped file name
-            originFilePath = e.filename() + ".origin";
-            
-            // Does origin file exist, does dumped file exist
-            if (
-                !std::filesystem::exists(originFilePath) ||
-                !std::filesystem::exists(e.filename())
-            ) {
-                // No, dump
-                dump = true;
-            } else {
-                // Read origin file, get name of the file with the embed directive that
-                // produced the existing dumped file
-                std::ifstream file(originFilePath);
-                if (!file) {
-                    // Failed to read, dump
-                    dump = true;
-                } else {
-                    // Read origin file to get actual origin
-                    auto originatorFile = std::string(
-                        std::istreambuf_iterator<char>(file),
-                        std::istreambuf_iterator<char>()
-                    );
-                    file.close();
+    // Read the recorded dependency set
+    std::ifstream originFile(originFilePath);
+    if (!originFile) {
+        return true;
+    }
+    std::unordered_set<std::string> recordedDependencies;
+    std::string line;
+    while (std::getline(originFile, line)) {
+        recordedDependencies.insert(line);
+    }
+    originFile.close();
 
-                    // Does the actual origin match the embed directive location
-                    if (originatorFile!=directiveLocationCanonicalPath) {
-                        // No, dump
-                        dump = true;
-                    } else {
-                        // Compare last modification of originator and dumped file
-                        auto refModificationTime = std::filesystem::last_write_time(originatorFile);
-                        auto fileModificationTime = std::filesystem::last_write_time(e.filename());
-                        if (refModificationTime>fileModificationTime) {
-                            // Originator is newer, dump
-                            dump = true;
-                        }
+    if (recordedDependencies!=dependencies) {
+        return true;
+    }
+
+    // Any dependency newer than the dumped file?
+    auto dumpedModificationTime = std::filesystem::last_write_time(dumpedFile);
+    for(auto& dep : dependencies) {
+        if (std::filesystem::last_write_time(dep)>dumpedModificationTime) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Record the dependency set used to produce dumpedFile, for future
+// needsDump() calls. Failure to write is silently ignored, same as the
+// previous single-file origin-tracking behavior.
+static void writeDependencyFile(const std::string& dumpedFile, const std::unordered_set<std::string>& dependencies) {
+    std::ofstream originFile(dumpedFile + ".origin", std::ios::out);
+    if (!originFile) {
+        return;
+    }
+    for(auto& dep : dependencies) {
+        originFile << dep << "\n";
+    }
+    originFile.close();
+}
+
+bool ParserTables::processBehaviorals(int debug, Status& s) {
+    if (behavioralsProcessed_) {
+        s.set(Status::InternalError, "ParserTables::processBehaviorals() called more than once.");
+        return false;
+    }
+    behavioralsProcessed_ = true;
+
+    // Verilog-A
+    std::string va = "`include \"constants.vams\"\n`include \"disciplines.vams\"\n\n";
+
+    // Set of dependencies
+    std::unordered_set<std::string> dependencies;
+
+    // Count behavioral sources
+    size_t behavCount = 0;
+
+    // Work list of subcircuit definitions still to process, starting with
+    // the root (default) subcircuit definition
+    std::vector<std::tuple<PTSubcircuitDefinition*, const std::string>> subDefStack{ {&defaultSubDef_, ""} };
+    while (!subDefStack.empty()) {
+        // Copy out by value: subsequent push_back() calls in this iteration
+        // (below) can reallocate the vector, which would invalidate a
+        // reference obtained from back(); pop_back() alone would also
+        // destroy such a reference's target.
+        auto [ subDef, moduleNameRoot ] = std::move(subDefStack.back());
+        subDefStack.pop_back();
+
+        // Queue nested subcircuit definitions
+        for(auto& subSubDef : subDef->subDefs()) {
+            auto name = moduleNameRoot + "_" + Rpn::sanitizeVariable(std::string(subSubDef->name()));
+            subDefStack.push_back( {subSubDef.get(), name} );
+        }
+
+        // Work list of blocks still to process within this subcircuit
+        // definition, starting with its root block
+        std::vector<std::tuple<PTBlock*,const std::string>> blockStack{ {&subDef->root(), ""} };
+        while (!blockStack.empty()) {
+            // Copy out by value, same reasoning as subDefStack above.
+            auto [blk, blockNameRoot] = std::move(blockStack.back());
+            blockStack.pop_back();
+
+            for(auto& behav : blk->behaviorals()) {
+                // Create module definition
+                RPNBehavioralVA behavData = {
+                    // Construct module name
+                    .moduleName = "__behavioral" + (blockNameRoot.size()>0 ? (moduleNameRoot+"_"+blockNameRoot) : moduleNameRoot) + "_" + std::string(behav.name()), 
+                    .currentSource = behav.currentSource(), 
+                };
+                // Run Rpn::verilogA
+                if (!behav.expr().verilogA(behav.discipline(), behav.potentialAccessor(), behav.flowAccessor(), behavData, s)) {
+                    if (!behav.location()) {
+                        s.extend("  in behavioral source '"+std::string(behav.name())+"'.");
+                    }
+                    return false;
+                }
+
+                // Append to Verilog-A file
+                va += behavData.vaCode+"\n\n";
+                behavCount++;
+
+                // Create model, same name as module
+                PTModel behavModel(Id(behavData.moduleName), Id(behavData.moduleName), behav.location());
+                for(auto& [paramId, paramVaName, paramType, paramIdx] : behavData.param) {
+                    Rpn passthrough;
+                    passthrough.extend(Rpn::Identifier(std::string(paramId)), behav.location());
+                    behavModel.add(PTParameterExpression(Id(paramVaName), std::move(passthrough), behav.location()));
+                }
+                blk->add(std::move(behavModel));
+
+                // Create instance
+                // Check number of connections_ (must be 2)
+                if (behav.connections().size()!=2) {
+                    s.set(Status::BadArguments, "Behavioral source instance '"+std::string(behav.name())+"' requires exactly 2 terminals.");
+                    s.extend(behav.location());
+                    return false;
+                }
+                PTIdentifierList behavTerms;
+                behavTerms.push_back(behav.connections()[0]);
+                behavTerms.push_back(behav.connections()[1]);
+                // Then connect RPNBehavioralVA::node nodes
+                for(auto& [nodeId, nodeVaName, nodeIdx] : behavData.node) {
+                    behavTerms.push_back(PTParsedIdentifier(nodeId, behav.location()));
+                }
+                // RPNBehavioralVA::flow nodes should not be connected at instance creation. 
+                // They should not be connected to internal nodes (handled by OsdiInstance::buildHierarchy()). 
+                // They are connected during OsdiInstance::populateStructuresCore(). 
+                PTInstance behavInstance(behav.name(), Id(behavData.moduleName), std::move(behavTerms), behav.location());
+                behavInstance.addBehavioralData(std::move(behavData));
+                blk->add(std::move(behavInstance));
+
+                // Get canonical name of source file where this behavioral is defined
+                std::string canonicalFileName;
+                if (behav.location()) {
+                    auto [fileStack, fileIndex, line, col] = behav.location().data();
+                    if (fileStack) {
+                        canonicalFileName = fileStack->canonicalName(fileIndex);
+                        // Add to set of dependencies
+                        dependencies.insert(canonicalFileName);
                     }
                 }
             }
+
+            // Queue the blocks of all block sequences within this block
+            if (blk->hasBlockSequences()) {
+                auto seqNdx = 0;
+                for(auto& seq : blk->blockSequences()) {
+                    auto blkNdx = 0;
+                    for(auto& [loc, cond, innerBlk] : seq.entries()) {
+                        std::string blkName = blockNameRoot.size()>0 ? (blockNameRoot + "_") : "";
+                        blkName += "s" + std::to_string(seqNdx) + "b" + std::to_string(blkNdx);
+                        blockStack.push_back( {&innerBlk, blkName} );
+                        blkNdx++;
+                    }
+                    seqNdx++;
+                }
+            }
+        }
+    }
+
+    // No behavioral sources, we are done
+    if (behavCount==0) {
+        return true;
+    }
+
+    // Get the file name of the toplevel netlist
+    // Behavioral sources may not come from a file at all (e.g. a circuit
+    // built entirely through the API), in which case there is no toplevel
+    // netlist file to derive a name from. In that case only the name 
+    // extension is used. 
+    std::string vaFileName;
+    if (fileStack_.isFileEntry(0)) {
+        vaFileName = fileStack_.canonicalName(0);
+    }
+    // Extract the file name, keep only file name, not full path
+    // because we want to write in the work directory. 
+    vaFileName = std::filesystem::path(vaFileName).filename().string();
+    // Extend with __behavioral.va
+    vaFileName += "__behavioral.va";
+
+    // Do we need to dump?
+    bool dump = needsDump(vaFileName, dependencies);
+
+    // Dump Verilog-A file
+    if (dump) {
+        writeDependencyFile(vaFileName, dependencies);
+
+        std::ofstream vaFile(vaFileName, std::ios::out);
+        if (!vaFile) {
+            s.set(Status::CreationFailed, "Failed to write file '"+vaFileName+"'.");
+            return false;
+        }
+        vaFile << va;
+        vaFile.close();
+    }
+
+    // Add load directive
+    loads_.push_back(PTLoad(vaFileName));
+
+    return true;
+}
+
+bool ParserTables::writeEmbedded(int debug, Status& s) {
+    for(auto& e : embed_) {
+        // Embedded files depend on the single file that contains the
+        // embed directive, if that location is known
+        std::unordered_set<std::string> dependencies;
+        if (e.location()) {
+            auto [fs, pos, line, offset] = e.location().data();
+            dependencies.insert(fs->canonicalName(pos));
         }
 
         // No need to dump
-        if (!dump) {
+        if (!needsDump(e.filename(), dependencies)) {
             continue;
         }
-        
-        // Create origin file
-        std::ofstream originFile(originFilePath, std::ios::out);
-        if (!originFile) {
-            // Failure to write origin file is silently inored
-        } else {
-            // Dump and close
-            originFile << directiveLocationCanonicalPath; 
-            originFile.close();
-        }
+
+        writeDependencyFile(e.filename(), dependencies);
 
         std::ofstream file(e.filename(), std::ios::out);
         if (!file) {

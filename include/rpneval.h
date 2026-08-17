@@ -7,6 +7,7 @@
 #include "context.h"
 #include "rpnexpr.h"
 #include "rpnstack.h"
+#include "rpnevalctx.h"
 #include "parseroutput.h"
 #include "common.h"
 
@@ -15,7 +16,7 @@ namespace NAMESPACE {
 
 class RpnEvaluator {
 public:
-    RpnEvaluator() {};
+    RpnEvaluator() : mcData_(nullptr) {};
 
     RpnEvaluator           (const RpnEvaluator&)  = delete;
     RpnEvaluator           (      RpnEvaluator&&) = default;
@@ -23,7 +24,7 @@ public:
     RpnEvaluator& operator=(      RpnEvaluator&&) = default;
 
     bool isConstant(const Rpn& expr) const;
-    bool evaluate(const Rpn& rpn, Value& result, Status& s=Status::ignore);
+    bool evaluate(const Rpn& rpn, Value& result, RpnEvaluationNetlistContext& ctx, Status& s=Status::ignore);
 
     RpnStack& stack() { return stack_; };
 
@@ -35,6 +36,9 @@ public:
 
     void appendLocation(Status& s, const Loc& id);
 
+    inline void setMCData(MCData* data) { mcData_ = data; };
+    inline MCData* mcData() { return mcData_; };
+
 protected:
     // OK, condition
     std::tuple<bool, bool> checkCondition(Status& s=Status::ignore) {
@@ -45,6 +49,7 @@ protected:
 private:
     RpnStack stack_;
     ContextStack contextStack_;
+    MCData* mcData_;
 };
 
 }

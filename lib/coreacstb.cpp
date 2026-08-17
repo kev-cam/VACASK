@@ -24,8 +24,8 @@ template<> int Introspection<ACStbParameters>::setup() {
     registerMember(mode);
     registerMember(points);
     registerMember(values);
-    registerMember(writeop);
     registerMember(write);
+    registerNamedMember(opParams.write, "writeop");
     registerNamedMember(opParams.nodeset, "nodeset");
     registerNamedMember(opParams.store, "store");
     
@@ -56,7 +56,7 @@ ACStbCore::~ACStbCore() {
 
 // Converts an OutputDescriptor into an OutputSource. 
 // The former can be used to recreate the latter if the set of unknowns changes. 
-bool ACStbCore::resolveOutputDescriptors(bool strict) {
+bool ACStbCore::resolveOutputDescriptors(bool strict, Status& s) {
     // Clear output sources
     outputSources.clear();
     // Resolve output descriptors
@@ -64,17 +64,17 @@ bool ACStbCore::resolveOutputDescriptors(bool strict) {
     for (auto it = outputDescriptors.cbegin(); it != outputDescriptors.cend(); ++it) {
         switch (it->type) {
         case OutdGain:
-            outputSources.emplace_back(&resultsVector, it->ndx);
+            outputSources.emplace_back(&resultsVector, it->ndx, it->name);
             break;
         case OutdY:
-            outputSources.emplace_back(&resultsVector, it->ndx);
+            outputSources.emplace_back(&resultsVector, it->ndx, it->name);
             break;
         case OutdFrequency:
-            outputSources.emplace_back(&frequency);
+            outputSources.emplace_back(&frequency, it->name);
             break;
         default:
             // Delegate to parent
-            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict);
+            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, s);
             break;
         }
         if (!ok) {
@@ -85,58 +85,49 @@ bool ACStbCore::resolveOutputDescriptors(bool strict) {
 }
 
 // These OutputDescriptors are always added
-bool ACStbCore::addCoreOutputDescriptors() {
-    clearError();
+bool ACStbCore::addCoreOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdFrequency, "frequency"))) {
-        lastError = Error::Descriptor;
-        errorId = "frequency";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for frequency."));
         return false;
     }
     // Forward/reverse/total open loop gain
     if (!addOutputDescriptor(OutputDescriptor(OutdGain, "wf", to_int(StbResult::Wf)))) {
-        lastError = Error::Descriptor;
-        errorId = "forward open-loop gain";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for forward open-loop gain."));
         return false;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdGain, "wr", to_int(StbResult::Wr)))) {
-        lastError = Error::Descriptor;
-        errorId = "reverse open-loop gain";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for reverse open-loop gain."));
         return false;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdGain, "w", to_int(StbResult::W)))) {
-        lastError = Error::Descriptor;
-        errorId = "open-loop gain";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for open-loop gain."));
         return false;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdY, "y(1,1)", to_int(StbResult::y11)))) {
-        lastError = Error::Descriptor;
-        errorId = "y11";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for y11."));
         return false;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdY, "y(1,2)", to_int(StbResult::y12)))) {
-        lastError = Error::Descriptor;
-        errorId = "y12";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for y12."));
         return false;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdY, "y(2,1)", to_int(StbResult::y21)))) {
-        lastError = Error::Descriptor;
-        errorId = "y21";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for y21."));
         return false;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdY, "y(2,2)", to_int(StbResult::y22)))) {
-        lastError = Error::Descriptor;
-        errorId = "y22";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for y22."));
         return false;
     }
     return true;
 }
 
 // These OutputDescriptors are added if no save directives are given
-bool ACStbCore::addDefaultOutputDescriptors() {
+bool ACStbCore::addDefaultOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
@@ -146,7 +137,7 @@ bool ACStbCore::addDefaultOutputDescriptors() {
     return true;
 }
 
-bool ACStbCore::initializeOutputs(Id name, Status& s) {
+bool ACStbCore::initializeOutputs(const std::string& name, Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
@@ -154,7 +145,7 @@ bool ACStbCore::initializeOutputs(Id name, Status& s) {
     // Create output file if not created yet
     if (!outfile) {
         outfile = new OutputRawfile(
-            name, outputDescriptors, outputSources,
+            name, outputSources,
             (circuit.simulatorOptions().core().rawfile==SimulatorOptions::rawfileBinary ? OutputRawfile::Flags::Binary : OutputRawfile::Flags::None) |
                 OutputRawfile::Flags::Padded | OutputRawfile::Flags::Complex);
         outfile->setTitle(circuit.title());
@@ -463,7 +454,7 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
         acSolution[refGnd]       -= 1;
 
         // Solve, set bucket to 0.0
-        if (!acMatrix.solve(dataWithoutBucket(acSolution))) {
+        if (!acMatrix.solve(dataWithoutBucket(acSolution, bucketSize))) {
             setError(StbError::MatrixError);
             if (debug>2) {
                 Simulator::dbg() << "Failed to solve factored system for injected current.\n";
@@ -473,7 +464,7 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
         }
         acSolution[0] = 0.0;
 
-        if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution), true, true)) {
+        if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution, bucketSize), true, true)) {
             setError(StbError::SolutionError);
             if (options.smsig_debug) {
                 Simulator::dbg() << "A solution entry for injected current is not finite. Solver failed.\n";
@@ -494,7 +485,7 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
         acSolution[e2] -= 1;
 
         // Solve, set bucket to 0.0
-        if (!acMatrix.solve(dataWithoutBucket(acSolution))) {
+        if (!acMatrix.solve(dataWithoutBucket(acSolution, bucketSize))) {
             setError(StbError::MatrixError);
             if (debug>2) {
                 Simulator::dbg() << "Failed to solve factored system for injected voltage.\n";
@@ -504,7 +495,7 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
         }
         acSolution[0] = 0.0;
 
-        if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution), true, true)) {
+        if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution, bucketSize), true, true)) {
             setError(StbError::SolutionError);
             if (options.smsig_debug) {
                 Simulator::dbg() << "A solution entry for injected voltage is not finite. Solver failed.\n";

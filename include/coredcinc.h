@@ -38,11 +38,9 @@ namespace NAMESPACE {
 typedef struct DCIncrementalParameters {
     OperatingPointParameters opParams;
     
-    Int writeop {0};  // 1 = dump operating point to <analysisname>.op.raw;
-    // Nodeset and store parameters of the operating point core 
-    // are also exposed. 
-
     Int write {1};    // Write the results to a file
+                      // writeop is the write parameter of op core
+                      // nodeset and store parameters of the op core are also exposed. 
 
     DCIncrementalParameters();
 } DCIncrementalParameters;
@@ -73,11 +71,11 @@ public:
     // Format error, return false on error - this function is not cheap (works with strings)
     bool formatError(Status& s=Status::ignore) const; 
 
-    bool addDefaultOutputDescriptors();
-    bool resolveOutputDescriptors(bool strict);
+    bool addDefaultOutputDescriptors(Status& s);
+    bool resolveOutputDescriptors(bool strict, Status& s=Status::ignore);
 
     bool rebuild(Status& s=Status::ignore); 
-    bool initializeOutputs(Id name, Status& s=Status::ignore);
+    bool initializeOutputs(const std::string& name, Status& s=Status::ignore);
     CoreCoroutine coroutine(bool continuePrevious);
     bool run(bool continuePrevious);
     bool finalizeOutputs(Status& s=Status::ignore);
@@ -89,6 +87,8 @@ public:
     OutputRawfile* outfile;
 
 protected:
+    static constexpr size_t bucketSize = 1;
+    
     // Clear error
     void clearError() { AnalysisCore::clearError(); lastDcIncrError = DCIncrementalError::OK; }; 
 

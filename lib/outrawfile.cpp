@@ -1,5 +1,5 @@
 #include "outrawfile.h"
-#include <chrono>
+#include "libplatform.h"
 #include <format>
 #include <iomanip>
 #include <filesystem>
@@ -10,8 +10,8 @@ namespace NAMESPACE {
 
 // std::endl is slow because it flushes the stream, use \n
 
-OutputRawfile::OutputRawfile(const std::string& baseName, Output::DescriptorList& descriptors, Output::SourcesList& sources, Flags f) 
-    : Output(baseName, descriptors, sources), FlagBase(f), fileName(baseName+".raw") {
+OutputRawfile::OutputRawfile(const std::string& baseName, Output::SourcesList& sources, Flags f) 
+    : Output(baseName, sources), FlagBase(f), fileName(baseName+".raw") {
     // Delete old file before opening
     if (std::filesystem::exists(fileName)) {
         std::filesystem::remove(fileName);
@@ -32,10 +32,8 @@ bool OutputRawfile::prologue(Status& s) {
     
     // Thread-safe local timestamp; asctime/localtime use shared static buffers.
     // floor<seconds> drops sub-second digits so %S matches asctime's layout.
-    auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
-    auto localTime = std::chrono::zoned_time{std::chrono::current_zone(), now};
-    outStream << "Date: " << std::format("{:%a %b %e %H:%M:%S %Y}", localTime) << "\n";
-
+    outStream << "Date: " << formattedTimestamp() << "\n";
+    
     outStream << "Plotname: " << plotname_ << "\n";
     outStream << "Flags: " << (checkFlags(Flags::Complex) ? "complex" : "real" ) 
               << (checkFlags(Flags::Padded) ? "" : " unpadded") << "\n";
@@ -48,8 +46,9 @@ bool OutputRawfile::prologue(Status& s) {
     // Add "Dimensions: n,n,n,...\n" for plots with multidimensional vectors
 
     outStream << "Variables:\n";
-    for(size_t i=0; i<descrs.size(); i++) {
-        outStream << "\t" << std::to_string(i) << "\t" << std::string(descrs[i].name) << "\t" << "notype"; 
+    for(size_t i=0; i<srcs.size(); i++) {
+        // outStream << "\t" << std::to_string(i) << "\t" << std::string(descrs[i].name) << "\t" << "notype"; 
+        outStream << "\t" << std::to_string(i) << "\t" << std::string(srcs[i].name()) << "\t" << "notype"; 
         // TODO: add " dims=n,n,n,...\n" for rawfiles with vectors of different length
         outStream << "\n"; 
     }
@@ -69,19 +68,19 @@ bool OutputRawfile::prologue(Status& s) {
 bool OutputRawfile::addPoint(Status& s) {
     if (checkFlags(Flags::Binary)) {
         if (checkFlags(Flags::Complex)) {
-            for(size_t i=0; i<descrs.size(); i++) {
+            for(size_t i=0; i<srcs.size(); i++) {
                 Complex c = srcs[i].getC();
                 outStream.write(reinterpret_cast<char*>(&c), sizeof(Complex));
             }
         } else {
-            for(size_t i=0; i<descrs.size(); i++) {
+            for(size_t i=0; i<srcs.size(); i++) {
                 double r = srcs[i].getR();
                 outStream.write(reinterpret_cast<char*>(&r), sizeof(double));
             }
         }
     } else {
         if (checkFlags(Flags::Complex)) {
-            for(size_t i=0; i<descrs.size(); i++) {
+            for(size_t i=0; i<srcs.size(); i++) {
                 if (i==0) {
                     outStream << " " << count;
                 }
@@ -89,7 +88,7 @@ bool OutputRawfile::addPoint(Status& s) {
                 outStream << "\t" << c.real() << "," << c.imag() << "\n";
             }
         } else {
-            for(size_t i=0; i<descrs.size(); i++) {
+            for(size_t i=0; i<srcs.size(); i++) {
                 if (i==0) {
                     outStream << " " << count;
                 }

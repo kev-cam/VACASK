@@ -508,9 +508,6 @@ Node* Circuit::getNode(Id name, Node::Flags type, Status& s) {
         node->setFlags(Node::Flags::Shuntable);
     }
 
-    // By default residual is checked for the equation corresponding to this node
-    node->setFlags(Node::Flags::ResidualCheck);
-
     return node;
 }
 
@@ -1303,6 +1300,10 @@ bool Circuit::mapUnknowns(Status& s) {
         }
     }
 
+    // Prepare residual contribution counts
+    resistiveResidualContribCount.assign(atUnknown, 0);
+    reactiveResidualContribCount.assign(atUnknown, 0);
+
     return true;
 }
 
@@ -1439,25 +1440,23 @@ bool Circuit::evalAndLoad(CommonData& commons, EvalSetup* evalSetup, LoadSetup* 
     return retval;
 }
 
-AnnotatedSolution* Circuit::newStoredSolution(Id typeCode, Id name) {
+AnnotatedSolution& Circuit::newStoredSolution(Id name) {
     AnnotatedSolution* ptr;
-    auto it = solutionRepository.find({typeCode, name});
+    auto it = solutionRepository.find(name);
     if (it==solutionRepository.cend()) {
         // Not there, create
-        auto key = std::make_pair(typeCode, name);
-        auto [it, inserted] = solutionRepository.insert({key, AnnotatedSolution()});
-        ptr = &(it->second);
-    } else {
-        // Already there
-        ptr = &(it->second);
+        auto [it, inserted] = solutionRepository.insert({name, AnnotatedSolution()});
+        it->second.clear();
+        return it->second;
     }
-
-    return ptr;
+    // Already there
+    it->second.clear();
+    return it->second;
 }
 
-AnnotatedSolution* Circuit::storedSolution(Id typeCode, Id name) {
+AnnotatedSolution* Circuit::storedSolution(Id name) {
     AnnotatedSolution* ptr;
-    auto it = solutionRepository.find({typeCode, name});
+    auto it = solutionRepository.find({name});
     if (it==solutionRepository.cend()) {
         return nullptr;
     } else {
@@ -1547,7 +1546,10 @@ void Circuit::dumpUnknowns(int indent, std::ostream& os) const {
     std::string pfx = std::string(indent, ' ');
     auto n = unknownCountExcludingGround;
     for(decltype(n) i=0; i<=n; i++) {
-        os << pfx << i << " : " << reprNode(i)->name() << "\n";
+        os << pfx << i << " : " << reprNode(i)->name();
+        os << " : residual #resistve=" << int(resistiveResidualContribCount[i]);
+        os << " #reactive=" << int(reactiveResidualContribCount[i]);
+        os << "\n";
     }
 }
 

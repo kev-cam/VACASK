@@ -64,15 +64,24 @@ struct DevSourceInstanceParams {
     Real slopeglob; // break=auto: global relative slope change tolerance, default=0
     
     // AM, FM
-    // sinedc, ampl, freq, tdphase .. carrier sinusoidal, same as for type=sine
-    Real modfreq;  // modulation frequency
-    Real modphase; // modulation signal phase
-    Real modindex; // modulation index
+    Real modfreq;
+    Real modphase;
+    Real modindex; 
+    // AC, DC incremental
+    Real mag;
+    Real phase; // degrees (only for AC)
+    // (Quasi)periodic small-signal excitation
+    ValueVector spur; // spurs where small signal excitations are inserted - list holding 
+                       // - reals (frequency), 
+                       // - integer vectors (tone weights)
+                       // Default is empty list {} - no excitation
+    // If the vector is shorter than the number of spurs, zeros are assumed. 
+    // If it is longer than the number of spurs, the extra components are ignored. 
+    RealVector smag;   // magnitudes corresponding to spurs
+                       // Empty vector by default. 
+    RealVector sphase; // phases in degrees corresponding to spurs
+                       // Empty vector by default. 
     
-    // small signal parameters
-    Real mag;   // magnitude (only for small-signal analyses)
-    Real phase; // phase in degrees (only for small-signal analyses)
-
     DevSourceInstanceParams();
 };
 
@@ -153,10 +162,12 @@ template<> std::tuple<EquationIndex,EquationIndex> BuiltinVSourceInstance::sourc
 template<> std::tuple<UnknownIndex,UnknownIndex> BuiltinVSourceInstance::sourceResponse(Circuit& circuit) const;
 template<> double BuiltinVSourceInstance::scaledUnityExcitation() const;
 template<> double BuiltinVSourceInstance::responseScalingFactor() const;
+template<> std::tuple<const ValueVector&, const RealVector&, const RealVector&> BuiltinVSourceInstance::spur() const;
 template<> std::tuple<EquationIndex,EquationIndex> BuiltinISourceInstance::sourceExcitation(Circuit& circuit) const;
 template<> std::tuple<UnknownIndex,UnknownIndex> BuiltinISourceInstance::sourceResponse(Circuit& circuit) const;
 template<> double BuiltinISourceInstance::scaledUnityExcitation() const;
 template<> double BuiltinISourceInstance::responseScalingFactor() const;
+template<> std::tuple<const ValueVector&, const RealVector&, const RealVector&> BuiltinISourceInstance::spur() const;
 template<> bool BuiltinVSourceInstance::getOutvar(ParameterIndex ndx, Value& v, Status& s) const;
 template<> bool BuiltinISourceInstance::getOutvar(ParameterIndex ndx, Value& v, Status& s) const;
 template<> std::tuple<bool, OutputSource> BuiltinVSourceInstance::outvarOutputSource(ParameterIndex ndx) const;

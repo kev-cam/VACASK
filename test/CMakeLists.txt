@@ -1,13 +1,17 @@
 # Testing - requires a working installation of python3 and openvaf
 
-# Directory where the python script that runs a test can be found
-# Use staging directory to keep source clean
-set(PYTHON_LIB "${STAGED_LIBRARY_DIRECTORY}/python")
-message("Python library path for testing: ${PYTHON_LIB}")
+set(TEST_DEPENDENCIES
+    diocalc.py
+    ../demo/ihp-sg13g2/.vacaskrc.toml
+)
 
 # macro that sets up a test
 macro(prepare_netlist_test simfile)
-file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${simfile}")
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${simfile}")
+    foreach(item IN ITEMS ${TEST_DEPENDENCIES})
+        file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/${item} DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/${simfile}")
+    endforeach()
+    
     add_test(NAME "${simfile}"
         COMMAND $<TARGET_FILE:sim> -dp "${CMAKE_CURRENT_SOURCE_DIR}/${simfile}"
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${simfile}"
@@ -22,19 +26,14 @@ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${simfile}")
         "${simfile}" PROPERTIES 
         ENVIRONMENT 
         "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR};SIM_TEST=yes"
-        TIMEOUT 15
+        TIMEOUT 20
     )
 endmacro()
 
 # Create directory for manually running tests from vscode
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/manual_run")
 
-set(TEST_DEPENDENCIES
-    diocalc.py
-)
-
 foreach(item IN ITEMS ${TEST_DEPENDENCIES})
-    file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/${item} DESTINATION "${CMAKE_CURRENT_BINARY_DIR}")
     file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/${item} DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/manual_run")
 endforeach()
 
@@ -65,6 +64,16 @@ prepare_netlist_test(test_hb2.sim)
 prepare_netlist_test(test_hb3.sim)
 prepare_netlist_test(test_hb4.sim)
 prepare_netlist_test(test_hb5.sim)
+prepare_netlist_test(test_hb6.sim)
+prepare_netlist_test(test_hbac1.sim)
+prepare_netlist_test(test_pss1.sim)
+prepare_netlist_test(test_pss2.sim)
+prepare_netlist_test(test_pss3.sim)
+prepare_netlist_test(test_pssosc1.sim)
+prepare_netlist_test(test_pssosc2.sim)
+prepare_netlist_test(test_pssosc3.sim)
+prepare_netlist_test(test_pssosc4.sim)
+prepare_netlist_test(test_pssosc5.sim)
 prepare_netlist_test(test_build.sim)
 prepare_netlist_test(test_cblock.sim)
 prepare_netlist_test(test_cblocksweep.sim)
@@ -79,3 +88,8 @@ prepare_netlist_test(test_mutual.sim)
 prepare_netlist_test(test_diode.sim)
 prepare_netlist_test(test_inverter.sim)
 prepare_netlist_test(test_optpar.sim)
+prepare_netlist_test(test_mc.sim)
+prepare_netlist_test(test_behav.sim)
+prepare_netlist_test(test_behavsym.sim)
+prepare_netlist_test(test_behavop.sim)
+prepare_netlist_test(test_behavnoise.sim)

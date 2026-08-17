@@ -252,16 +252,21 @@ instantiateIntrospection(TranParameters);
 TranCore::TranCore(
     OutputDescriptorResolver& parentResolver, TranParameters& params, OperatingPointCore& opCore, 
     Circuit& circuit, CommonData& commons, 
-    KluRealMatrix& jacobian, VectorRepository<double>& solution, VectorRepository<double>& states
+    KluRealMatrix& jacobian, VectorRepository<double>& opSolution, VectorRepository<double>& solution, 
+    VectorRepository<double>& states
 ) : AnalysisCore(parentResolver, circuit, commons), params(params), outfile(nullptr), opCore_(opCore), 
-    jacobian(jacobian), solution(solution), states(states), 
-    nrSolver(circuit, commons, jacobian, states, solution, nrSettings, integCoeffs) { 
+    jacobian(jacobian), opSolution(opSolution), solution(solution), states(states), 
+    nrSolver(circuit, commons, jacobian, states, solution, nrSettings, integCoeffs), 
+    icForcesSlot(2) { 
     // Slots 0 (current) and -1 (future) are used for the NR solver
     // Slots 1, 2, ... correspond to past values (at t_{k}, t_{k-1}, ...)
     // Therefore historyOffset needs to be set to 1 when calling 
     // preparePredictorHistory() and prepareDifferentiatorHistory(). 
     
     // Make another forces slot in opCore_'s solver
+    // Slot 0 is for continuation mode forces
+    // Slot 1 is for nodeset forces
+    // Slot 2 is for ic forces
     opCore_.solver().resizeForces(3);
 
     // Set analysis type for the initial operating point analysis
@@ -275,18 +280,18 @@ TranCore::~TranCore() {
     delete outfile;
 }
 
-bool TranCore::addDefaultOutputDescriptors() {
+bool TranCore::addDefaultOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (savesCount==0) {
-        return addAllUnknowns(PTSave("default", Id(), Id()));
+        return addAllUnknowns(PTSave("default", Id(), Id()), s);
     }
     return true;
 }
 
-bool TranCore::resolveOutputDescriptors(bool strict) {
+bool TranCore::resolveOutputDescriptors(bool strict, Status& s) {
     // Clear output sources
     outputSources.clear();
     // Resolve output descriptors
@@ -296,17 +301,17 @@ bool TranCore::resolveOutputDescriptors(bool strict) {
         Instance *inst;
         switch (it->type) {
         case OutdSolComponent:
-            ok = addRealVarOutputSource(strict, it->id, solution);
+            ok = addRealVarOutputSource(strict, it->id, solution, it->id, s);
             break;
         case OutdOutvar:
-            ok = addOutvarOutputSource(strict, it->idId.id1, it->idId.id2);
+            ok = addOutvarOutputSource(strict, it->idId.id1, it->idId.id2, it->name, s);
             break;
         case OutdTime:
-            outputSources.emplace_back(&(nrSolver.evalSetup().time));
+            outputSources.emplace_back(&(nrSolver.evalSetup().time), it->name);
             break;
         default:
             // Delegate to parent
-            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict);
+            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, s);
             break;
         }
         if (!ok) {
@@ -316,23 +321,21 @@ bool TranCore::resolveOutputDescriptors(bool strict) {
     return ok;
 }
 
-bool TranCore::addCoreOutputDescriptors() {
-    clearError();
+bool TranCore::addCoreOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     
     if (!addOutputDescriptor(OutputDescriptor(OutdTime, "time"))) {
-        lastError = Error::Descriptor;
-        errorId = "time";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for time."));
         return false;
     }
     return true;
 }
 
 std::tuple<bool, bool> TranCore::preMapping(Status& s) {
-    // Go through nodesets. Decode, set, and check delta part. 
+    // Go through ics. Decode, set, and check delta part. 
     // No need to check unknowns part because diagonal entries are
     // always allocated by Circuit. 
     auto& icParam = params.ic;
@@ -380,6 +383,7 @@ bool TranCore::populateStructures(Status& s) {
 }
 
 bool TranCore::rebuild(Status& s) {
+    clearError();
     // We are using the same Jacobian as operating point analysis
     
     // Bind Jacobian entries
@@ -422,14 +426,16 @@ bool TranCore::rebuild(Status& s) {
     // and after that OperatingPointCore::rebuild() because the 
     // latter one requires slot 2 to be populated in order to gather 
     // pointers to matrix entries. 
+    // opCore_.solver() slot 2 is filled with IC forces collected in OP mode
+    // ({"1", "2", 5.0} is treated as a delta force). 
     auto strictforce = circuit.simulatorOptions().core().strictforce; 
     auto& icParam = params.ic;
     if (icParam.type()==Value::Type::String) {
         String& solutionName = icParam.val<String>();
         if (solutionName.length()>0) {
             // Get solution from repository
-            auto solPtr = circuit.storedSolution("dc", solutionName);    
-            if (!solPtr) {
+            auto solPtr = circuit.storedSolution(solutionName);    
+            if (!solPtr || solPtr->typeTag()!=OperatingPointCore::solutionTag) {
                 // No initial conditions 
                 opCore_.solver().forces(2).clear();
                 if (params.icmode==icmodeOp) {
@@ -447,6 +453,8 @@ bool TranCore::rebuild(Status& s) {
                         opCore_.solver().formatError(s, &nr);
                         return false;
                     }
+                    Simulator::wrn() << "Warning, setting IC forces from solution '"+solutionName+"' failed.\n";
+                    opCore_.solver().forces(2).clear();
                 }
             }
         } else {
@@ -456,6 +464,8 @@ bool TranCore::rebuild(Status& s) {
     } else if (icParam.type()==Value::Type::ValueVec) {
         // A list with possibly delta forces
         // Set slot 2, use op mode for setting up initial conditions
+        // opCore_ solver slot 2 holds IC forces treated in OP mode 
+        // ({"1", "2", 5.0} is treated as a delta force)
         bool uicMode = false;
         if (!opCore_.solver().setForces(2, preprocessedIc, uicMode, strictforce)) {
             // Abort on error if strictforce is set
@@ -464,6 +474,8 @@ bool TranCore::rebuild(Status& s) {
                 opCore_.solver().formatError(s, &nr);
                 return false;
             }
+            Simulator::wrn() << "Warning, setting IC forces failed.\n";
+            opCore_.solver().forces(2).clear();
         }
     } else {
         // Error
@@ -472,7 +484,7 @@ bool TranCore::rebuild(Status& s) {
     }
 
     // Rebuild transient NR solver structures
-    if (!nrSolver.rebuild()) {
+    if (!nrSolver.rebuild(circuit.unknownCount())) {
         s.set(Status::NonlinearSolver, "Failed to rebuild internal structures of nonlinear solver.");
         return false;
     }
@@ -482,14 +494,14 @@ bool TranCore::rebuild(Status& s) {
     return true;
 }
 
-bool TranCore::initializeOutputs(Id name, Status& s) {
+bool TranCore::initializeOutputs(const std::string& name, Status& s) {
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     // Create output file if not created yet
     if (!outfile) {
         outfile = new OutputRawfile(
-            name, outputDescriptors, outputSources,
+            name, outputSources,
             (circuit.simulatorOptions().core().rawfile==SimulatorOptions::rawfileBinary ? OutputRawfile::Flags::Binary : OutputRawfile::Flags::None) |
                 OutputRawfile::Flags::Padded);
         outfile->setTitle(circuit.title());
@@ -509,9 +521,10 @@ bool TranCore::finalizeOutputs(Status& s) {
     
     // Write DC solution to repository if analysis is OK
     if (finished && params.store.length()>0) {
-        auto sol = circuit.newStoredSolution("dc", params.store);
-        sol->setNames(circuit);
-        sol->setValues(solution.vector());
+        auto& sol = circuit.newStoredSolution(params.store);
+        sol.setTypeTag(OperatingPointCore::solutionTag);
+        sol.setNames(circuit);
+        sol.setValues(solution.vector());
     }
 
     return true;
@@ -625,12 +638,13 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious) {
     ss << std::scientific << std::setprecision(15);
 
     // Check parameters
-    if (params.stop<=0) {
+    if (params.stop<0) {
         setError(TranError::Tstop);
         co_yield CoreState::Aborted;
     }
 
-    if (params.start>=params.stop) {
+    // Recording start must be before stop, unless stop is 0
+    if (params.start>=params.stop && params.stop>0) {
         setError(TranError::Tstart);
         co_yield CoreState::Aborted;
     }
@@ -835,23 +849,51 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious) {
         if (debug>0) {
             Simulator::dbg() << "Solving initial conditions with OP analysis.\n";
         }
+        // Assume we run op in continuePrevious mode
+        auto opContinuePrevious = continuePrevious;
         // Use the OP analysis logic to set up force slots 0 (continuation nodesets)
         // and 1 (user-specified nodesets). Slot 2 contains permanent forces (i.e. 
-        // initial condition). 
-        // If ic parameter is given, activate slot 2. 
-        // Forces in slot 2 were set during last call to rebuild(). 
-        opCore_.solver().enableForces(2, true);
-        
+        // initial condition).
+        // If there is at least one ic force, enable them, disable nodesets 
+        auto& icForces = opCore_.solver().forces(icForcesSlot);
+        if (icForces.empty()) {
+            // No ic forces, allow nodesets passed via nodeset parameter
+            // continuePrevious mode passed on from transient
+            opCore_.enableNodesets(true); 
+            // Disable ic forces in opCore_
+            opCore_.solver().enableForces(2, false);    
+            opCore_.solver().enableForces(icForcesSlot, false);    
+        } else {
+            // Have ic forces, disable nodesets passed via nodeset parameter
+            opCore_.enableNodesets(false);
+            // No continuePrevious mode
+            opContinuePrevious = false;
+            // Enable ic forces in opCore_
+            opCore_.solver().enableForces(2, false);    
+            opCore_.solver().enableForces(icForcesSlot, true);    
+        }
         // Run op analysis
-        if (!opCore_.run(continuePrevious)) {
+        if (!opCore_.run(opContinuePrevious)) {
             setError(TranError::OperatingPointError);
             co_yield CoreState::Aborted;
         }
+        // Copy solution to transient solution
+        solution.vector() = opSolution.vector();
     } else if (params.icmode==icmodeUic) {
+        // UIC mode does not invoke OP analysis
+        // It justs sets forcres wint uicMode=true and collects the initial solution
+        // from node forces. Forces slot 2 in transient core's solver is disabled by 
+        // default. 
         if (debug>0) {
             Simulator::dbg() << "Setting initial conditions.\n";
         }
         // Prepare RHS with values based on ic parameter
+        // First, fill slot 2 of transient core's solver with IC forces treated in UIC mode. 
+        // UIC mode creates no delta forces and checks for conflicts. 
+        // Have to do it here, beacuse ICs that are fine in OP mode may fail in UIC mode 
+        // and we don't want to fail in rebuild() if we are using OP mode. 
+        // Forces are set in UIC mode. 
+        // ({"1", "2", 5.0} is checked for conflicts and incorporated in node forces)
         bool uicMode = true;
         auto strictforce = circuit.simulatorOptions().core().strictforce; 
         
@@ -862,14 +904,16 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious) {
             String& solutionName = icParam.val<String>();
             if (solutionName.length()>0) {
                 // Get solution from repository
-                auto solPtr = circuit.storedSolution("dc", solutionName);    
-                if (solPtr) {
+                auto solPtr = circuit.storedSolution(solutionName);    
+                if (solPtr && solPtr->typeTag()==OperatingPointCore::solutionTag) {
                     if (!nrSolver.setForces(2, *solPtr, strictforce)) {
                         // Abort on error if strictforce is set
                         if (strictforce) {
                             setError(TranError::NRSolver);
                             co_yield CoreState::Aborted;
                         }
+                        Simulator::wrn() << "Warning, setting IC forces from solution '"+solutionName+"' failed.\n";
+                        nrSolver.forces(2).clear();
                     }
                 }
             }
@@ -881,13 +925,15 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious) {
                     setError(TranError::NRSolver);
                     co_yield CoreState::Aborted;
                 }
+                Simulator::wrn() << "Warning, setting IC forces failed.\n";
+                nrSolver.forces(2).clear();
             }
         } else {
             // Zero initial condition
             nrSolver.forces(2).clear();
         }
         
-        // Copy values to RHS
+        // Copy node forces from transient core's solver slot 2 to solution vector
         solution.vector() = nrSolver.forces(2).unknownValue_;
     } else {
         setError(TranError::IcMode);
@@ -912,15 +958,18 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious) {
         .solution = &solution, 
         .states = &states, 
 
+        // OpenVAF generated idt(a,b) computes the correct residual when EnableIntegration is true. 
+        // That happens if CALC_REACT_JACOBIAN is set and ANALYSIS_IC is false. 
         .staticAnalysis = false, 
         .dcAnalysis = false, 
         .tranAnalysis = true, 
         .nodesetEnabled = false, 
-        .icEnabled = true, 
+        .icEnabled = false, 
 
+        .evaluateReactiveJacobian = true, 
         .evaluateReactiveResidual = true, 
         .evaluateLinearizedReactiveRhsResidual = true, 
-
+        
         .storeReactiveState = true, 
         
         .computeBoundStep = true, 
@@ -970,6 +1019,14 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious) {
         co_yield CoreState::Finished;
     } else if (stopFlag) {
         co_yield CoreState::Stopped;
+    }
+
+    // tstop=0, exit now
+    if (params.stop<=0) {
+        if (debug) {
+            Simulator::dbg() << "Transient analysis finished.\n";
+        }
+        co_yield CoreState::Finished;
     }
 
     // Clear Converged, Bypassed, and HasDeviceHistory flags
@@ -1717,18 +1774,33 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious) {
 
             setProgress(tSolve, tSolve);
 
+            // Notify subclasses (e.g. PssTranCore) of the accepted point.
+            // Pass 'order' (the order used by integCoeffs at this step), not
+            // 'newOrder' (the order chosen for the next step).  The PSS
+            // sensitivity integrator must replay integCoeffs with the same
+            // order that was in effect when this step was accepted.
+            // This is a customization function.
+            // User is responsible for setting the error code and handling it during formatting.
+            // Called before pastTimesteps/tk are updated below, so a
+            // subclass reading getIntegCoeffs()/getPastTimesteps() here sees
+            // exactly the state compute() used for this step - not a buffer
+            // that has already been advanced past it.
+            if (!onTimestepAccepted(tSolve, hk, order)) {
+                co_yield CoreState::Aborted;
+            }
+
+            // Store timestep
+            pastTimesteps.add(hk);
+
+            // Advance time
+            tk = tSolve;
+
             // Check if we are done
             if (tSolve-params.stop>=-timeRelativeTolerance*params.stop) {
                 // Reached stop time, mark analysis as finished
                 finished = true;
                 break;
             }
-
-            // Store timestep
-            pastTimesteps.add(hk);
-            
-            // Advance time
-            tk = tSolve; 
 
             // Advance transient noise generators
             if (noisefmax) {
@@ -1799,7 +1871,6 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious) {
     } // while
 
     if (debug) {
-        
         if (tSolve>=params.stop) {
             Simulator::dbg() << "Transient analysis finished.\n";
         }
@@ -1846,7 +1917,7 @@ bool TranCore::formatError(Status& s) const {
             nrSolver.formatError(s, &nr);
             break;
         case TranError::Tstop: 
-            s.set(Status::Analysis, "Transient stop time must be greater than zero.");
+            s.set(Status::Analysis, "Transient stop time must not be negative.");
             break;
         case TranError::Tstart: 
             s.set(Status::Analysis, "Transient recording start time is after stop time.");

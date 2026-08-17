@@ -36,9 +36,9 @@ public:
 
 protected:
     virtual bool addCommonOutputDescriptor(const OutputDescriptor& desc);
-    virtual bool addCoreOutputDescriptors(Status& s=Status::ignore);
+    virtual bool addCoreOutputDescriptors(Status& s);
     virtual bool resolveSave(const PTSave& save, bool verify, Status& s=Status::ignore);
-    virtual bool addDefaultOutputDescriptors();
+    virtual bool addDefaultOutputDescriptors(Status& s);
     virtual void clearOutputDescriptors();
     virtual bool resolveOutputDescriptors(bool strict, Status& s=Status::ignore);
 
@@ -67,11 +67,14 @@ protected:
     
 private:
     IStruct<HBParameters> params;
-    HBCore core;
 
+    // Declared before core so the references core binds in its init list
+    // (jacColoc, jac, solution) refer to fully-constructed members.
     KluBlockSparseRealMatrix jacColoc; // Jacobian entries at colocation points
     KluBlockSparseRealMatrix jac; // HB Jacobian
     VectorRepository<double> solution; // Solution history
+
+    HBCore core;
 };
 
 }

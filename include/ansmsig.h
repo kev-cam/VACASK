@@ -14,7 +14,7 @@ public:
     typedef CoreClass::Parameters Parameters;
 
     // Will need to specialize the constructor
-    SmallSignal(Id name, Circuit& circuit, PTAnalysis& ptAnalysis) {};
+    SmallSignal(const std::string& name, Circuit& circuit, PTAnalysis& ptAnalysis) {};
     
     SmallSignal           (const SmallSignal&)  = delete;
     SmallSignal           (      SmallSignal&&) = delete;
@@ -37,7 +37,7 @@ protected:
     virtual bool addCommonOutputDescriptor(const OutputDescriptor& desc);
 
     // Add core-specific output descriptors, no error message is returned 
-    virtual bool addCoreOutputDescriptors(Status& s=Status::ignore);
+    virtual bool addCoreOutputDescriptors(Status& s);
     
     // Add operating point output descriptor(s) based on save, generates error message if verification is required
     // Returns ok, resolved
@@ -48,7 +48,7 @@ protected:
 
     // Add default output descriptors if no save is specified
     // No error message is returned
-    virtual bool addDefaultOutputDescriptors();
+    virtual bool addDefaultOutputDescriptors(Status& s);
 
     // Remove all output descriptors from all cores, transfer parameters from smsig to op
     // No error message is returned
@@ -100,12 +100,17 @@ protected:
     virtual void makeStateIncoherent(size_t ndx);
 
     IStruct<Parameters> params;
-    OperatingPointCore opCore;
-    CoreClass smsigCore;
-    
+
+    // Declared before the cores so the references they bind in their init lists
+    // (jac, solution, states) refer to fully-constructed members. opCore precedes
+    // smsigCore because smsigCore binds a reference to opCore. The DataMixin base
+    // members (acMatrix, acSolution, ...) are constructed before these and are safe.
     KluRealMatrix jac; // Resistive Jacobian
     VectorRepository<double> solution; // Solution history
     VectorRepository<double> states; // Circuit states
+
+    OperatingPointCore opCore;
+    CoreClass smsigCore;
 };
 
 template<typename CoreClass, typename DataMixin> 
@@ -119,31 +124,26 @@ bool SmallSignal<CoreClass, DataMixin>::addCommonOutputDescriptor(const OutputDe
 template<typename CoreClass, typename DataMixin> 
 bool SmallSignal<CoreClass, DataMixin>::addCoreOutputDescriptors(Status& s) {
     // False is returned if the descriptor is already there
-    if (!opCore.addCoreOutputDescriptors()) {
-        opCore.formatError(s);
+    if (!opCore.addCoreOutputDescriptors(s)) {
         return false;
     }
-    if (!smsigCore.addCoreOutputDescriptors()) {
-        smsigCore.formatError(s);
+    if (!smsigCore.addCoreOutputDescriptors(s)) {
         return false;
     }
     return true;
 }
 
 template<typename CoreClass, typename DataMixin> 
-bool SmallSignal<CoreClass, DataMixin>::addDefaultOutputDescriptors() {
+bool SmallSignal<CoreClass, DataMixin>::addDefaultOutputDescriptors(Status& s) {
     // Must be invoked on all cores regardless of return value
-    auto s1 = opCore.addDefaultOutputDescriptors();
-    auto s2 = smsigCore.addDefaultOutputDescriptors();
+    auto s1 = opCore.addDefaultOutputDescriptors(s);
+    auto s2 = smsigCore.addDefaultOutputDescriptors(s);
     return s1 && s2;
 }
 
 template<typename CoreClass, typename DataMixin> 
 void SmallSignal<CoreClass, DataMixin>::clearOutputDescriptors() {
     // Must be invoked on all cores regardless of return value
-    // Copy writeop parameter to write parameter of op core
-    params.core().opParams.write = params.core().writeop;
-    
     opCore.clearOutputDescriptors();
     smsigCore.clearOutputDescriptors();
 }
@@ -154,15 +154,13 @@ template<typename CoreClass, typename DataMixin>
 bool SmallSignal<CoreClass, DataMixin>::resolveOutputDescriptors(bool strict, Status& s) {
     // Any error causes immediate exit if strict is true
     // Before exit an error message is formatted and status is set
-    if (!opCore.resolveOutputDescriptors(strict)) {
+    if (!opCore.resolveOutputDescriptors(strict, s)) {
         if (strict) {
-            opCore.formatError(s);
             return false;
         }
     }
-    if (!smsigCore.resolveOutputDescriptors(strict)) {
+    if (!smsigCore.resolveOutputDescriptors(strict, s)) {
         if (strict) {
-            smsigCore.formatError(s);
             return false;
         }
     }
@@ -179,16 +177,17 @@ std::tuple<bool, bool> SmallSignal<CoreClass, DataMixin>::resolveOpSave(const PT
     static const auto idP = Id("p");
 
     bool st = true;
+    Status& s1 = verify ? s : Status::ignore;
     if (save.typeName() == idOpDefault) {
-        st = opCore.addAllUnknowns(save);
+        st = opCore.addAllUnknowns(save, s1);
     } else if (save.typeName() == idOpFull) {
-        st = opCore.addAllNodes(save);
+        st = opCore.addAllNodes(save, s1);
     } else if (save.typeName() == idV) {
-        st = opCore.addNode(save);
+        st = opCore.addNode(save, s1);
     } else if (save.typeName() == idI) {
-        st = opCore.addFlow(save);
+        st = opCore.addFlow(save, s1);
     } else if (save.typeName() == idP) {
-        st = opCore.addInstanceOutvar(save);
+        st = opCore.addInstanceOutvar(save, s1);
     } else {
         // Do not know how to handle this save
         if (verify) {
@@ -200,8 +199,6 @@ std::tuple<bool, bool> SmallSignal<CoreClass, DataMixin>::resolveOpSave(const PT
     }
     // Error detected in opCore save, verification required
     if (verify && !st) {
-        // Format error
-        opCore.formatError(s);
         s.extend(save.location());
     } 
     // Status, handled
@@ -249,11 +246,11 @@ bool SmallSignal<CoreClass, DataMixin>::rebuildCores(Status& s) {
 template<typename CoreClass, typename DataMixin> 
 bool SmallSignal<CoreClass, DataMixin>::initializeOutputs(Status& s) {
     // Any error exits immediately
-    if (!opCore.initializeOutputs(std::string(name_)+".op")) {
+    if (!opCore.initializeOutputs(prefixedName_+".op", s)) {
         opCore.formatError(s);
         return false;
     }
-    if (!smsigCore.initializeOutputs(name_)) {
+    if (!smsigCore.initializeOutputs(prefixedName_, s)) {
         smsigCore.formatError(s);
         return false;
     }
@@ -263,14 +260,14 @@ bool SmallSignal<CoreClass, DataMixin>::initializeOutputs(Status& s) {
 template<typename CoreClass, typename DataMixin> 
 bool SmallSignal<CoreClass, DataMixin>::finalizeOutputs(Status& s) {
     // Finalization has to be performed on all cores, regardless of errors
-    auto ok1 = opCore.finalizeOutputs();
-    auto ok2 = smsigCore.finalizeOutputs();
+    Status s1, s2;
+    auto ok1 = opCore.finalizeOutputs(s1);
+    auto ok2 = smsigCore.finalizeOutputs(s2);
     if (!ok1) {
-        opCore.formatError(s);
+        s.set(s1);
     }
     if (!ok2) {
-        // Error in smsigCore will mask the error in op core
-        smsigCore.formatError(s);
+        s.set(s2);
     }
     return ok1 && ok2;
 }
@@ -278,14 +275,14 @@ bool SmallSignal<CoreClass, DataMixin>::finalizeOutputs(Status& s) {
 template<typename CoreClass, typename DataMixin> 
 bool SmallSignal<CoreClass, DataMixin>::deleteOutputs(Status& s) {
     // Output needs to be deleted for all cores
-    auto ok1 = opCore.deleteOutputs(std::string(name_)+".op");
-    auto ok2 = smsigCore.deleteOutputs(name_);
+    Status s1, s2;
+    auto ok1 = opCore.deleteOutputs(prefixedName_+".op", s1);
+    auto ok2 = smsigCore.deleteOutputs(prefixedName_, s2);
     if (!ok1) {
-        opCore.formatError(s);
+        s.set(s1);
     }
     if (!ok2) {
-        // Error in smsigCore will mask the error in op core
-        smsigCore.formatError(s);
+        s.set(s2);
     }
     return ok1 && ok2;
 }

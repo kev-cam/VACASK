@@ -23,7 +23,7 @@ public:
     // Resolves output descriptor, adds output sorce to srcs
     // Returns true on success
     // Fail by default 
-    virtual bool resolveOutputDescriptor(const OutputDescriptor& descr, Output::SourcesList& srcs, bool strict) { return false; };
+    virtual bool resolveOutputDescriptor(const OutputDescriptor& descr, Output::SourcesList& srcs, bool strict, Status& s) { return false; };
 };
 
 class Analysis;
@@ -55,14 +55,11 @@ class AnalysisCore : public ProgressTracker {
 public: 
     enum class Error {
         OK, 
-        Arguments, 
         NodeNotFound, 
-        OutvarNotFound, 
         InstanceNotFound, 
         OutputSpec, 
         OutputType, 
         InstanceNotSource, 
-        Descriptor, 
     };
 
     AnalysisCore(OutputDescriptorResolver& parentResolver, Circuit& circuit, CommonData& commons);
@@ -82,15 +79,16 @@ public:
     void clearOutputDescriptors();
 
     // Add an output descriptor to descriptors list of the core analysis
+    // Silently ignore duplicates
     bool addOutputDescriptor(const OutputDescriptor& descr);
     bool addOutputDescriptor(OutputDescriptor&& descr);
 
     // Add output descriptors that are not based on saves but are specific 
     // to analysis core (e.g. frequency, time). By default add nothing. 
-    bool addCoreOutputDescriptors() { return true; };
+    bool addCoreOutputDescriptors(Status& s) { return true; };
 
     // Add default output descriptors if no save has been provided
-    bool addDefaultOutputDescriptors() { return true; };
+    bool addDefaultOutputDescriptors(Status& s) { return true; };
     
     // Resolve all output descriptors into output sources
     // Delegate resolving of unknown decriptors to analysis
@@ -114,7 +112,7 @@ public:
     bool rebuild(Status& s=Status::ignore) { return true; }; 
     
     // Called before core is run (and once per sweep) to initalize output files
-    bool initializeOutputs(Id name, Status& s=Status::ignore) { return true; };
+    bool initializeOutputs(const std::string& name, Status& s=Status::ignore) { return true; };
 
     // Runs the core
     bool run(bool continuePrevious) { return true; };
@@ -140,6 +138,8 @@ public:
     virtual bool restoreState(size_t ndx) { return true; };
     // Make state in slot ndx incoherent
     virtual void makeStateIncoherent(size_t ndx);
+    // Get core state
+    CoreStateStorage& coreState(size_t ndx, bool storeDetails=true) { return coreStates.at(ndx); };
 
     // Homotopy interface
     // Return value: coverged, abort
@@ -156,31 +156,35 @@ public:
     void dump(std::ostream& os) const;
 
     // Common handlers for save directive -> output descriptor(s) 
-    bool addAllUnknowns(const PTSave& save);
-    bool addAllNodes(const PTSave& save);
-    bool addNode(const PTSave& save);
-    bool addFlow(const PTSave& save);
-    bool addInstanceOutvar(const PTSave& save);
-    bool addAllTfZin(const PTSave& save, std::unordered_map<Id,size_t>& nameMap);
-    bool addTf(const PTSave& save, std::unordered_map<Id,size_t>& nameMap);
-    bool addZin(const PTSave& save, std::unordered_map<Id,size_t>& nameMap);
-    bool addYin(const PTSave& save, std::unordered_map<Id,size_t>& nameMap);
-    bool addAllNoiseContribInst(const PTSave& save, bool details);
-    bool addNoiseContribInst(const PTSave& save, bool details);
+    bool addAllUnknowns(const PTSave& save, Status& s);
+    bool addAllNodes(const PTSave& save, Status& s);
+    bool addNode(const PTSave& save, Status& s);
+    bool addFlow(const PTSave& save, Status& s);
+    bool addInstanceOutvar(const PTSave& save, Status& s);
+    bool addAllTfZin(const PTSave& save, std::unordered_map<Id,size_t>& nameMap, Status& s);
+    bool addTf(const PTSave& save, std::unordered_map<Id,size_t>& nameMap, Status& s);
+    bool addZin(const PTSave& save, std::unordered_map<Id,size_t>& nameMap, Status& s);
+    bool addYin(const PTSave& save, std::unordered_map<Id,size_t>& nameMap, Status& s);
+    bool addAllNoiseContribInst(const PTSave& save, bool details, Status& s);
+    bool addNoiseContribInst(const PTSave& save, bool details, Status& s);
     
     // Common handlers for output descriptor -> output source
-    bool addRealVarOutputSource(bool strict, Id name, const Vector<double>& solution);
-    bool addRealVarOutputSource(bool strict, Id name, const VectorRepository<double>& solution);
-    bool addComplexVarOutputSource(bool strict, Id name, const Vector<Complex>& solution);
-    bool addComplexVarOutputSource(bool strict, Id name, const VectorRepository<Complex>& solution);
-    bool addOutvarOutputSource(bool strict, Id instance, Id outvar);
+    // Always return true if strict=false, return false on error when struct=true
+    bool addRealVarOutputSource(bool strict, Id name, const Vector<double>& solution, Id asName, Status& s);
+    bool addRealVarOutputSource(bool strict, Id name, const VectorRepository<double>& solution, Id asName, Status& s);
+    // Index of variable i -> index in solution i*stride+offset
+    // In classical analyses, like AC, stride=1, offset=0
+    bool addComplexVarOutputSource(bool strict, Id name, const Vector<Complex>& solution, size_t stride, size_t offset, Id asName, Status& s);
+    bool addComplexVarOutputSource(bool strict, Id name, const VectorRepository<Complex>& solution, size_t stride, size_t offset, Id asName, Status& s);
+    bool addOutvarOutputSource(bool strict, Id instance, Id outvar, Id asName, Status& s);
 
 protected:
+    void expectedSaveArgumentsError(int expectedArgumentCount, Status& s);
+
     // Clear error
     void clearError() { lastError = Error::OK; }; 
 
     enum Error lastError;
-    Int errorExpectedArgCount;
     Id errorId;
     Id errorId2;
 

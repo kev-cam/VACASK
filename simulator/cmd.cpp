@@ -4,10 +4,11 @@
 #include "simulator.h"
 #include "an.h"
 #include "platform.h"
+#include "simulator.h"
 #include "progressbar.h"
 #include "common.h"
 #include <type_traits>
-#include <chrono>
+#include <filesystem>
 
 
 namespace NAMESPACE {
@@ -31,7 +32,7 @@ static const std::string defaultTopDefName = "__topdef__";
 static const std::string defaultTopInstName = "__topinst__";
 
 CommandInterpreter::CommandInterpreter(ParserTables& tables, PTControl& control, Circuit& circuit) 
-    : printProgress_(true), runPostprocess_(true), 
+    : at_(0), printProgress_(true), runPostprocess_(true), 
       abortOnMatch(false), tables_(tables), control_(control), circuit_(circuit) {
     abortCommands.insert(idAnalysis);
     clearVariables();
@@ -100,7 +101,8 @@ bool CommandInterpreter::elaborate(const std::vector<Id>& names, const std::stri
     // Elaborate circuit
     // TODO: for now ignore devReq and Abort, Finish, Stop
     IStruct<SimulatorOptions> opt;
-    if (auto [ok, changed] = opt.setParameters(userOptions_, circuit_.variableEvaluator(), Parameterized::Write::All, s); !ok) {
+    RpnEvaluationNetlistContext ctx;
+    if (auto [ok, changed] = opt.setParameters(userOptions_, circuit_.variableEvaluator(), ctx, Parameterized::Write::All, s); !ok) {
         return false;
     }
     circuit_.setOptions(opt);
@@ -108,16 +110,17 @@ bool CommandInterpreter::elaborate(const std::vector<Id>& names, const std::stri
     return circuit_.elaborate(names, topDefName, topInstName, nullptr, s); 
 }
 
-bool CommandInterpreter::run(Status& s) {
-    for(auto& entry : control_) {
+InterpreterExitStatus CommandInterpreter::run(size_t from, Status& s) {
+    for(at_ = from; at_<control_.size(); at_++) {
+        auto& entry = control_[at_];
         if (std::holds_alternative<PTAnalysis>(entry)) {
             if (!minimalElaboration(s)) {
-                return false;
+                return InterpreterExitStatus::Error;
             }
             
             // Create analysis
             auto& ptAn = std::get<PTAnalysis>(entry);
-            if (printProgress_) {
+            if (printProgress_ && circuit_.paramEvaluator().mcData()==nullptr) {
                 Simulator::dbg() << "Running analysis '"+std::string(ptAn.name())+"'.\n";
             }
             Status tmps;
@@ -128,9 +131,12 @@ bool CommandInterpreter::run(Status& s) {
                     continue;
                 } else {
                     s.set(tmps);
-                    return false;
+                    return InterpreterExitStatus::Error;
                 }
             }
+
+            // Set file name prefix
+            an->setFileNamePrefix(analysisNamePrefix_);
 
             // Add options (expressions)
             an->add(userOptions_);
@@ -146,8 +152,8 @@ bool CommandInterpreter::run(Status& s) {
             AnalysisProgress progress(2, Simulator::dbg(), 0.1);
             // Mark start
             progress.begin();
-            // Install progress reporter
-            if (printProgress_ && progress.enabled()) {
+            // Install progress reporter, but only if we are not in a MC loop
+            if (printProgress_ && progress.enabled() && circuit_.paramEvaluator().mcData()==nullptr) {
                 // Install progress reporter
                 an->add(&progress);
             }
@@ -156,7 +162,7 @@ bool CommandInterpreter::run(Status& s) {
             // Mark end time
             progress.end();
             // Print final report
-            if (printProgress_) {
+            if (printProgress_&& circuit_.paramEvaluator().mcData()==nullptr) {
                 if (progress.enabled()) {
                     // Progress reporter enabled
                     // Report for one final time, force it
@@ -178,7 +184,7 @@ bool CommandInterpreter::run(Status& s) {
                     Simulator::err() << tmps.message() << "\n";
                 } else {
                     s.set(tmps);
-                    return false;
+                    return InterpreterExitStatus::Error;
                 }
             } else {
                 delete an;
@@ -189,61 +195,76 @@ bool CommandInterpreter::run(Status& s) {
             if (it==commandDescriptors.end()) {
                 s.set(Status::NotFound, "Command not found.");
                 s.extend(cmd.location());
-                return false;
+                return InterpreterExitStatus::HardFault;
             }
             auto& desc = it->second;
                         
             if (cmd.keywords().size()<desc.minKw) {
                 s.set(Status::BadArguments, "Too few keywords given. Expecting at least "+std::to_string(desc.minKw)+".");
                 s.extend(cmd.location());
-                return false;
+                return InterpreterExitStatus::HardFault;
             }
             if (cmd.keywords().size()>desc.maxKw) {
                 s.set(Status::BadArguments, "Too many keywords given. Expecting at most "+std::to_string(desc.maxKw)+".");
                 s.extend(cmd.location());
-                return false;
+                return InterpreterExitStatus::HardFault;
             }
             if (cmd.expressions().size()<desc.minExpr) {
                 s.set(Status::BadArguments, "Too few expressions specified. Expecting at least "+std::to_string(desc.minExpr)+".");
                 s.extend(cmd.location());
-                return false;
+                return InterpreterExitStatus::HardFault;
             }
             if (cmd.expressions().size()>desc.maxExpr) {
                 s.set(Status::BadArguments, "Too many expressions specified. Expecting at most "+std::to_string(desc.maxExpr)+".");
                 s.extend(cmd.location());
-                return false;
+                return InterpreterExitStatus::HardFault;
             }
             if (desc.limitArgs) {
                 for(auto& it : cmd.args().values()) {
                     if (!desc.allowedArgs.contains(it.name())) {
                         s.set(Status::BadArguments, "Command has no keyword argument named '"+std::string(it.name())+"'.");
                         s.extend(it.location());
-                        return false;
+                        return InterpreterExitStatus::HardFault;
                     }
                 }
                 for(auto& it : cmd.args().expressions()) {
                     if (!desc.allowedArgs.contains(it.name())) {
                         s.set(Status::BadArguments, "Command has no keyword argument named '"+std::string(it.name())+"'.");
                         s.extend(it.location());
-                        return false;
+                        return InterpreterExitStatus::HardFault;
                     }
                 }
             }
             
             Status tmps;
-            if (!desc.func(*this, cmd, tmps)) {
+            auto retStatus = desc.func(*this, cmd, tmps);
+            // Exit on hard faults
+            if (retStatus==InterpreterExitStatus::HardFault) {
+                s.set(tmps);
+                s.extend(cmd.location());
+                return retStatus;
+            }
+            // Exit requested by endmc
+            if (retStatus==InterpreterExitStatus::RequestMCExit) {
+                // Here we should look for last statement of the loop.
+                // Because endmc is the statement that triggered the exit and 
+                // also the last statement, we do nothing else. 
+                return retStatus;
+            }
+            // Other faults can be masked
+            if (retStatus!=InterpreterExitStatus::OK) {
                 s.extend(cmd.location());
 
                 if (!mustAbort(cmd.name())) {
                     Simulator::err() << tmps.message() << "\n";
                 } else {
                     s.set(tmps);
-                    return false;
+                    return InterpreterExitStatus::Error;
                 }
             }
         }
     }
-    return true;
+    return InterpreterExitStatus::EndReached;
 }
 
 void CommandInterpreter::addUserOption(const PTParameterValue& pv) {
@@ -255,12 +276,12 @@ void CommandInterpreter::addUserOption(const PTParameterExpression& pe) {
 }
 
 
-template<typename T> bool evaluateExpressions(RpnEvaluator& e, const PTCommand& cmd, std::vector<T>& out, Status& s) {
+template<typename T> bool evaluateExpressions(RpnEvaluator& e, RpnEvaluationNetlistContext& ctx, const PTCommand& cmd, std::vector<T>& out, Status& s) {
     out.clear();
     size_t i=0;
     for(auto& it : cmd.expressions()) {
         Value v;
-        if (!e.evaluate(it, v, s)) {
+        if (!e.evaluate(it, v, ctx, s)) {
             return false;
         }
         Value::Type t;
@@ -321,14 +342,14 @@ void CommandInterpreter::dumpOptionsMap(int indent, std::ostream& os) const {
     }
 }
 
-bool evaluateArgs(const PTCommand& cmd, RpnEvaluator& evaluator, std::unordered_map<Id, Value>& out, Status& s=Status::ignore) {
+bool evaluateArgs(const PTCommand& cmd, RpnEvaluator& evaluator, RpnEvaluationNetlistContext& ctx, std::unordered_map<Id, Value>& out, Status& s=Status::ignore) {
     out.clear();
     for(auto& it : cmd.args().values()) {
         out[it.name()] = it.val();
     }
     for(auto& it : cmd.args().expressions()) {
         Value v;
-        if (!evaluator.evaluate(it.rpn(), v, s)) {
+        if (!evaluator.evaluate(it.rpn(), v, ctx, s)) {
             return false;
         }
         out[it.name()] = std::move(v);
@@ -337,60 +358,85 @@ bool evaluateArgs(const PTCommand& cmd, RpnEvaluator& evaluator, std::unordered_
 }
 
 
-bool cmd_postprocess(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
+InterpreterExitStatus cmd_postprocess(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     if (!interpreter.postprocessingAllowed()) {
-        return true;
+        return InterpreterExitStatus::OK;
     }
 
     std::string prog;
     std::vector<std::string> args;
 
+    // Check if location is valid and extract name of file where the command is located
+    std::string parentFilePath;
+    const std::string* parentFilePathPtr = nullptr;
+    if (cmd.location()!=Loc::bad) {
+        auto [fs, pos, line, offset] = cmd.location().data();
+        if (pos!=FileStack::badFileId && !fs->canonicalName(pos).empty()) {
+            // get parent directory (canonicalName is empty for netlists parsed
+            // from an in-memory string, i.e. not backed by a real file)
+            parentFilePath = std::filesystem::path(fs->canonicalName(pos)).parent_path().string();
+            parentFilePathPtr = &parentFilePath;
+        }
+    }
+
     bool first = true;
+    RpnEvaluationNetlistContext ctx;
     for(auto& it : cmd.expressions()) {
         Value v;
-        if (!interpreter.variableEvaluator().evaluate(it, v, s)) {
-            return false;
+        if (!interpreter.variableEvaluator().evaluate(it, v, ctx, s)) {
+            return InterpreterExitStatus::Error;
         }
-        if (v.type()!=Value::Type::String) {
-            if (first) {
-                s.set(Status::BadArguments, "Program name must be a string.");
-            } else {
-                s.set(Status::BadArguments, "Program arguments must be strings.");
-            }
-            return false;
+        if (first && v.type()!=Value::Type::String) {
+            s.set(Status::BadArguments, "Program name must be a string.");
+            return InterpreterExitStatus::Error;
         }
         if (first) {
             prog = v.val<String>();
             first = false;
         } else {
-            args.push_back(v.val<String>());
+            if (v.type()==Value::Type::String) {
+                // Scalar strings are unquoted
+                args.push_back(v.val<String>());
+            } else {
+                // Everything else is stringified
+                // Strings in vectors and lists are quoted
+                args.push_back(v.str());
+            }
         }
     }
 
-    auto [ok, out, err] = runProcess(prog, args, &(Platform::pythonPath()), false, Simulator::fileDebug(), s);
-    return ok;
+    auto [ok, out, err] = runProcess(prog, args, &(Platform::pythonPath()), parentFilePathPtr, true, Simulator::fileDebug(), s);
+    Simulator::out() << out;
+    if (!err.empty()) {
+        Simulator::err() << err;
+    }
+    if (ok) {
+        return InterpreterExitStatus::OK;
+    } else {
+        return InterpreterExitStatus::Error;
+    }
 }
 
-bool cmd_abort(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
+InterpreterExitStatus cmd_abort(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     auto kw = cmd.keywords()[0].name();
     interpreter.clearAborts();
     if (kw==idAlways) {
         // Abort if command is not matched
         interpreter.setAbortOnMatch(false);
-        return true;
+        return InterpreterExitStatus::OK;
     } else if (kw==idExcept) {
         // Abort on all commands except the listed ones
         interpreter.setAbortOnMatch(false);
     } else if (kw==idNever) {
         // Never abort
         interpreter.setAbortOnMatch(true);
-        return true;
+        return InterpreterExitStatus::OK;
     } else if (kw==idOn) {
         // Abort on listed commands
         interpreter.setAbortOnMatch(true);
     } else {
         s.set(Status::BadArguments, "Unknown keyword '"+std::string(kw)+"'.");
-        return false;
+        return InterpreterExitStatus::HardFault;
     }
 
     // On, except
@@ -399,17 +445,17 @@ bool cmd_abort(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
         if (!interpreter.addAbort(it->name())) {
             // Failed to add (not a command)
             s.set(Status::BadArguments, "Unknown command '"+std::string(it->name())+"'.");
-            return false;
+            return InterpreterExitStatus::HardFault;
         }
     }
 
     // Two cases left: on, except
     interpreter.setAbortOnMatch(kw==idOn);
 
-    return true;
+    return InterpreterExitStatus::OK;
 }
 
-bool cmd_clear(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
+InterpreterExitStatus cmd_clear(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     if (cmd.keywords().size()==0) {
         // Clear all
         interpreter.clearVariables();
@@ -425,13 +471,13 @@ bool cmd_clear(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
             interpreter.clearUserOptions();
         } else {
             s.set(Status::BadArguments, "Unknown keyword '"+std::string(it.name())+"'.");
-            return false;
+            return InterpreterExitStatus::HardFault;
         }
     }
-    return true;
+    return InterpreterExitStatus::OK;
 }
 
-bool cmd_var(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
+InterpreterExitStatus cmd_var(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     auto& circuit = interpreter.circuit();
 
     // Computed value storage
@@ -440,9 +486,10 @@ bool cmd_var(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     std::vector<Value> ve(n);
 
     // Go through keywords, evaluate expressions
+    RpnEvaluationNetlistContext ctx;
     for(decltype(n) i=0; i<n; i++) { 
-        if (!interpreter.variableEvaluator().evaluate(ex[i].rpn(), ve[i], s)) {
-            return false;
+        if (!interpreter.variableEvaluator().evaluate(ex[i].rpn(), ve[i], ctx, s)) {
+            return InterpreterExitStatus::Error;
         }
     }
 
@@ -450,7 +497,7 @@ bool cmd_var(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     for(auto& it : cmd.args().values()) { 
         auto [ok, var_changed] = circuit.setVariable(it.name(), it.val(), s);
         if (!ok) {
-            return false;
+            return InterpreterExitStatus::Error;
         }
     }
 
@@ -458,19 +505,19 @@ bool cmd_var(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     for(decltype(n) i=0; i<n; i++) { 
         auto [ok, var_changed] = circuit.setVariable(ex[i].name(), ve[i], s);
         if (!ok) {
-            return false;
+            return InterpreterExitStatus::Error;
         }
     }
     
-    return true;
+    return InterpreterExitStatus::OK;
 }
 
-bool cmd_save(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
+InterpreterExitStatus cmd_save(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     interpreter.addSaves(cmd.saves());
-    return true;
+    return InterpreterExitStatus::OK;
 }
 
-bool cmd_options(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
+InterpreterExitStatus cmd_options(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
      // Go through keywords, store values
     auto& cx = interpreter.variableEvaluator().contextStack();
     for(auto& it : cmd.args().values()) { 
@@ -480,15 +527,15 @@ bool cmd_options(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     for(auto& it : cmd.args().expressions()) { 
         interpreter.addUserOption(it);
     }
-    return true;
+    return InterpreterExitStatus::OK;
 }
 
-bool cmd_alter(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
+InterpreterExitStatus cmd_alter(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     auto& circuit = interpreter.circuit();
 
     // If circuit is not elaborated, peform default elaboration, otherwise do nothing
     if (!interpreter.defaultElaboration(s)) {
-        return false;
+        return InterpreterExitStatus::HardFault;
     }
 
     auto& ev = circuit.variableEvaluator();
@@ -500,18 +547,19 @@ bool cmd_alter(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     if (what==idModel || what==idInstance) {
     } else {
         s.set(Status::BadArguments, "Unknown entity type '"+std::string(what)+"'.");
-        return false;
+        return InterpreterExitStatus::HardFault;
     }
 
     std::vector<std::string> objNames;
+    RpnEvaluationNetlistContext ctx;
     for(auto& it : cmd.expressions()) {
         Value v;
-        if (!ev.evaluate(it, v, s)) {
-            return false;
+        if (!ev.evaluate(it, v, ctx, s)) {
+            return InterpreterExitStatus::Error;
         }
         if (v.type()!=Value::Type::String) {
             s.set(Status::BadArguments, "Entity name must be a string.");
-            return false;
+            return InterpreterExitStatus::Error;
         }
         objNames.push_back(v.val<String>());
     }
@@ -519,37 +567,37 @@ bool cmd_alter(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     if (what==idModel) {
         for(auto& modelName : objNames) {
             if (!circuit.setModelParameters(modelName, cmd.args(), s)) {
-                return false;
+                return InterpreterExitStatus::Error;
             }
         }
     } else if (what==idInstance) {
         for(auto& instanceName : objNames) {
             if (!circuit.setInstanceParameters(instanceName, cmd.args(), s)) {
-                return false;
+                return InterpreterExitStatus::Error;
             }
         }
     }
     
-    return true;
+    return InterpreterExitStatus::OK;
 }
 
-bool cmd_elaborate(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
+InterpreterExitStatus cmd_elaborate(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     auto& circuit = interpreter.circuit();
 
     // Get keyword
     auto what = cmd.keywords()[0].name();
     if (what==idCircuit) {
-
         // Get definition names as ids
         std::vector<Id> names;
-        if (!evaluateExpressions(interpreter.variableEvaluator(), cmd, names, s)) {
-            return false;
+        RpnEvaluationNetlistContext ctx;
+        if (!evaluateExpressions(interpreter.variableEvaluator(), ctx, cmd, names, s)) {
+            return InterpreterExitStatus::HardFault;
         }
         
         // Get topdef and topinst
         std::unordered_map<Id, Value> args;
-        if (!evaluateArgs(cmd, interpreter.variableEvaluator(), args, s)) {
-            return false;
+        if (!evaluateArgs(cmd, interpreter.variableEvaluator(), ctx, args, s)) {
+            return InterpreterExitStatus::HardFault;
         }
 
         std::string topDefName; 
@@ -559,7 +607,7 @@ bool cmd_elaborate(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
                 topDefName = it1->second.val<String>();
             } else {
                 s.set(Status::BadArguments, "topdef must be a string.");
-                return false;
+                return InterpreterExitStatus::HardFault;
             }
         } else {
             topDefName = defaultTopDefName; 
@@ -572,34 +620,34 @@ bool cmd_elaborate(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
                 topInstName = it2->second.val<String>();
             } else {
                 s.set(Status::BadArguments, "topinst must be a string.");
-                return false;
+                return InterpreterExitStatus::HardFault;
             }
         } else {
             topInstName = defaultTopInstName;
         }
 
         // Elaborate circuit
-        return interpreter.elaborate(names, topDefName, topInstName, s);
+        return interpreter.elaborate(names, topDefName, topInstName, s) ? InterpreterExitStatus::OK : InterpreterExitStatus::HardFault;
     } else if (what==idChanges) {
         if (cmd.expressions().size()>0 || cmd.args().count()>0) {
             s.set(Status::BadArguments, "Elaboration of changes takes no expressions nor arguments.");
-            return false;
+            return InterpreterExitStatus::HardFault;
         }
         // Peform minimal elaboration in case circuit is not elaborated yet
-        return interpreter.minimalElaboration(s);
+        return interpreter.minimalElaboration(s) ? InterpreterExitStatus::OK : InterpreterExitStatus::HardFault;
     } else {
         s.set(Status::NotFound, "Unknown keyword '"+std::string(what)+"'.");
-        return false;
+        return InterpreterExitStatus::HardFault;
     }
-    return true;
+    return InterpreterExitStatus::OK;
 }
 
-bool cmd_print(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
+InterpreterExitStatus cmd_print(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     auto& circuit = interpreter.circuit();
 
     // Default elaboration if not elaborated yet, otherwise elaborate changes
     if (!interpreter.minimalElaboration(s)) {
-        return false;
+        return InterpreterExitStatus::HardFault;
     }
 
     auto trailingNewline = true;
@@ -613,8 +661,9 @@ bool cmd_print(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
         } else if (what=="device_file") {
             // Evaluate arguments list
             std::vector<String> sVec;
-            if (!evaluateExpressions(interpreter.variableEvaluator(), cmd, sVec, s)) {
-                return false;
+            RpnEvaluationNetlistContext ctx;
+            if (!evaluateExpressions(interpreter.variableEvaluator(), ctx, cmd, sVec, s)) {
+                return InterpreterExitStatus::Error;
             }
             // Go through strings
             for(auto& pat : sVec) {
@@ -665,7 +714,7 @@ bool cmd_print(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
             commons.fromOptions(circuit.simulatorOptions().core());
             if (!circuit.setStaticTolerances(commons, s)) {
                 s.extend("Failed to retrieve tolerances.");
-                return false;
+                return InterpreterExitStatus::Error;
             }
             Simulator::out() << "Tolerances for unknowns/residuals:\n";
             circuit.dumpTolerances(2, commons, Simulator::out());
@@ -674,29 +723,30 @@ bool cmd_print(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
             circuit.dumpSparsity(2, Simulator::out());
         } else if (what=="instance" || what=="model" || what=="device") {
             std::vector<Id> idVec;
-            if (!evaluateExpressions(interpreter.variableEvaluator(), cmd, idVec, s)) {
-                return false;
+            RpnEvaluationNetlistContext ctx;
+            if (!evaluateExpressions(interpreter.variableEvaluator(), ctx, cmd, idVec, s)) {
+                return InterpreterExitStatus::Error;
             }
             for(auto id : idVec) {
                 if (what=="instance") {
                     auto obj = circuit.findInstance(id);
                     if (!obj) {
                         s.set(Status::NotFound, "Instance '"+std::string(id)+"' not found.");
-                        return false;
+                        return InterpreterExitStatus::Error;
                     }
                     obj->dump(0, circuit, Simulator::out());
                 } else if (what=="model") {
                     auto obj = circuit.findModel(id);
                     if (!obj) {
                         s.set(Status::NotFound, "Model '"+std::string(id)+"' not found.");
-                        return false;
+                        return InterpreterExitStatus::Error;
                     }
                     obj->dump(0, Simulator::out());
                 } else {
                     auto obj = circuit.findDevice(id);
                     if (!obj) {
                         s.set(Status::NotFound, "Device '"+std::string(id)+"' not found.");
-                        return false;
+                        return InterpreterExitStatus::Error;
                     }
                     obj->dump(0, Simulator::out());
                 }
@@ -732,7 +782,7 @@ bool cmd_print(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
             trailingNewline = false;
         } else {
             s.set(Status::NotFound, "Unknown keyword '"+std::string(what)+"'.");
-            return false;
+            return InterpreterExitStatus::HardFault;
         }
     } else {
         // Expressions
@@ -740,32 +790,34 @@ bool cmd_print(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
         std::string separatorString = " ";
         if (cmd.args().count()>0) {
             std::unordered_map<Id, Value> args;
-            if (!evaluateArgs(cmd, interpreter.variableEvaluator(), args, s)) {
-                return false;
+            RpnEvaluationNetlistContext ctx;
+            if (!evaluateArgs(cmd, interpreter.variableEvaluator(), ctx, args, s)) {
+                return InterpreterExitStatus::Error;
             }
             for (const auto& [id, value] : args) {
                 // use id and value
                 if (id == idEol) {
                     if (value.type()!=Value::Type::String) {
                         s.set(Status::BadArguments, "eol must be a string.");
-                        return false;
+                        return InterpreterExitStatus::HardFault;
                     }
                     eolString = value.val<const String>();
                 } else if (id == idSeparator) {
                     if (value.type()!=Value::Type::String) {
                         s.set(Status::BadArguments, "separator must be a string.");
-                        return false;
+                        return InterpreterExitStatus::HardFault;
                     }
                     separatorString = value.val<const String>();
                 } else {
                     s.set(Status::BadArguments, "Unknown keyword argument '"+std::string(id)+"'.");
-                    return false;
+                    return InterpreterExitStatus::HardFault;
                 }
             }
         }
         std::vector<Value> values;
-        if (!evaluateExpressions(interpreter.variableEvaluator(), cmd, values, s)) {
-            return false;
+        RpnEvaluationNetlistContext ctx;
+        if (!evaluateExpressions(interpreter.variableEvaluator(), ctx, cmd, values, s)) {
+            return InterpreterExitStatus::Error;
         }
         for(auto& v : values) {
             if (v.type()==Value::Type::String) {
@@ -782,22 +834,266 @@ bool cmd_print(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
     if (trailingNewline) {
         Simulator::out() << "\n";
     }
-    return true;
+    return InterpreterExitStatus::OK;
+}
+
+InterpreterExitStatus cmd_mc(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
+    // Are we inside a mc loop
+    if (interpreter.circuit().paramEvaluator().mcData()!=nullptr) {
+        s.set(Status::Syntax, "Nested Monte Carlo loops are not allowed.");
+        return InterpreterExitStatus::HardFault;
+    }
+
+    // Need command index to know where to start the mc loop
+    auto loopStart = interpreter.at() + 1;
+
+    // Get mc name
+    auto mcName = cmd.keywords()[0].name();
+
+    // Check uniqueness
+    if (!interpreter.isUniqueMc(mcName)) {
+        s.set(Status::Syntax, "Monte Carlo loops must have unique names.");
+        return InterpreterExitStatus::HardFault;
+    }
+
+    // Evaluate arguments
+    std::unordered_map<Id, Value> args;
+    RpnEvaluationNetlistContext ctx;
+    if (!evaluateArgs(cmd, interpreter.variableEvaluator(), ctx, args, s)) {
+        return InterpreterExitStatus::Error;
+    }
+
+    // Prepare MC data
+    MCData mcData;
+
+    // Set seed
+    auto it1 = args.find("seed");
+    if (it1!=args.end()) {
+        auto seed = it1->second;
+        if (!seed.convertInPlace(Value::Type::Int, s)) {
+            s.extend("Seed must be an integer.");
+            return InterpreterExitStatus::HardFault;
+        }
+        mcData.setSeed(seed.val<IntegerValue>());
+    } else {
+        // Default seed
+        mcData.setSeed(0);
+    }
+    
+    // Get number of samples
+    auto it2 = args.find("samples");
+    if (it2==args.end()) {
+        s.extend("Need number of samples.");
+        return InterpreterExitStatus::HardFault;
+    }
+    auto nsv = it2->second;
+    if (!nsv.convertInPlace(Value::Type::Int, s)) {
+        s.extend("Seed must be an integer.");
+        return InterpreterExitStatus::HardFault;
+    }
+    auto nsamples = nsv.val<IntegerValue>();
+    if (nsamples<=0) {
+        s.extend("Number of samples must be greater than zero.");
+        return InterpreterExitStatus::HardFault;
+    }
+
+    // Get debug
+    auto it3 = args.find("debug");
+    Int debug = 0;
+    if (it3!=args.end()) {
+        auto dbg = it3->second;
+        if (!dbg.convertInPlace(Value::Type::Int, s)) {
+            s.extend("Debug flag must be an integer.");
+            return InterpreterExitStatus::HardFault;
+        }
+        debug = dbg.val<Int>();
+    }
+
+    if (debug>2) {
+        mcData.setDebugStream(&Simulator::dbg());
+    }
+    
+    // Get strict
+    auto it4 = args.find("strict");
+    auto strict = false;
+    if (it4!=args.end()) {
+        auto str = it4->second;
+        if (!str.convertInPlace(Value::Type::Int, s)) {
+            s.extend("Strict flag must be an integer.");
+            return InterpreterExitStatus::HardFault;
+        }
+        strict = str.val<Int>();
+    }
+    
+    // Latin hypercube
+    auto it5 = args.find("lh");
+    auto lh = true;
+    if (it5!=args.end()) {
+        auto str = it5->second;
+        if (!str.convertInPlace(Value::Type::Int, s)) {
+            s.extend("Strict flag must be an integer.");
+            return InterpreterExitStatus::HardFault;
+        }
+        lh = str.val<Int>();
+    }
+    if (lh) {
+        mcData.setLHSamples(nsamples);
+    }
+    
+    // Put paramEvaluator into MC mode
+    interpreter.circuit().paramEvaluator().setMCData(&mcData);
+
+    if (interpreter.printProgress()) {
+        Simulator::dbg() << "Running MC analysis '"+std::string(mcName)+"'";
+        if (lh) {
+            Simulator::dbg() << " (Latin hypercube sampling)";
+        }
+        Simulator::dbg() << ".\n";
+    }
+
+    // Progress reporter
+    AnalysisProgress progress(2, Simulator::dbg(), 0.1);
+    // Mark start
+    progress.begin();
+
+    progress.setValueFormat(ProgressReporter::ValueFormat::Fixed, 0);
+    progress.setValueDecoration("sample# ", "");
+    progress.initProgress(nsamples, 0);
+    progress.report();
+
+    if (debug) {
+        progress.disable();
+    }
+
+    // Main loop
+    bool abort = false;
+    size_t ngen = 0;
+    for(decltype(nsamples) atSam=0; atSam<nsamples; atSam++) {
+        // Generate new sample if this is not the first iteration
+        if (atSam>0) {
+            mcData.advance();
+        }
+
+        // Set variables
+        interpreter.circuit().setVariable("MCSAMPLE", Int(atSam+1));
+
+        // Set analysis name prefix
+        interpreter.setAnalysisNamePrefix(std::string(mcName)+"."+std::to_string(atSam+1)+".");
+    
+        // Propagate parameters. In first iteration this populates the list of generators 
+        // and implicitly generates a sample. 
+        // Force global propagation by setting VariablesChanged flag
+        interpreter.circuit().setFlags(Circuit::Flags::VariablesChanged);
+        // Elaborate changes
+        if (!interpreter.minimalElaboration(s)) {
+            abort = true;
+            s.set(Status::Syntax, "Elaboration failed, Monte Carlo loop aborted.");
+            break;
+        }
+
+        if (debug>0) {
+            Simulator::out() << "MC generators (" << mcData.count() << "), sample #" << (atSam+1) << "\n";
+            if (atSam==0 || debug>1) {
+                mcData.dump(2, Simulator::out());
+            }
+        }
+        
+        // Run loop body
+        auto exitStatus = interpreter.run(loopStart, s);
+        // Hard faults abort
+        if (exitStatus==InterpreterExitStatus::HardFault) {
+            abort = true;
+            break;
+        }
+        // Errors abort. If needed they were ignored in the nested interpreter loop. 
+        // Exit status other than RequestMCExit mean that we reached the end without an endmc
+        if (exitStatus==InterpreterExitStatus::EndReached) {
+            abort = true;
+            s.set(Status::Syntax, "Monte Carlo loop without endmc.");
+            break;
+        } else if (exitStatus!=InterpreterExitStatus::RequestMCExit) {
+            // Loop finished prematurely
+            abort = true;
+            break;
+        }
+
+        
+        progress.setProgress(atSam+1, atSam+1);
+        progress.report();
+
+        if (atSam==0) {
+            ngen = mcData.count();
+        } else if (strict && mcData.count()!=ngen) {
+            abort = true;
+            s.set(Status::Syntax, "Number of MC generators changed between samples. Aborting.");
+            break;
+        }
+    }
+    progress.end();
+
+    // Print final report
+    if (interpreter.printProgress()) {
+        if (progress.enabled()) {
+            // Progress reporter enabled
+            // Report for one final time, force it
+            progress.report(true);
+            Simulator::dbg() << "\n" << std::flush;
+        } else {
+            // Progress reporter disabled
+            Simulator::dbg() << "  Elapsed time: "<< progress.time() << "\n";
+        }
+    }
+
+    // Remove analysis name prefix
+    interpreter.setAnalysisNamePrefix("");
+
+    if (abort) {
+        interpreter.circuit().paramEvaluator().setMCData(nullptr);
+        return InterpreterExitStatus::HardFault;
+    }
+
+    // Restore circuit state with zero variation
+    interpreter.circuit().paramEvaluator().setMCData(nullptr);
+    interpreter.circuit().setFlags(Circuit::Flags::VariablesChanged);
+    // Elaborate changes
+    if (!interpreter.minimalElaboration(s)) {
+        s.set(Status::Syntax, "Elaboration failed while restoring zero variation.");
+        return InterpreterExitStatus::HardFault;
+    }
+
+    // Interpreter pointer is now at endmc command
+    interpreter.circuit().paramEvaluator().setMCData(nullptr);
+    return InterpreterExitStatus::OK;
+}
+
+InterpreterExitStatus cmd_endmc(CommandInterpreter& interpreter, PTCommand& cmd, Status& s) {
+    if (interpreter.circuit().paramEvaluator().mcData()==nullptr) {
+        s.set(Status::Syntax, "endmc outside Monte Carlo loop.");
+        return InterpreterExitStatus::HardFault;
+    }
+    return InterpreterExitStatus::RequestMCExit;
 }
 
 std::unordered_map<Id, CommandInterpreter::CmdDesc> CommandInterpreter::commandDescriptors = {
-    //                                    keywords           expressions        keyword arguemnts
+    //                                    keywords           expressions        keyword arguments
     //                                    min max            min max            limit  allowed names
-    { Id::createStatic("abort"),        { 1,  CmdDesc::many, 0,  0,             true,  {},      cmd_abort } }, 
-    { Id::createStatic("clear"),        { 0,  CmdDesc::many, 0,  0,             true,  {},      cmd_clear } }, 
-    { Id::createStatic("save"),         { 0,  0,             0,  0,             true,  {},      cmd_save } }, 
-    { Id::createStatic("var"),          { 0,  0,             0,  0,             false, {},      cmd_var } }, 
-    { Id::createStatic("options"),      { 0,  0,             0,  0,             false, {},      cmd_options } }, 
-    { Id::createStatic("alter"),        { 1,  1,             0,  CmdDesc::many, false, {},      cmd_alter } }, 
-    { Id::createStatic("elaborate"),    { 1,  1,             0,  CmdDesc::many, true,  {"topdef", "topinst"}, cmd_elaborate } }, 
-    { Id::createStatic("print"),        { 0,  1,             0,  CmdDesc::many, true,  {"eol", "separator"},      cmd_print } }, 
-    { Id::createStatic("postprocess"),  { 0,  0,             1,  CmdDesc::many, true,  {},      cmd_postprocess } }, 
+    { Id::createStatic("abort"),        { 1,  CmdDesc::many, 0,  0,             true,  {},          cmd_abort } }, 
+    { Id::createStatic("clear"),        { 0,  CmdDesc::many, 0,  0,             true,  {},          cmd_clear } }, 
+    { Id::createStatic("save"),         { 0,  0,             0,  0,             true,  {},          cmd_save } }, 
+    { Id::createStatic("var"),          { 0,  0,             0,  0,             false, {},          cmd_var } }, 
+    { Id::createStatic("options"),      { 0,  0,             0,  0,             false, {},          cmd_options } }, 
+    { Id::createStatic("alter"),        { 1,  1,             0,  CmdDesc::many, false, {},          cmd_alter } }, 
+    { Id::createStatic("elaborate"),    { 1,  1,             0,  CmdDesc::many, true,  {"topdef", "topinst"}, 
+                                                                                                    cmd_elaborate } }, 
+    { Id::createStatic("print"),        { 0,  1,             0,  CmdDesc::many, true,  {"eol", "separator"},      
+                                                                                                    cmd_print } }, 
+    { Id::createStatic("postprocess"),  { 0,  0,             1,  CmdDesc::many, true,  {},          cmd_postprocess } }, 
+    { Id::createStatic("mc"),           { 1,  1,             0,  CmdDesc::many, true,  {"samples", "seed", "debug", "strict", "lh"},      
+                                                                                                    cmd_mc } }, 
+    { Id::createStatic("endmc"),        { 0,  0,             0,  CmdDesc::many, true,  {},          cmd_endmc } }, 
 };
+
+// mc mc1 samples=100 seed=1
 
 /*
 // Default abort mode: except analysis 

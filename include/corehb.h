@@ -3,7 +3,7 @@
 
 #include "densematrix.h"
 #include "klubsmatrix.h"
-#include "freqgrid.h"
+#include "spurs.h"
 #include "core.h"
 #include "corehbnr.h"
 #include "outrawfile.h"
@@ -29,11 +29,14 @@ typedef struct HBParameters {
                            // diamond .. diamond truncation (default)
                            //   sum abs(kj) <= immax, first nonzero kj must be >0
     Real samplefac {5};    // Sampling factor in time domain (>=1). 
+    Real tstart {0};       // Starting time for colocation point selection
     Real nper {1};         // Number of lowest frequency periods across which colocation points are selected
     Id sample {Id()};      // Sampling mode (uniform, random, mixed), default is uniform. 
     Real shift {0.2};      // Sample shift in consecutive sample distance for uniform and mixed sampling
     String store {""};     // Name of stored solution slot to write
     String nodeset {""};   // String specifying stored solution slot to read
+    Int solve {1};         // If true, solves the HB problem, if false evaluates at given stored solution
+                           // Not exposed to user. 
     
     Int write {1};         // Write the results to a file
                              
@@ -46,11 +49,12 @@ public:
     typedef HBParameters Parameters;
     enum class HBError {
         OK, 
-        NoAlgorithm, 
-        MatrixError, 
+        NoAlgorithm,
+        SolverBuild,  
         SolverError,
         InitialHB, 
         Homotopy,
+        NoNodeset, 
     };
 
     HBCore(
@@ -67,14 +71,12 @@ public:
     // Format error, return false on error - this function is not cheap (works with strings)
     bool formatError(Status& s=Status::ignore) const; 
 
-    bool addCoreOutputDescriptors();
-    bool addDefaultOutputDescriptors();
+    bool addCoreOutputDescriptors(Status& s);
+    bool addDefaultOutputDescriptors(Status& s);
     bool resolveOutputDescriptors(bool strict, Status& s=Status::ignore);
 
-    std::tuple<bool, bool> requestsRebuild(Status& s = Status::ignore);
-    
     bool rebuild(Status& s=Status::ignore); 
-    bool initializeOutputs(Id name, Status& s=Status::ignore);
+    bool initializeOutputs(const std::string& name, Status& s=Status::ignore);
     bool run(bool continuePrevious);
     CoreCoroutine coroutine(bool continuePrevious);
     bool finalizeOutputs(Status& s=Status::ignore);
@@ -90,7 +92,12 @@ public:
     virtual std::tuple<bool, bool> runSolver(bool continuePrevious);
     virtual Int iterations() const;
     virtual Int iterationLimit(bool continuePrevious) const;
-        
+
+    // Set stored solutiuon for evaluation, does not set up Jacobian to save memory
+    // Bind circuit to jacColoc and evaluate at current solution
+    bool evaluateAtNodeset();
+    bool getFrequencyDomainJacobians(KluBlockSparseComplexMatrix& jacSpec, const Spurs& prunedSpurs);
+
     void dump(std::ostream& os) const;
 
     static Id truncateBox;
@@ -101,6 +108,10 @@ public:
     static Id sampleMixed;
 
     static bool test();
+
+    Spurs& spurs() { return spurs_; };
+
+    static Id solutionTag;
 
 protected:
     // Clear error
@@ -128,17 +139,14 @@ protected:
     bool converged_;
     
 private:
-    NRSettings nrSettings;
-    HBNRSolver nrSolver;
-
     // Temporary structures for collecting the phasors at a single frequency
-    // before they are dumped. This vector has a bucket so that the output 
-    // source code is the same as with other analyses. 
+    // before they are dumped. This vector has a bucket so that the output
+    // source code is the same as with other analyses.
     VectorRepository<Complex> outputPhasors;
     Complex outputFreq;
 
     // Solution in frequency domain, nf phasors for each on of the n unknowns
-    // NR solver resizes this vector. This vector has no bucket. 
+    // NR solver resizes this vector. This vector has no bucket.
     Vector<Complex> solutionFD;
 
     // Previous HB parameters to check if we need to rebuild()
@@ -149,22 +157,25 @@ private:
     // HB parameters
     HBParameters& params;
 
-    // Frequency grid
-    FrequencyGrid freqGrid;
+    // Spurs
+    Spurs spurs_;
 
     // Vectors and matrices without a bucket
     // Colocation timepoints (sorted)
-    Vector<double> timepoints; 
+    Vector<double> timepoints;
     // Almost periodic Fourier transform
     DenseMatrix<double> APFT;
     // Inverse almost periodic Fourier transform
     DenseMatrix<double> IAPFT;
-    // Derivative wrt time operator for time-domain vectors
-    // Results in a time domain vector
-    // Computed as IAPFT Omega APFT
-    DenseMatrix<double> DDT;
-    // DDT operator in column-major order (for cache locality)
-    DenseMatrix<double> DDTcolMajor;
+    // Omega Gamma (APFT followed by differentiation in frequency domain), row major
+    DenseMatrix<double> OmegaGamma;
+    // IAPFT in co,umn major form
+    DenseMatrix<double> GammaInvColumnMajor;
+
+    // Declared last so spurs_, timepoints, and the transform matrices it
+    // captures by reference are fully constructed before its init list runs.
+    NRSettings nrSettings;
+    HBNRSolver nrSolver;
 };
 
 }

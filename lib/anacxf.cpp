@@ -4,7 +4,7 @@
 
 namespace NAMESPACE {
 
-template<> SmallSignal<ACXFCore, ACXFData>::SmallSignal(Id name, Circuit& circuit, PTAnalysis& ptAnalysis) 
+template<> SmallSignal<ACXFCore, ACXFData>::SmallSignal(const std::string& name, Circuit& circuit, PTAnalysis& ptAnalysis) 
     : Analysis(name, circuit, ptAnalysis), 
       opCore(*this, params.core().opParams, circuit, commons, jac, solution, states), 
       smsigCore(*this, params.core(), opCore, sourceIndex, circuit, commons, jac, solution, states, acMatrix, acSolution, sources, tf, yin, zin) {
@@ -19,33 +19,35 @@ template<> bool SmallSignal<ACXFCore, ACXFData>::resolveSave(const PTSave& save,
 
     bool st = true;
     bool handled = true;
+    bool addLoc = true;
+    Status& s1 = verify ? s : Status::ignore;
     if (save.typeName() == idDefault) {
-        st = smsigCore.addAllTfZin(save, sourceIndex);
+        st = smsigCore.addAllTfZin(save, sourceIndex, s1);
     } else if (save.typeName() == idTf) {
-        st = smsigCore.addTf(save, sourceIndex);
+        st = smsigCore.addTf(save, sourceIndex, s1);
     } else if (save.typeName() == idZin) {
-        st = smsigCore.addZin(save, sourceIndex);
+        st = smsigCore.addZin(save, sourceIndex, s1);
     } else if (save.typeName() == idYin) {
-        st = smsigCore.addYin(save, sourceIndex);
+        st = smsigCore.addYin(save, sourceIndex, s1);
     } else {
         // Handle OP saves
-        std::tie(st, handled) = resolveOpSave(save, verify, s); 
+        std::tie(st, handled) = resolveOpSave(save, verify, s1); 
+        // resolveOpSave() adds location to error
+        addLoc = false;
         // Not handled error was formatted by resolveOpSave()
         // Also all op errors were formatted
-        if (verify) {
-            // Verification required, return status
-            return st;
-        } else {
-            // No verification required, OK
-            return true;
+        if (!verify) {
+            // No checking, assume status is OK
+            st = true;
         }
     }
 
     // Handled save via smsigCore, check error if verification required
     if (verify && !st) {
         // Format error
-        smsigCore.formatError(s);
-        s.extend(save.location());
+        if (addLoc) {
+            s.extend(save.location());
+        }
         return false;
     } 
     

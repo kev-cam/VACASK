@@ -9,6 +9,8 @@
 
 namespace NAMESPACE {
 
+Id HBCore::solutionTag = Id::createStatic("hb");
+
 Id HBCore::truncateBox = Id::createStatic("box");
 Id HBCore::truncateDiamond = Id::createStatic("diamond");
 Id HBCore::truncateHybrid = Id::createStatic("hybrid");
@@ -28,6 +30,7 @@ template<> int Introspection<HBParameters>::setup() {
     registerMember(immax);
     registerMember(truncate);
     registerMember(samplefac);
+    registerMember(tstart);
     registerMember(nper);
     registerMember(sample);
     registerMember(shift);
@@ -39,40 +42,61 @@ template<> int Introspection<HBParameters>::setup() {
 }
 instantiateIntrospection(HBParameters);
 
+class HbUnknownNameResolver : public NameResolver {
+public:
+    HbUnknownNameResolver(Circuit& circuit, size_t nb) : circuit(circuit), nb(nb) {};
+
+    virtual Id operator()(MatrixEntryIndex u) {
+        return circuit.reprNode(u/nb+1)->name();
+    };
+
+private:
+    Circuit& circuit;
+    size_t nb;
+};
 
 HBCore::HBCore(
-    OutputDescriptorResolver& parentResolver, HBParameters& params, Circuit& circuit, CommonData& commons, 
+    OutputDescriptorResolver& parentResolver, HBParameters& params, Circuit& circuit, CommonData& commons,
     KluBlockSparseRealMatrix& jacColoc, KluBlockSparseRealMatrix& jacobian, VectorRepository<double>& solution
-) : AnalysisCore(parentResolver, circuit, commons), params(params), outfile(nullptr), jacColoc(jacColoc), 
-    nrSolver(circuit, commons, jacColoc, jacobian, solution, solutionFD, freqGrid.spectrum(), timepoints, DDT, DDTcolMajor, APFT, IAPFT, nrSettings), 
-    bsjac(jacobian), solution(solution), firstBuild(true), continueState(nullptr) {
+) : AnalysisCore(parentResolver, circuit, commons),
+    lastHbError(HBError::OK),
+    homotopySteps(0),
+    jacColoc(jacColoc),
+    bsjac(jacobian),
+    solution(solution),
+    continueState(nullptr),
+    outfile(nullptr),
+    converged_(false),
+    firstBuild(true),
+    params(params),
+    nrSolver(circuit, commons, jacColoc, jacobian, solution, solutionFD, 
+             timepoints, spurs_, 
+             APFT, IAPFT, OmegaGamma, GammaInvColumnMajor, nrSettings) {
 };
 
 HBCore::~HBCore() {
     delete outfile;
 }
 
-bool HBCore::addCoreOutputDescriptors() {
-    clearError();
+bool HBCore::addCoreOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdFrequency, "frequency"))) {
-        lastError = Error::Descriptor;
-        errorId = "frequency";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for frequency."));
         return false;
     }
     return true;
 }
 
-bool HBCore::addDefaultOutputDescriptors() {
+bool HBCore::addDefaultOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (savesCount==0) {
-        return addAllUnknowns(PTSave("default", Id(), Id()));
+        return addAllUnknowns(PTSave("default", Id(), Id()), s);
     }
     return true;
 }
@@ -88,14 +112,14 @@ bool HBCore::resolveOutputDescriptors(bool strict, Status& s) {
         // TODO: handle output variables someday
         switch (it->type) {
         case OutdSolComponent:
-            ok = addComplexVarOutputSource(strict, it->id, outputPhasors); 
+            ok = addComplexVarOutputSource(strict, it->id, outputPhasors, 1, 0, it->name, s); 
             break;
         case OutdFrequency:
-            outputSources.emplace_back(&outputFreq);
+            outputSources.emplace_back(&outputFreq, it->name);
             break;
         default:
             // Delegate to parent
-            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict);
+            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, s);
             break;
         }
         if (!ok) {
@@ -105,7 +129,7 @@ bool HBCore::resolveOutputDescriptors(bool strict, Status& s) {
     return ok;
 }
 
-bool HBCore::initializeOutputs(Id name, Status& s) {
+bool HBCore::initializeOutputs(const std::string& name, Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
@@ -113,7 +137,7 @@ bool HBCore::initializeOutputs(Id name, Status& s) {
     // Create output file if not created yet
     if (!outfile) {
         outfile = new OutputRawfile(
-            name, outputDescriptors, outputSources,
+            name, outputSources,
             (circuit.simulatorOptions().core().rawfile==SimulatorOptions::rawfileBinary ? OutputRawfile::Flags::Binary : OutputRawfile::Flags::None) |
                 OutputRawfile::Flags::Padded | OutputRawfile::Flags::Complex);
         outfile->setTitle(circuit.title());
@@ -131,12 +155,14 @@ bool HBCore::finalizeOutputs(Status& s) {
         outfile = nullptr;
     }
 
-    // Write DC solution to repository if analysis is OK
+    // Write solution to repository if analysis is OK
     if (converged_ && params.store.length()>0) {
-        auto sol = circuit.newStoredSolution("hb", params.store);
-        sol->setNames(circuit);
-        sol->setCxValues(solutionFD);
-        sol->setAuxData(freqGrid.spectrum());
+        auto& sol = circuit.newStoredSolution(params.store);
+        sol.setTypeTag(solutionTag);
+        sol.setNames(circuit);
+        sol.setCxValues(solutionFD);
+        sol.setSpurs(spurs_);
+        sol.setAuxRealVector(timepoints);
     }
     return true;
 }
@@ -156,6 +182,8 @@ bool HBCore::deleteOutputs(Id name, Status& s) {
 
 bool HBCore::storeState(size_t ndx, bool storeDetails) {
     auto& repo = coreStates.at(ndx);
+    repo.solution.setTypeTag(solutionTag);
+
     // Store current solution as annotated solution
     if (storeDetails) {
         repo.solution.setNames(circuit);
@@ -167,7 +195,8 @@ bool HBCore::storeState(size_t ndx, bool storeDetails) {
     repo.solution.setCxValues(solutionFD);
     
     // Store frequencies
-    repo.solution.setAuxData(freqGrid.spectrum());
+    repo.solution.setSpurs(spurs_);
+    repo.solution.setAuxRealVector(timepoints);
     
     // Stored state is coherent and valid
     repo.coherent = true;
@@ -185,30 +214,6 @@ bool HBCore::restoreState(size_t ndx) {
         // Nothing to restore, do not use continuation mode
         return false;
     }
-}
-
-// Analysis asks cores if they request a rebuild. 
-// HB core replies that it does if the set of frequencies changes. 
-// Along with changed set of frequencies this function recomputes
-// - colocation points
-// - transform matrices
-std::tuple<bool, bool> HBCore::requestsRebuild(Status& s) {
-    // First build, nothing to compare to
-    if (firstBuild) {
-        return std::make_tuple(true, true);
-    }
-
-    // Did parameters that affect the set of frequencies and the colocation timepoints change
-    bool needsRebuild = 
-        oldParams.freq != params.freq ||
-        oldParams.nharm != params.nharm ||
-        oldParams.immax != params.immax ||
-        oldParams.truncate != params.truncate || 
-        oldParams.samplefac != params.samplefac ||
-        oldParams.nper != params.nper || 
-        oldParams.sample != params.sample;
-    oldParams = params;
-    return std::make_tuple(true, needsRebuild);
 }
 
 bool HBCore::buildGrid(Status& s) {
@@ -269,11 +274,11 @@ bool HBCore::buildGrid(Status& s) {
         return false;
     }
 
-    if (!freqGrid.build(params.freq, nHarmonics, params.immax, params.truncate==HBCore::truncateHybrid, debug, s)) {
+    if (!spurs_.build(params.freq, nHarmonics, params.immax, params.truncate==HBCore::truncateHybrid, debug, s)) {
         return false;
     }
 
-    if (freqGrid.spectrum().size()<2) {
+    if (spurs_.spectrum().size()<2) {
         s.set(Status::BadArguments, "Too few frequencies in spectrum.");
         return false;
     }
@@ -281,8 +286,194 @@ bool HBCore::buildGrid(Status& s) {
     return true;
 }
 
+// Called after build
+bool HBCore::evaluateAtNodeset() {
+    clearError();
+
+    auto& options = circuit.simulatorOptions().core();
+    nrSettings = NRSettings {
+        .debug = options.nr_debug, 
+        .matrixCheck = bool(options.matrixcheck), 
+    };
+
+    // Copy from forces slot 1 to solution vector
+    auto n = circuit.unknownCount();
+    auto nt = timepoints.size();
+    solution.upsize(2, n*nt);
+    solution.vector() = nrSolver.forces(1).unknownValue_;
+
+    // Disable forces
+    nrSolver.enableForces(0, false);
+    nrSolver.enableForces(1, false);
+    
+    // Rebuild NR solver structures
+    if (!nrSolver.rebuild(n*nt)) {
+        setError(HBError::SolverBuild);
+        return false;
+    }
+
+    // Initialize NR solver (continue previous)
+    if (!nrSolver.initialize(true)) {
+        setError(HBError::SolverError);
+        return false;
+    }
+
+    // Run evaluation (continue previous)
+    if (!nrSolver.evaluate(true)) {
+        setError(HBError::SolverError);
+        return false;
+    }
+
+    return true;
+}
+
+bool HBCore::getFrequencyDomainJacobians(KluBlockSparseComplexMatrix& jacSpec, const Spurs& prunedSpurs) {
+    // Assumes evaluation was performed, writes frequency domin jacobians to jacSpec
+    auto nt = timepoints.size();
+    auto nf = spurs_.smsigFreq().size();
+    auto dcIndex = spurs_.dcIndex();
+    auto nfp = nf-dcIndex; // Number of nonnegative frequencies
+
+    // Pruned spurs
+    auto& fullSmsigFreqIndex = prunedSpurs.fullSmsigFreqIndex();
+    auto prunedDcIndex = prunedSpurs.dcIndex();
+
+    // Scratchpad for frequency domain spectrum
+    Vector<Complex> GFullJac(nfp);
+    Vector<Complex> CFullJac(nfp);
+
+    // Go through all dense blocks
+    for(auto& pos : circuit.sparsityMap().positions()) {
+        // Get block position (for debugging), make position 0-based
+        auto [i, j] = pos;
+        i--;
+        j--;
+
+        // Get dense block with Jacobian values at colocation points
+        auto [colocBlock, found1] = jacColoc.block(pos);
+        auto gCol = colocBlock.column(0);
+        auto cCol = colocBlock.column(1);
+
+        // Dump collocation points and time-domain Jacobian columns in numpy format
+        // {
+        //     std::cout << std::scientific << std::setprecision(15);
+        //     std::cout << "# Block (" << pos.first << ", " << pos.second << ")\n";
+        //     std::cout << "t = np.array([";
+        //     for (size_t k = 0; k < nt; k++) {
+        //         if (k > 0) std::cout << ", ";
+        //         std::cout << timepoints[k];
+        //     }
+        //     std::cout << "])\n";
+        //     std::cout << "gCol = np.array([";
+        //     for (size_t k = 0; k < nt; k++) {
+        //         if (k > 0) std::cout << ", ";
+        //         std::cout << gCol.at(k);
+        //     }
+        //     std::cout << "])\n";
+        //     std::cout << "cCol = np.array([";
+        //     for (size_t k = 0; k < nt; k++) {
+        //         if (k > 0) std::cout << ", ";
+        //         std::cout << cCol.at(k);
+        //     }
+        //     std::cout << "])\n";
+        // }
+        
+        // APFT on stored time-domain values
+        // Start APFT result at imag part of first component
+        // First component (DC) is stored in complex vector at dcIndex
+        // APFT produces dc, f1real, f1imag, f2real, f2imag, ...
+        // but we need   dc, 0, f1real, f1imag, f2real, f2imag, ...
+        // We store APFT starting from imaginary part of dc component (after x): 
+        //   x, dc, f1real, f1imag, f2real, f2imag, ...
+        // them move dc: dc, 0, f1real, f1imag, f2real, f2imag, ...
+        // auto gDest = VectorView(reinterpret_cast<double*>(&GCol.at(dcIndex))+1, nt, 1);
+        // auto cDest = VectorView(reinterpret_cast<double*>(&CCol.at(dcIndex))+1, nt, 1);
+        auto gDest = VectorView(reinterpret_cast<double*>(&GFullJac.at(0))+1, nt, 1);
+        auto cDest = VectorView(reinterpret_cast<double*>(&CFullJac.at(0))+1, nt, 1);
+
+        // Transform
+        APFT.multiply(gCol, gDest);
+        APFT.multiply(cCol, cDest);
+
+        // Move DC from imag to real part, set imag part to 0
+        // GCol.at(dcIndex) = GCol.at(dcIndex).imag();
+        // CCol.at(dcIndex) = CCol.at(dcIndex).imag();
+        GFullJac.at(0) = GFullJac.at(0).imag();
+        CFullJac.at(0) = CFullJac.at(0).imag();
+
+        // Divide by 2 all positive frequency components, except DC
+        // Spectrum is two-sided, but HB computes a one-sided spectrum
+        // for(decltype(nf) k=dcIndex+1; k<nf; k++) {
+        for(decltype(nf) k=1; k<nfp; k++) {
+            // GCol.at(k) /= 2;
+            // CCol.at(k) /= 2;
+            GFullJac.at(k) /= 2;
+            CFullJac.at(k) /= 2;
+        }
+
+        // Get FD Jacobian dense block
+        auto [fdBlock, found2] = jacSpec.block(pos);
+        auto GCol = fdBlock.column(0);
+        auto CCol = fdBlock.column(1);
+
+        // Copy to frequency domain Jacobian block
+        for(decltype(prunedDcIndex) k=0; k<fullSmsigFreqIndex.size(); k++) {
+            auto fullIndex = fullSmsigFreqIndex[k];
+            if (fullIndex>=dcIndex) {
+                // Positive frequency, GfullJac and CFullJac contain only DC and positive frequencies
+                GCol[k] = GFullJac[fullIndex-dcIndex];
+                CCol[k] = CFullJac[fullIndex-dcIndex];
+            } else {
+                // Negative frequency, conjugate corresponding positive frequency
+                GCol[k] = std::conj(GFullJac[dcIndex-fullIndex]);
+                CCol[k] = std::conj(CFullJac[dcIndex-fullIndex]);
+            }
+        }
+        
+        // Conjugates for negative frequencies
+        // for(decltype(dcIndex) k=1; k<=dcIndex; k++) {
+        //     GCol.at(dcIndex-k) = std::conj(GCol.at(dcIndex+k));
+        //     CCol.at(dcIndex-k) = std::conj(CCol.at(dcIndex+k));
+        // }
+        
+        // Dump FD Jacobian columns in numpy format
+        // {
+        //     auto& freqs = spurs_.smsigFreq();
+        //     std::cout << std::scientific << std::setprecision(15);
+        //     std::cout << "# Block (" << pos.first << ", " << pos.second << ") FD jacobians\n";
+        //     std::cout << "f = np.array([";
+        //     for (size_t k = 0; k < nf; k++) {
+        //         if (k > 0) std::cout << ", ";
+        //         std::cout << freqs[k];
+        //     }
+        //     std::cout << "])\n";
+        //     std::cout << "GCol = np.array([";
+        //     for (size_t k = 0; k < nf; k++) {
+        //         if (k > 0) std::cout << ", ";
+        //         std::cout << GCol.at(k).real() << "+" << GCol.at(k).imag() << "j";
+        //     }
+        //     std::cout << "])\n";
+        //     std::cout << "CCol = np.array([";
+        //     for (size_t k = 0; k < nf; k++) {
+        //         if (k > 0) std::cout << ", ";
+        //         std::cout << CCol.at(k).real() << "+" << CCol.at(k).imag() << "j";
+        //     }
+        //     std::cout << "])\n";
+        // }
+
+    }
+
+    return true;
+}
+
 bool HBCore::rebuild(Status& s) {
     clearError();
+
+    // solve=0 ... evaluate, collect spurs and timepoints from stored solution, 
+    //             set up solution from stored solution
+    //             prepare for linearized circuit evaluation, do not build Jacobian
+
+    // solve=1 ... prepare for solving the HB problem, build Jacobian
 
     auto& options = circuit.simulatorOptions().core();
     nrSettings = NRSettings {
@@ -299,38 +490,69 @@ bool HBCore::rebuild(Status& s) {
     nrSolver.setForcesFactor(0, options.nr_nsforce);
     nrSolver.setForcesFactor(1, options.nr_nsforce);
 
-    // Compute set of frequencies
-    if (!buildGrid(s)) {
-        return false;
+    // Get nodeset from repository
+    AnnotatedSolution* solPtr = nullptr;
+    String& solutionName = params.nodeset;
+    if (solutionName.length()>0) {
+        // Get solution from repository
+        solPtr = circuit.storedSolution(solutionName);
     }
 
-    // Compute colocation
-    if (!buildColocation(s)) {
-        return false;
-    }
+    if (params.solve) {
+        // Compute set of frequencies
+        if (!buildGrid(s)) {
+            return false;
+        }
 
-    // Recompute transforms
-    if (!buildAPFT(s)) {
-        return false;
+        // Compute colocation
+        if (!buildColocation(s)) {
+            return false;
+        }
+        
+        // Recompute transforms
+        if (!buildAPFT(s)) {
+            return false;
+        }
+    } else {
+        // Assume grid, colocation, and APFT are obtained from nodeset
+        if (!solPtr || solPtr->typeTag()!=solutionTag) {
+            s.set(Status::NotFound, "Nodeset not found.");
+            return false;
+        }
+
+        // Copy spurs
+        spurs_ = Spurs(solPtr->spurs());
+
+        // Copy colocation
+        timepoints = solPtr->auxRealVector();
+
+        // Need APFT for transforming time-domain Jacobian to frequency-domain Jacobian
+        if (!buildAPFT(s)) {
+            return false;
+        }
     }
 
     // Number of colocation points
     auto nt = timepoints.size();
 
-    // Jacobian entries at colocation points
-    jacColoc.rebuild(circuit.sparsityMap(), circuit.unknownCount(), nt, 2);
+    // Jacobian entries at colocation points, do not create structures for scalar access
+    jacColoc.rebuild(circuit.sparsityMap(), circuit.unknownCount(), nt, 2, true);
 
-    // HB Jacobian
-    if (!bsjac.rebuild(circuit.sparsityMap(), circuit.unknownCount(), nt, nt)) {
-        setError(HBError::MatrixError);
-        return false;
+    // Build these only if we want to solve the HB problem
+    if (params.solve) {
+        // HB Jacobian
+        if (!bsjac.rebuild(circuit.sparsityMap(), circuit.unknownCount(), nt, nt)) {
+            auto nb = timepoints.size();
+            auto nr = HbUnknownNameResolver(circuit, nb);
+            bsjac.formatError(s, &nr);
+            return false;
+        }
+        // solutionFD - complex vector without bucket
+        solutionFD.resize(spurs_.spectrum().size());
     }
 
     // Bind resistive residuals to 0-based subelement (0,0) 
     // Bind reactive residuals to 0-based subelement (0,1) 
-    
-    // Resistive Jacobian entries remain bound to OP Jacobian, 
-    // reactive parts will be bound to imaginary entries of acMatrix
     if (!circuit.bind(
         &jacColoc, Component::Real, MatrixEntryPosition(0, 0), 
         &jacColoc, Component::Real, MatrixEntryPosition(0, 1), 
@@ -341,10 +563,8 @@ bool HBCore::rebuild(Status& s) {
 
     // Prepare nodesets
     auto strictforce = circuit.simulatorOptions().core().strictforce; 
-    String& solutionName = params.nodeset;
     if (solutionName.length()>0) {
-        // Get solution from repository
-        auto solPtr = circuit.storedSolution("hb", solutionName);
+        // Solution from repository (obtained previously)
         if (!solPtr) {
             // No nodesets
             nrSolver.forces(1).clear();
@@ -365,7 +585,8 @@ bool HBCore::rebuild(Status& s) {
     }
     
     // Rebuild NR solver structures
-    if (!nrSolver.rebuild()) {
+    auto n = circuit.unknownCount();
+    if (!nrSolver.rebuild(n*nt)) {
         s.set(Status::NonlinearSolver, "Failed to rebuild internal structures of nonlinear solver.");
         return false;
     }
@@ -386,13 +607,31 @@ std::tuple<bool, bool> HBCore::runSolver(bool continuePrevious) {
         // Continue mode
         if (continueState &&
             continueState->valid && continueState->coherent &&
-            continueState->solution.cxValues().size()==circuit.unknownCount()*timepoints.size() && 
-            continueState->solution.auxData().size()==freqGrid.spectrum().size()
+            continueState->solution.typeTag()==solutionTag &&
+            continueState->solution.cxValues().size()==circuit.unknownCount()*spurs_.spectrum().size() &&
+            continueState->solution.spurs().spectrum().size()==spurs_.spectrum().size()
         ) {
             // Continue a state
-            // State is valid, coherent, and its lengths match those of the solver vectors
+            // State is valid, coherent, its lengths match those of the solver vectors, 
+            // and the spurs structure is identical to the analysis spurs structure. 
             // Restore current state
-            solution.vector() = continueState->solution.values();
+            // Solution values are complex, unpack them in a real vector of re DC + re/im magnitudes
+            auto& data = continueState->solution.cxValues();
+            auto& dest = solution.vector();
+            auto n = circuit.unknownCount();
+            auto nf = spurs_.spectrum().size();
+            auto nt = timepoints.size();
+            for(decltype(n) i=0; i<n; i++) {
+                auto srcOrigin = i*nf;
+                auto destOrigin = i*nt;
+                dest[destOrigin] = data[srcOrigin].real();
+                for(decltype(nf) k=1; k<nf; k++) {
+                    auto base = destOrigin + 1 + (k-1)*2;
+                    dest[base] = data[srcOrigin+k].real();
+                    dest[base+1] = data[srcOrigin+k].imag();
+                }
+            }
+
             runInContinueMode = true;
             // No forces applied
             nrSolver.enableForces(0, false);
@@ -402,7 +641,10 @@ std::tuple<bool, bool> HBCore::runSolver(bool continuePrevious) {
             }
             // Forced bypass is not allowed
             commons.requestForcedBypass = false;
-        } else if (continueState && continueState->valid) {
+        } else if (
+            continueState && continueState->valid &&
+            continueState->solution.typeTag()==solutionTag
+        ) {
             // Continue a state
             // Stored analysis state is valid, but not coherent with current circuit, 
             // its lengths may not match those of the solver vectors. 
@@ -478,10 +720,10 @@ CoreCoroutine HBCore::coroutine(bool continuePrevious) {
     auto debug = options.hb_debug;
     auto n = circuit.unknownCount(); 
     auto nb = timepoints.size();
-    auto nf = freqGrid.spectrum().size();
+    auto nf = spurs_.spectrum().size();
 
     // Make sure structures are large enough
-    solution.upsize(2, n*nb+1);
+    solution.upsize(2, n*nb);
     
     if (debug>0) {
         Simulator::dbg() << "Starting HB analysis.\n";
@@ -551,13 +793,17 @@ CoreCoroutine HBCore::coroutine(bool continuePrevious) {
             // No algorithm tried
             setError(HBError::NoAlgorithm);
         } else if (converged_) {
-            // Tried and converged, write results
+            // Tried and converged, fill solutionFD and outvec, write results
             if (outfile && params.write) {
-                // Collect results for one frequency
+                // Collect results for one frequency, need a slot for ground
                 outputPhasors.upsize(1, n+1);
                 auto outvec = outputPhasors.data();
+                // Set ground unknown to zero
+                outvec[0] = 0.0;
+                // Go through frequencies
                 for(decltype(nf) k=0; k<nf; k++) {
-                    outputFreq = freqGrid.spectrum()[k];
+                    outputFreq = spurs_.spectrum()[k];
+                    // Go through unknowns, fill outvec entries
                     for(decltype(n) i=0; i<n; i++) {
                         outvec[i+1] = solutionFD[i*nf+k];
                     }                    
@@ -604,20 +850,6 @@ bool HBCore::run(bool continuePrevious) {
 }
 
 
-class HbUnknownNameResolver : public NameResolver {
-public:
-    HbUnknownNameResolver(Circuit& circuit, size_t nb) : circuit(circuit), nb(nb) {};
-
-    virtual Id operator()(MatrixEntryIndex u) {
-        return circuit.reprNode(u/nb+1)->name();
-    };
-
-private:
-    Circuit& circuit;
-    size_t nb;
-};
-
-
 bool HBCore::formatError(Status& s) const {
     auto nb = timepoints.size();
     auto nr = HbUnknownNameResolver(circuit, nb);
@@ -644,8 +876,11 @@ bool HBCore::formatError(Status& s) const {
         case HBError::NoAlgorithm:
             s.set(Status::Analysis, "No HB algorithm tried."); 
             return false;
-        case HBError::MatrixError:
-            bsjac.formatError(s, &nr);
+        case HBError::NoNodeset:
+            s.set(Status::Analysis, "Nodeset not found."); 
+            return false;
+        case HBError::SolverBuild:
+            s.set(Status::NonlinearSolver, "Failed to rebuild internal structures of nonlinear solver.");
             return false;
         case HBError::SolverError:
             nrSolver.formatError(s, &nr);
@@ -658,12 +893,12 @@ void HBCore::dump(std::ostream& os) const {
     AnalysisCore::dump(os);
     os << "  Results\n";
     auto n = circuit.unknownCount();
-    auto nf = freqGrid.spectrum().size();
-    for(decltype(n) i=1; i<=n; i++) {
+    auto nf = spurs_.spectrum().size();
+    for(decltype(n) i=0; i<n; i++) {
         auto rn = circuit.reprNode(i);
         for(decltype(nf) k=0; k<nf; k++) {
-            auto c = solutionFD[i];
-            os << "    " << rn->name() << "@" << freqGrid.spectrum()[k] << "Hz : " << c.real();
+            auto c = solutionFD[i*nf+k];
+            os << "    " << rn->name() << "@" << spurs_.spectrum()[k] << "Hz : " << c.real();
             if (c.imag()>=0) {
                 os << "+";
             }
@@ -731,7 +966,7 @@ bool HBCore::test() {
         // APFT of first non zero frequency cosine
         std::vector<double> v(n, 0.0);
         std::vector<double> vres(n, 0.0);
-        auto f = hb.freqGrid.spectrum()[1];
+        auto f = hb.spurs_.spectrum()[1];
         auto mag = 10;
         for(size_t i=0; i<n; i++) {
             auto t = hb.timepoints[i];
@@ -747,34 +982,14 @@ bool HBCore::test() {
         std::cout << "\n";
         for(size_t i=0; i<n; i++) {
             if (
-                i==1 && std::abs(vvres[i]-mag)/norm>1e-12 ||
-                i!=1 && std::abs(vvres[i])/norm>1e-12
+                (i==1 && std::abs(vvres[i]-mag)/norm>1e-12) ||
+                (i!=1 && std::abs(vvres[i])/norm>1e-12)
             ) {
                 ok = false;
                 std::cout << "APFT failed\n";
                 break;
             }
         }
-
-        // Derivative of first nonzero frequency cosine wrt time
-        hb.DDT.multiply(vv, vvres);
-        norm = vvres.maxAbs();
-        std::cout << "APFT of DDT of cosine at f1\n";
-        auto spec = std::vector<double>(n, 0);
-        auto vspec = VectorView<double>(spec);
-        hb.APFT.multiply(vvres, vspec);
-        vspec.dump(std::cout);
-        std::cout << "\n";
-        for(size_t i=0; i<n; i++) {
-            auto t = hb.timepoints[i];
-            auto exact = -mag*2*std::numbers::pi*f*std::sin(2*std::numbers::pi*f*t);
-            if (std::abs(vvres[i] - exact)/norm>1e-12) {
-                ok = false;
-                std::cout << "DDT failed\n";
-                break;
-            }
-        }
-
     }
 
     if (!ok) {

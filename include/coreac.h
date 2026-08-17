@@ -63,11 +63,9 @@ typedef struct ACParameters {
     Id mode {Id()};   // Mode for dec/oct/lin sweep
     Int points {0};   // Number of points for dec/oct/lin sweep
     Value values {0}; // Vector of values for values sweep
-    Int writeop {0};  // 1 = dump operating point to <analysisname>.op.raw;
-    // Nodeset and store parameters of the operating point core 
-    // are also exposed. 
-
     Int write {1};    // Write the results to a file
+                      // writeop is the write parameter of op core
+                      // nodeset and store parameters of the op core are also exposed. 
 
     ACParameters();
 } ACParameters;
@@ -104,12 +102,12 @@ public:
     // Format error, return false on error - this function is not cheap (works with strings)
     bool formatError(Status& s=Status::ignore) const; 
 
-    bool addCoreOutputDescriptors();
-    bool addDefaultOutputDescriptors();
-    bool resolveOutputDescriptors(bool strict);
+    bool addCoreOutputDescriptors(Status& s);
+    bool addDefaultOutputDescriptors(Status& s);
+    bool resolveOutputDescriptors(bool strict, Status& s=Status::ignore);
 
     bool rebuild(Status& s=Status::ignore); 
-    bool initializeOutputs(Id name, Status& s=Status::ignore);
+    bool initializeOutputs(const std::string& name, Status& s=Status::ignore);
     bool run(bool continuePrevious);
     CoreCoroutine coroutine(bool continuePrevious);
     bool finalizeOutputs(Status& s=Status::ignore);
@@ -121,6 +119,8 @@ public:
     OutputRawfile* outfile;
 
 protected:
+    static constexpr size_t bucketSize = 1;
+
     // Clear error
     void clearError() { AnalysisCore::clearError(); lastAcError = AcError::OK; }; 
 

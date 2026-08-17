@@ -14,9 +14,15 @@ namespace NAMESPACE {
 
 class CommandInterpreter;
 
-typedef bool (*CommandFuncPtr)(CommandInterpreter& interpreter, PTCommand& cmd, Status& s);
+enum class InterpreterExitStatus { 
+    OK,            // returned by commands on success
+    Error,         // returned on an error that can be ignored
+    HardFault,     // returned on an error that can't be masked
+    RequestMCExit, // endmc command requests loop exit
+    EndReached,    // end of commands reached
+};
 
-template <typename T> bool evaluateExpressions(RpnEvaluator& e, const PTCommand& cmd, std::vector<T>& out, Status& s=Status::ignore);
+typedef InterpreterExitStatus (*CommandFuncPtr)(CommandInterpreter& interpreter, PTCommand& cmd, Status& s);
 
 class CommandInterpreter {
 public:
@@ -62,7 +68,7 @@ public:
     // Elaborate circuit from given toplevel definitions
     bool elaborate(const std::vector<Id>& names, const std::string& topDefName, const std::string& topInstName, Status& s=Status::ignore);
     
-    bool run(Status& s=Status::ignore);
+    InterpreterExitStatus run(size_t from=0, Status& s=Status::ignore);
 
     bool clearVariables(Status& s=Status::ignore);
     Circuit& circuit() { return circuit_; }; 
@@ -77,7 +83,24 @@ public:
     void dumpOptionsMap(int indent, std::ostream& os) const;
     void dumpSaves(int indent, std::ostream& os) const;
 
+    size_t at() { return at_; };
+
+    void reset() { mcNames.clear(); at_=0; };
+    bool isUniqueMc(Id name) {
+        if (mcNames.contains(name)) {
+            return false;
+        } else {
+            mcNames.insert(name);
+            return true;
+        }
+    };
+    void setAnalysisNamePrefix(const std::string& pfx) { analysisNamePrefix_ = pfx; };
+    
 private:
+    size_t at_;
+    std::unordered_set<Id> mcNames;
+    std::string analysisNamePrefix_;
+
     bool printProgress_;
     bool runPostprocess_;
     std::vector<PTSave> commonSaves_;

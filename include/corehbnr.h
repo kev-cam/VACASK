@@ -18,12 +18,12 @@ public:
         KluBlockSparseRealMatrix& bsjac, 
         VectorRepository<double>& solution, 
         Vector<Complex>& solutionFD,
-        const Vector<Real>& frequencies, 
-        const Vector<Real>& timepoints, 
-        DenseMatrix<Real>& DDT, 
-        DenseMatrix<Real>& DDTcolMajor, 
+        const Vector<double>& timepoints,  
+        const Spurs& spurs, 
         DenseMatrix<Real>& APFT, 
         DenseMatrix<Real>& IAPFT, 
+        DenseMatrix<Real>& OmegaGamma, 
+        DenseMatrix<Real>& GammaInvColumnMajor, 
         NRSettings& settings
     ); 
 
@@ -45,13 +45,15 @@ public:
     // Set forces based on an annotated solution
     bool setForces(Int ndx, const AnnotatedSolution& solution, bool abortOnError);
     
-    virtual bool rebuild();
+    virtual bool rebuild(size_t nSolComp);
     virtual bool initialize(bool continuePrevious);
     virtual bool preIteration(bool continuePrevious);
     virtual bool postSolve(bool continuePrevious);
     virtual bool postConvergenceCheck(bool continuePrevious);
     virtual bool postIteration(bool continuePrevious);
     virtual bool postRun(bool continuePrevious); 
+    
+    bool evaluate(bool continuePrevious);
     
     virtual std::tuple<bool, bool> buildSystem(bool continuePrevious);
     virtual std::tuple<bool, bool> checkResidual();
@@ -81,14 +83,17 @@ protected:
     KluBlockSparseRealMatrix& bsjac;
     
     // Vectors and matrices without a bucket
-    const std::vector<double>& frequencies;
     const Vector<double>& timepoints; 
-    DenseMatrix<double>& DDT;
-    DenseMatrix<double>& DDTcolMajor;
-    DenseMatrix<double>& APFT;
-    DenseMatrix<double>& IAPFT;
+    const Spurs& spurs_;
+    DenseMatrix<double>& Gamma;
+    DenseMatrix<double>& GammaInv;
+    DenseMatrix<double>& OmegaGamma;
+    DenseMatrix<double>& GammaInvColumnMajor;
     Vector<Complex>& solutionFD; 
     Circuit& circuit;
+    Vector<Real> solutionTD;
+
+    DenseMatrix<Real> blockTmp;
 
     // Internal structures computed at t_k
     // These structures have a bucket because they communicate with 
@@ -105,35 +110,11 @@ protected:
     Vector<double> resistiveResidual;
     Vector<double> reactiveResidual;
     
-    // Internal structure for max residual contribution
-    // Has no bucket because it does not communicate with evalAndLoad(). 
-    Vector<double> maxResidualContribution_; // maximal residual contribution for each equation at each timepoint
-    
-    // What kind of tolerance reference to use
-    // We support only global/local reference
-    // Historic reference is not possible. 
-    // We always use point-wise reference. 
-    bool globalSolRef;
-    bool globalResRef;
-
-    // Global maxima
-    DenseMatrix<double> pointMaxResidualContribution_;  // at current solution, maximal value for each nature, each timepoint
-                                                        // rows are natures, columns are timepoints
-    
-    DenseMatrix<double> pointMaxSolution_;  // previous solution, maximal value for each nature, each timepoint
-                                            // rows are natures, columns are timepoints
-
     // Convergence check auxiliary results
-    double maxResidual; 
-    double maxNormResidual; 
-    double l2normResidual2;
-    Node* maxResidualNode;
-    size_t maxResidualTimepointIndex;
-    bool residualWithinTol;
     double maxDelta; 
     double maxNormDelta; 
     Node* maxDeltaNode;
-    size_t maxDeltaTimepointIndex;
+    size_t maxDeltaFreqIndex;
     bool deltaWithinTol;
 
     HBNRSolverError lastHBNRError;

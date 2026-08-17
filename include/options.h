@@ -89,6 +89,11 @@ typedef struct SimulatorOptions  {
     Int hb_itlcont;
     Int hb_skipinitial;
     std::vector<Id> hb_homotopy;
+    Int hb_nsiter;
+    Int pss_minpts;
+    Real pss_tolscale;
+    Int pss_itl;
+    Int pss_debug;
     Id rawfile;
     Int strictoutput;
     Int strictsave;
@@ -133,7 +138,7 @@ typedef struct SimulatorOptions  {
 
     bool debugMode() const {
         return sweep_debug || op_debug || smsig_debug || tran_debug || 
-            hb_debug || nr_debug || homotopy_debug || tran_noisedebug;
+            hb_debug || nr_debug || homotopy_debug || tran_noisedebug || pss_debug;
     };
 } SimulatorOptions;
 

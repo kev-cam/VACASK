@@ -12,17 +12,18 @@ HBNRSolver::HBNRSolver(
         KluBlockSparseRealMatrix& bsjac, 
         VectorRepository<double>& solution, 
         Vector<Complex>& solutionFD, 
-        const Vector<Real>& frequencies, 
-        const Vector<Real>& timepoints, 
-        DenseMatrix<Real>& DDT, 
-        DenseMatrix<Real>& DDTcolMajor, 
-        DenseMatrix<double>& APFT, 
-        DenseMatrix<double>& IAPFT, 
+        const Vector<double>& timepoints, 
+        const Spurs& spurs,
+        DenseMatrix<double>& Gamma, 
+        DenseMatrix<double>& GammaInv, 
+        DenseMatrix<Real>& OmegaGamma, 
+        DenseMatrix<Real>& GammaInvColumnMajor, 
         NRSettings& settings
 ) : circuit(circuit), commons(commons), jacColoc(jacColoc), bsjac(bsjac), solutionFD(solutionFD), 
-    frequencies(frequencies), timepoints(timepoints), DDT(DDT), DDTcolMajor(DDTcolMajor), 
-    APFT(APFT), IAPFT(IAPFT), 
-    NRSolver(circuit.tables().accounting(), bsjac, solution, settings) {
+    timepoints(timepoints), spurs_(spurs), 
+    Gamma(Gamma), GammaInv(GammaInv), OmegaGamma(OmegaGamma), GammaInvColumnMajor(GammaInvColumnMajor), 
+    NRSolver(circuit.tables().accounting(), bsjac, solution, settings, 0) {
+    // Bucket size is 0
     // Slot 0 is for sweep continuation and homotopy (set via CoreStateStorage object)
     // Slot 1 is for nodesets that are read from stored results. 
     resizeForces(2);
@@ -73,20 +74,20 @@ bool HBNRSolver::setForces(Int ndx, const AnnotatedSolution& storedSolution, boo
     auto n = circuit.unknownCount();
 
     // Number of components per unknown
-    auto nf = frequencies.size(); // number of frequencies per unknown
-    auto blockSize = 2*nf-1; // number of timepoints per unknown
+    auto blockSize = timepoints.size(); // number of timepoints per unknown
 
-    // Make space for variable forces (also include bucket)
-    f.unknownValue_.resize(n*blockSize+1);
+    // No bucket
+    // Make space for variable forces
+    f.unknownValue_.resize(n*blockSize, 0.0);
     // By default turn off all forces
-    f.unknownForced_.resize(n*blockSize+1, false);
+    f.unknownForced_.resize(n*blockSize, false);
     
     // Number of frequencies in solution and solver
-    auto nfSolution = storedSolution.auxData().size();
-    auto nfSolver = frequencies.size();
+    auto nfSolution = storedSolution.spurs().spectrum().size();
+    auto nfSolver = spurs_.spectrum().size();
 
     // Prepare frequency translator between solution and solver
-    // Translator stores the solver frequency index for each solutiuon frequency index
+    // Translator stores the solver frequency index for each solution frequency index
     // Assume no frequency can be translated into solution frequency (negative index)
     std::vector<int> xlat(nfSolver, -1);
     
@@ -96,11 +97,11 @@ bool HBNRSolver::setForces(Int ndx, const AnnotatedSolution& storedSolution, boo
     }
 
     // Translate the rest
-    decltype(nfSolver) ndxSolver = 1;
-    decltype(nfSolution) ndxSolution = 1;
+    decltype(nfSolver) ndxSolver = 0;
+    decltype(nfSolution) ndxSolution = 0;
     for(; ndxSolver<nfSolver && ndxSolution<nfSolution;) {
-        auto fSolver = frequencies[ndxSolver];
-        auto fSolution = storedSolution.auxData()[ndxSolution];
+        auto fSolver = spurs_.spectrum()[ndxSolver];
+        auto fSolution = storedSolution.spurs().spectrum()[ndxSolution];
         if (std::abs(fSolver-fSolution)<=std::max(std::abs(fSolver), std::abs(fSolution))*1e-14) {
             // Frequencies are almost the same, store translator
             xlat[ndxSolver] = ndxSolution;
@@ -116,8 +117,6 @@ bool HBNRSolver::setForces(Int ndx, const AnnotatedSolution& storedSolution, boo
         }
     }
 
-    bool error = false;
-
     // Go through annotated solution. fill APFT spectrum 
     // Use resistive residual vector for APFT spectrum
     auto& forcesFD = resistiveResidual;
@@ -128,24 +127,31 @@ bool HBNRSolver::setForces(Int ndx, const AnnotatedSolution& storedSolution, boo
     // Solution spectrum
     auto& solSpec = storedSolution.cxValues();
     auto& solNames = storedSolution.names();
+    // In case we have no names, we must deduce the number of stored solution nodes (including ground). 
+    // The vector does not contains entries for ground node. 
+    // This number must match the length of solution names
+    auto solNodes = solSpec.size()/nfSolution;
 
     // Check if we have solution name annotations
-    // with matching length. 
     bool checkNames;
-    if (solNames.size()==n+1) {
+    // Note that solNames includes ground node
+    if (solNames.size()-1==solNodes) {
         // Yes, check names
         checkNames = true;
-    } else if (solNames.size()==0 && solSpec.size()==nfSolver*n) {
+    } else if (solNames.size()==0 && solNodes==n) {
         // No annotations, solutions vector has correct length
         checkNames = false;
     } else {
         // Cannot apply stored solution, no names nor matching length vector
         lastHBNRError = HBNRSolverError::ForcesError;
+        // Abort always regardless of abortOnError
         return false;
     }
 
-    // Go through all unknowns. 
-    for(decltype(n) i=1; i<=n; i++) {
+    // Go through all unknowns, skip the unknown corresponding to the bucket 
+    // If the stored solution has no names its solution vector length 
+    // must match the current circuit's solution vector
+    for(decltype(n) i=1; i<=solNodes; i++) {
         Node* node;
         if (checkNames) {
             // Stored solution has name annotations, get node by the name from the solution
@@ -156,56 +162,59 @@ bool HBNRSolver::setForces(Int ndx, const AnnotatedSolution& storedSolution, boo
         }
         if (!node) {
             // Node not found. No forces will be applied to this unknown. 
+            // If abortOnError is set, abort 
+            if (abortOnError) {
+                lastHBNRError = HBNRSolverError::ForcesError;
+                return false;
+            }
+            // Otherwise continue to next force
             continue;
         }
         // Copy spectrum for one node
         auto ui = node->unknownIndex();
-        // Origin index in complex spectrum vector (no bucket)
-        auto srcOrigin = (ui-1)*nf;
-        // Origin index in destination vector of TD values (no bucket)
+        // Ground node, nothing to do
+        if (ui==0) {
+            continue;
+        }
+        // Spectrum origin index in complex spectrum vector (no bucket)
+        auto srcOrigin = (i-1)*nfSolution;
+        // Spectrum origin index in destination vector of TD values (no bucket)
         auto destOrigin = (ui-1)*blockSize;
         
         // Copy DC (one real value)
-        forcesFD[0] = solSpec[srcOrigin].real();
+        f.unknownValue_[destOrigin] = solSpec[srcOrigin].real();
+        f.unknownForced_[destOrigin] = true;
         // Scan all nonzero frequencies of solver's spectrum
-        for(decltype(nf) k=1; k<nf; k++) {
+        for(decltype(nfSolver) k=1; k<nfSolver; k++) {
             // Translate solver frequency into solution frequency
             auto xlf = xlat[k];
             // Index of real component (DC is stored as a single real number)
             auto ndx = 1+2*(k-1);
             if (xlf>=0) {
-                // Translation exists, copy solution component
-                forcesFD[ndx] = solSpec[srcOrigin+k].real();
-                forcesFD[ndx+1] = solSpec[srcOrigin+k].imag();
+                // Translation exists, copy solution component (cos, -sin)
+                // Solution is stored as all-complex vector
+                // Solver's first component is real, the rest is complex
+                f.unknownValue_[destOrigin+ndx] = solSpec[srcOrigin+xlf].real();
+                f.unknownValue_[destOrigin+ndx+1] = solSpec[srcOrigin+xlf].imag();
+                f.unknownForced_[destOrigin+ndx] = true;
+                f.unknownForced_[destOrigin+ndx+1] = true;
             } else {
                 // No translation, fill with zeros
-                forcesFD[ndx] = 0;
-                forcesFD[ndx+1] = 0;
+                f.unknownValue_[destOrigin+ndx] = 0;
+                f.unknownValue_[destOrigin+ndx+1] = 0;
             }
-        }
-        // Inverse APFT, store in forces vector
-        auto fd = VectorView<double>(forcesFD.data(), blockSize, 1);
-        auto td = VectorView<double>(f.unknownValue_.data()+1+destOrigin, blockSize, 1);
-        IAPFT.multiply(fd, td);
-        // After IAPFT the resulting timepoints are all valid forces, even if not all spectral components were copied
-        // Mark all forces for this unknown as set. 
-        for(decltype(nf) k=0; k<blockSize; k++) {
-            f.unknownForced_[1+destOrigin+k] = true;
         }
     }
 
     // std::cout << "Set forces:\n";
     // f.dump(circuit, std::cout);
     
-    // Ignore errors (conflicting forces are overwritten by newer value)
-    // Error checking makes sense in case of manual forces (nodeset, ic). 
-    // Therefore we ignore abortOnError. 
-    return !error; 
+    return true; 
 }
 
-bool HBNRSolver::rebuild() {
+bool HBNRSolver::rebuild(size_t nSolComp) {
     // Call parent's rebuild
-    if (!NRSolver::rebuild()) {
+    if (!NRSolver::rebuild(nSolComp)) {
         // Assume parent has set the error flag
         return false;
     }
@@ -224,17 +233,23 @@ bool HBNRSolver::rebuild() {
     // Analysis asks cores if they request a rebuild. 
     // HB core replies that it does if the set of frequencies changes. 
 
-    // Get diagonal pointers for forces
-    auto n = circuit.unknownCount();
-    auto nt = timepoints.size();
-    diagPtrs.resize(n*nt+1);
-    
-    // Bind diagonal matrix elements
-    // Needed for forcing unknown values
-    for(decltype(n) i=0; i<n; i++) {
-        for(decltype(nt) j=0; j<nt; j++) {
-            // We know the matrix type so we can use the elementPtr() non-virtual function
-            diagPtrs[1+i*nt+j] = bsjac.elementPtr(MatrixEntryPosition(i+1, i+1), Component::Real, MatrixEntryPosition(j, j));
+    // Do this only if sparse matrix is built
+    // If we are using the nrSolver just for evaluation, 
+    // matrix is not built and we will never load forces
+    // so we do not need diagonal pointers. 
+    if (bsjac.isBuilt()) {
+        // Get diagonal pointers for forces
+        auto n = circuit.unknownCount();
+        auto nt = timepoints.size();
+        diagPtrs.resize(n*nt);
+        
+        // Bind diagonal matrix elements, block indices are 1-based, 0 is the bucket
+        // Needed for forcing unknown values
+        for(decltype(n) i=0; i<n; i++) {
+            for(decltype(nt) j=0; j<nt; j++) {
+                // We know the matrix type so we can use the elementPtr() non-virtual function
+                diagPtrs[i*nt+j] = bsjac.elementPtr(MatrixEntryPosition(i+1, i+1), Component::Real, MatrixEntryPosition(j, j));
+            }
         }
     }
 
@@ -248,17 +263,20 @@ bool HBNRSolver::initialize(bool continuePrevious) {
     // Number fo frequency components and timepoints
     auto nt = timepoints.size();
     
-    // DDT, APFT, and IAPFT are already set up
+    // Gamma and GammaInv are already set up
 
     // Number of nodes
     auto n = circuit.unknownCount();
 
-    // Number of block rows
-    auto nb = bsjac.nBlockElementRows();
-
     // Old solution and derivative wrt time at all timepoints
     resistiveResidual.resize(n*nt);
     reactiveResidual.resize(n*nt);
+
+    // Old solution in time domain
+    solutionTD.resize(n*nt); 
+
+    // Temporary storage for Jacobian block, row major form
+    blockTmp.resize(nt, nt);
 
     // Old solution and resistive residual at one timepoint
     // Includes ground node because it is used by evalAndLoad()
@@ -267,18 +285,8 @@ bool HBNRSolver::initialize(bool continuePrevious) {
     reactiveResidualAtTk.resize(n+1);
 
     // Maximum residual contribution at single timepoint
+    // Includes ground node because it is used by evalAndLoad()
     maxResidualContributionAtTk_.resize(n+1);
-
-    // Maximum residual contribution for each equation at each timepoint
-    maxResidualContribution_.resize(n*nt);
-
-    // Maximum across all equations at given timepoint for each nature
-    // Computed in checkResidual()
-    pointMaxResidualContribution_.resize(commons.natures.count(), nb);
-
-    // Maximum across all timepoints for each nature
-    // Computed in checkDelta()
-    pointMaxSolution_.resize(commons.natures.count(), nb);
 
     // Set up loading
     // Resistive residual
@@ -294,62 +302,7 @@ bool HBNRSolver::initialize(bool continuePrevious) {
 
     // Set up tolerance reference value for solution
     auto& options = circuit.simulatorOptions().core();
-    if (options.relrefsol==SimulatorOptions::relrefPointLocal) {
-        globalSolRef = false;
-        // historicSolRef = false;
-    } else if (options.relrefsol==SimulatorOptions::relrefLocal) {
-        globalSolRef = false;
-        // historicSolRef = true;
-    } else if (options.relrefsol==SimulatorOptions::relrefPointGlobal) {
-        globalSolRef = true;
-        // historicSolRef = false;
-    } else if (options.relrefsol==SimulatorOptions::relrefGlobal) {
-        globalSolRef = true;
-        // historicSolRef = true;
-    } else if (options.relrefsol==SimulatorOptions::relrefRelref) {
-        if (options.relref == SimulatorOptions::relrefAlllocal) {
-            globalSolRef = false;
-            // historicSolRef = true;
-        } else if (options.relref == SimulatorOptions::relrefSigglobal) {
-            globalSolRef = true;
-            // historicSolRef = true;
-        } else if (options.relref == SimulatorOptions::relrefAllglobal) {
-            globalSolRef = true;
-            // historicSolRef = true;
-        } else {
-            lastError = Error::BadSolReference;
-            return false;
-        }
-    } else {
-        lastError = Error::BadSolReference;
-        return false;
-    }
-
-    // Set up tolerance reference value for residual
-    if (options.relrefres==SimulatorOptions::relrefPointLocal) {
-        globalResRef = false;
-    } else if (options.relrefres==SimulatorOptions::relrefLocal) {
-        globalResRef = false;
-    } else if (options.relrefres==SimulatorOptions::relrefPointGlobal) {
-        globalResRef = true;
-    } else if (options.relrefres==SimulatorOptions::relrefGlobal) {
-        globalResRef = true;
-    } else if (options.relrefres==SimulatorOptions::relrefRelref) {
-        if (options.relref == SimulatorOptions::relrefAlllocal) {
-            globalResRef = false;
-        } else if (options.relref == SimulatorOptions::relrefSigglobal) {
-            globalResRef = false;
-        } else if (options.relref == SimulatorOptions::relrefAllglobal) {
-            globalResRef = true;
-        } else {
-            lastError = Error::BadResReference;
-            return false;
-        }
-    } else {
-        lastError = Error::BadResReference;
-        return false;
-    }
-
+    
     return true;
 }
 
@@ -374,22 +327,20 @@ bool HBNRSolver::postRun(bool continuePrevious) {
     if (converged) {
         // If converged, convert solution from TD to FD, store as complex spectrum
         auto n = circuit.unknownCount();
-        auto nf = frequencies.size();
+        auto nf = spurs_.spectrum().size();
         auto nt = timepoints.size();
         solutionFD.resize(n*nf); // no bucket
-
+        
+        // Data
         for(decltype(n) i=0; i<n; i++) {
-            auto cxSpecPtr = solutionFD.data()+nf*i;
-            // APFT computes spectrum as complex values, with the exception of DC which is stored as a real value. 
-            // We write APFT output starting at the imaginary part of the DC complex magnitude. 
-            // This way all complex values will be in the right place, except for the DC value which 
-            // will be placed in the DC solution's imaginary part. 
-            auto inPtr = solution.data()+1+i*nt;
-            auto outPtr = reinterpret_cast<double*>(cxSpecPtr)+1;
-            auto outVec = VectorView<Real>(outPtr, nt, 1);
-            APFT.multiply(VectorView<Real>(inPtr, nt, 1), outVec);
-            // Move DC from imaginary to real part of DC complex magnitude. 
-            *cxSpecPtr = cxSpecPtr->imag();
+            auto srcOrigin = i*nt;
+            auto destOrigin = i*nf;
+            auto& data = solution.vector();
+            solutionFD[destOrigin] = data[srcOrigin];
+            for(decltype(nf) k=1; k<nf; k++) {
+                auto base = srcOrigin + 1 + (k-1)*2;
+                solutionFD[destOrigin+k] = Complex(data[base], data[base+1]);
+            }
         }
     }
     return true;
@@ -429,7 +380,7 @@ bool HBNRSolver::evalAndLoadWrapper(EvalSetup& evalSetup, LoadSetup& loadSetup) 
     return true;
 }
 
-std::tuple<bool, bool> HBNRSolver::buildSystem(bool continuePrevious) {
+bool HBNRSolver::evaluate(bool continuePrevious) {
     // Jacobian values at colocation points are stored in jacColoc with dense 
     // blocks of size nt x 2, where nt is the number of colocation points. 
     // Resistive Jacobian is bound to 0-based subentry (0, 0) of each dense block. 
@@ -439,50 +390,16 @@ std::tuple<bool, bool> HBNRSolver::buildSystem(bool continuePrevious) {
     // i.e. (k, 0) with resistive and (k, 1) with reactive Jacobian values 
     // at times coresponding to timepoints tk, k=0..nb-1 because KLU matrices are 
     // stored in column major order. 
-    // 
-    // Let Jr_ijk and Jc_ijk denote the resistive and reactive Jacobian value 
-    // from block with 1-based position (i+1, j+1) at timepoint with index k. 
-    // i, j and k are all 0-based. 
-    // After nt evalAndLoad() calls the two columns of each block in jacColoc 
-    // are filled with Jr_ijk and Jc_ijk. 
-    // 
-    // The unknowns and the equations are in time domain, i.e. we formulate 
-    // HB in time domain. Let Gij denote the diagonal nb x nb matrix holding 
-    // the resistive Jacobian values for the block at position (i+1, j+1). 
-    // Similarly Cij is the diagonal nb x nb matrix holding the reactive 
-    // Jacobian values for the block. The HB Jacobian block can then be 
-    // expressed as
-    //   Gij + Gamma^-1 Omega Gamma Cij
-    // where Gamma and Gamma^-1 are the APFT and inverse APFT matrices, 
-    // while Omega is the time-derivative operator in frequency domain. 
-    // Matrix DDT holds Gamma^-1 Omega Gamma. 
-    // The HB Jacobian block at (i+1, j+1) is constructed by scaling columns 
-    // of DDT with reactive Jacobian values Jc_ijk and then adding the 
-    // resistive Jacoban values Jr_ijk to the diagonal. 
-    // 
-    // Because blocks are stored in column major order the innermost loop 
-    // iterates over values of k. In this way good cache locality is achieved. 
-    
-    // Get sizes
-    auto n = bsjac.nBlockRows();
-    auto nb = bsjac.nBlockElementRows();
+    auto n = circuit.unknownCount();
+    auto nb = timepoints.size();
 
-    // Remove forces originating from nodesets after nsiter iterations
-    auto nsiter = circuit.simulatorOptions().core().op_nsiter;
-    // Do this only at nsiter+1 (first iteration has index 1)
-    if (iteration==nsiter+1) {
-        // Continuation nodesets
-        enableForces(0, false);
-        // User-specified nodesets
-        enableForces(1, false);
+    // Old frequency domain solution is in solution, transform to time domain
+    for(decltype(n) i=0; i<n; i++) {
+        auto src = VectorView(solution.vector(), i*nb, nb, 1);
+        auto dest = VectorView(solutionTD, i*nb, nb, 1);
+        GammaInv.multiply(src, dest);
     }
-
-    // Clear maximal residual contribution
-    zero(maxResidualContribution_);
-
-    // Old solution is in time domain. Get it. 
-    auto solTD = solution.data();
-
+    
     // Clear Jacobian at colocation points
     jacColoc.zero();
     
@@ -493,7 +410,7 @@ std::tuple<bool, bool> HBNRSolver::buildSystem(bool continuePrevious) {
         // Vector length n, stride nb
         // We write to the vector of old solutions at timepoint t_k, 
         // start at index 1 (skip bucket), length n, stride 1
-        VectorView(oldSolutionAtTk.vector(), 1, n, 1) = VectorView(solution.vector(), 1+k, n, nb);
+        VectorView(oldSolutionAtTk.vector(), 1, n, 1) = VectorView(solutionTD, k, n, nb);
 
         // Zero residual vectors where evalAndLoad() will load the residuals at t_k
         zero(resistiveResidualAtTk);
@@ -512,14 +429,65 @@ std::tuple<bool, bool> HBNRSolver::buildSystem(bool continuePrevious) {
         // - reactive residuals for all equations at t_k
         // Values are stored in jacColoc. 
         auto ok = evalAndLoadWrapper(evalSetup_, loadSetup_);
+        if (!ok) {
+            return false;
+        }
 
         // Put resistive residuals at t_k in the residuals vector
         VectorView(resistiveResidual, k, n, nb) = VectorView(resistiveResidualAtTk, 1, n, 1);
         VectorView(reactiveResidual, k, n, nb) = VectorView(reactiveResidualAtTk, 1, n, 1);
+    }
 
-        // Put maximal resistive residual contribution at t_k into maxResidualContribution_
-        VectorView(maxResidualContribution_, k, n, nb) = 
-            VectorView(maxResidualContributionAtTk_, 1, n, 1);
+    return true;
+}
+
+std::tuple<bool, bool> HBNRSolver::buildSystem(bool continuePrevious) {
+    // Let Jr_ijk and Jc_ijk denote the resistive and reactive Jacobian value 
+    // from block with 1-based position (i+1, j+1) at timepoint with index k. 
+    // i, j and k are all 0-based. 
+    // After nt evalAndLoad() calls the two columns of each block in jacColoc 
+    // are filled with Jr_ijk and Jc_ijk. 
+    // 
+    // The unknowns and the equations are in frequency domain, i.e. we formulate 
+    // HB in frequency domain. Let Gij denote the diagonal nb x nb matrix holding 
+    // the resistive Jacobian values for the block at position (i+1, j+1). 
+    // Similarly Cij is the diagonal nb x nb matrix holding the reactive 
+    // Jacobian values for the block. 
+    
+    // The HB Jacobian block can then be expressed as
+    //   Gamma Gij GammaInv + Omega Gamma Cij GammaInv
+    // where Gamma and GammaInv are the forward and the inverse Fourier transform, 
+    // while Omega is the time-derivative operator in frequency domain. 
+    // Matrix OmegaGamma holds Omega Gamma. 
+    // Matrix GammaInvColumnMajor is GammaInv in column-major order (better for caching), 
+    // 
+    // Gamma Gij GammaInv is computed by scaling columns of Gamma with 
+    // valuef of G at colocation points, followed by multiplying with GammaInvColumnMajor. 
+    // 
+    // Omega Gamma Cij GammaInv is computed by scaling columns of OmegaGamma with
+    // values of C at colocation points followed by  multiplying with GammaInvColumnMajor. 
+    
+    // Residual is computed as 
+    // Gamma f + OmegaGamma c
+    // where f and c are the resistive and the reactive residuals at colocation points. 
+    
+    // Get sizes
+    auto n = circuit.unknownCount();
+    auto nb = timepoints.size();
+
+    // Remove forces originating from nodesets after nsiter iterations
+    auto nsiter = circuit.simulatorOptions().core().hb_nsiter;
+    // Do this only at nsiter+1 (first iteration has index 1)
+    if (iteration==nsiter+1) {
+        // Continuation nodesets
+        enableForces(0, false);
+        // User-specified nodesets
+        enableForces(1, false);
+    }
+
+    // Evaluate at colocation points
+    if (!evaluate(continuePrevious)) {
+        return std::make_tuple(false, false); ;
     }
 
     // For each block (ordered in column major order)
@@ -539,60 +507,27 @@ std::tuple<bool, bool> HBNRSolver::buildSystem(bool continuePrevious) {
         auto gCol = colocBlock.column(0);
         auto cCol = colocBlock.column(1);
 
-        // Scan columns in block in from 2 to nb-1 
-        for(decltype(nb) l=0; l<nb; l++) {   
-            // Get target column
-            auto targetColumn = block.column(l);
+        // blockTmp = Gamma Jrdiag Gamma^-1
+        // Scale columns of Gamma with resistive Jacobian at colocation points
+        Gamma.scaleColumns(gCol, blockTmp);
+        
+        // blockTmp += Omega Gamma Jcdiag Gamma^-1
+        // Scale columns of Omega Gamma with reactive Jacobian at colocation points
+        OmegaGamma.scaleColumnsAdd(cCol, blockTmp);
+        
+        // blockTmp Gamma^-1 -> HB Jacobian block
+        blockTmp.multiply(GammaInvColumnMajor, block);
+    }
 
-            // Get DDT column
-            auto ddtColumn = DDTcolMajor.column(l);
-
-            // Write scaled Jc_ijk
-            targetColumn.writeScaled(ddtColumn, cCol[l]);
-
-            // Add diagonal Jr_ijk
-            targetColumn[l] += gCol[l];
-        }
-
-        // Now handle residuals
-        // delta is zeroed at the beginning of each iteration by NRSolver
-
-        // Block-transform reactive residual with DDT, store it in delta
-        auto resPtr = resistiveResidual.data();
-        auto reacPtr = reactiveResidual.data();
-        auto maxResPtr = maxResidualContribution_.data();
-        // Skip bucket
-        auto deltaPtr = delta.data()+1;
-        for(decltype(n) i=0; i<n; i++) {
-            // Perform DDT on reactive residual block
-            VectorView dest(deltaPtr, nb, 1);
-            DDT.multiply(
-                // length nb, stride 1
-                VectorView(reacPtr, nb, 1), 
-                dest
-            );
-            
-            // Take values from dest and update maximal residual contribution with them
-            VectorView maxRes(maxResPtr, nb, 1);
-            for(decltype(nb) k=0; k<nb; k++) {
-                auto c = std::abs(dest[k]);
-                if (c>maxRes[k]) {
-                    maxRes[k] = c;
-                }
-            }
-
-            // Add resistive residual to block
-            dest.add(VectorView(resPtr, nb, 1));
-
-            // Move on to next block
-            resPtr += nb;
-            reacPtr += nb;
-            deltaPtr += nb;
-            maxResPtr += nb;
-        }
-
-        // Bucket
-        delta[0] = 0.0;
+    // Now handle residuals
+    // delta is zeroed at the beginning of each iteration by NRSolver
+    // Gamma f(x) + Omega Gamma q(x)
+    for(decltype(n) i=0; i<n; i++) {
+        auto g = VectorView(resistiveResidual, i*nb, nb, 1);
+        auto q = VectorView(reactiveResidual, i*nb, nb, 1);
+        auto dest = VectorView(delta, i*nb, nb, 1);
+        Gamma.multiply(g, dest);
+        OmegaGamma.multiplyAdd(q, dest);
     }
 
     // Add forced values to the system
@@ -602,25 +537,24 @@ std::tuple<bool, bool> HBNRSolver::buildSystem(bool continuePrevious) {
         }
         lastHBNRError = HBNRSolverError::LoadForces;
         errorIteration = iteration;
-        std::make_tuple(false, evalSetup_.limitingApplied);
+        return std::make_tuple(false, evalSetup_.limitingApplied);
     }
-
-
+    
     // OK, do not prevent convergence
     return std::make_tuple(true, false); 
 }
 
 bool HBNRSolver::loadForces(bool loadJacobian) {
     // Are any forces enabled? 
-    auto nf = forcesList.size();
+    auto nForces = forcesList.size();
     
     // Get row norms
-    jac.rowMaxNorm(dataWithoutBucket(rowNorm));
+    jac.rowMaxNorm(dataWithoutBucket(rowNorm, bucketSize_));
 
     // Load forces
     auto n = jac.nRow();
     double* xprev = solution.data();
-    for(decltype(nf) iForce=0; iForce<nf; iForce++) {
+    for(decltype(nForces) iForce=0; iForce<nForces; iForce++) {
         // Skip disabled force lists
         if (!forcesEnabled[iForce]) {
             continue;
@@ -630,11 +564,11 @@ bool HBNRSolver::loadForces(bool loadJacobian) {
         // First, handle forced unknowns
         auto& enabled = forcesList[iForce].unknownForced_;
         auto& force = forcesList[iForce].unknownValue_;
-        auto nForceNodes = force.size();
+        auto nForceEquations = force.size();
         // Load only if the number of forced unknowns matches 
-        // the number of unknowns in the circuit including ground
-        if (nForceNodes==n+1) {
-            for(decltype(nForceNodes) i=1; i<=n; i++) {
+        // the number of equations
+        if (nForceEquations==n) {
+            for(decltype(nForceEquations) i=0; i<nForceEquations; i++) {
                 if (enabled[i]) {
                     double factor = rowNorm[i]*ff;
                     if (factor==0.0) {
@@ -663,105 +597,10 @@ bool HBNRSolver::loadForces(bool loadJacobian) {
     return true;
 }
 
+// No residual checking when HB is formulated in frequency domain
+// because maximal residual contribution is a time domain quantity
 std::tuple<bool, bool> HBNRSolver::checkResidual() {
-    // Options 
-    auto& options = circuit.simulatorOptions().core();
-    
-    // Compute norms only in debug mode
-    bool computeNorms = settings.debug;
-
-    // In residual we have the residual at previous solution
-    // We are going to check that residual
-    
-    // Number of unknowns excluding ground
-    auto n = circuit.unknownCount();
-
-    // Number of timepoints
-    auto nt = timepoints.size();
-
-    // Results
-    maxResidual = 0.0;
-    maxNormResidual = 0.0;
-    l2normResidual2 = 0.0;
-    maxResidualNode = nullptr;
-    maxResidualTimepointIndex = 0;
-    
-    // Assume residual is OK
-    residualWithinTol = true;
-    
-    // Get point maximum for each residual nature
-    pointMaxResidualContribution_.zero(); 
-    // Loop through all nodes
-    auto compPtr = maxResidualContribution_.data();
-    for(decltype(n) i=1; i<=n; i++) {
-        // Get residual nature index
-        auto ndx = commons.residual_natureIndex[i];
-        // Loop through all timepoints
-        for(decltype(nt) k=0; k<nt; k++) {
-            double c = std::fabs(*compPtr);
-            if (c>pointMaxResidualContribution_.at(ndx, k)) {
-                pointMaxResidualContribution_.at(ndx, k) = c;
-            }
-            compPtr++;
-        }
-    }
-    
-    // Go through all variables (except ground)
-    for(decltype(n) i=1; i<=n; i++) {
-        // Representative node (1-based index), associated flow nature index
-        auto rn = circuit.reprNode(i);
-        // Skip this node if residual check is not allowed
-        if (!rn->checkFlags(Node::Flags::ResidualCheck)) {
-            continue;
-        }
-        // Get residual nature index
-        auto ndx = commons.residual_natureIndex[i];
-        
-        // Go through all timepoints
-        for(decltype(nt) k=0; k<nt; k++) {
-            // Compute tolerance reference
-            // Point local reference by default
-            // Compute tolerance reference, start with previous value of the i-th unknown
-            double tolref = std::fabs(maxResidualContribution_[(i-1)*nt+k]);
-            
-            // Account for global references
-            if (globalResRef) {
-                // Point global reference, ndx is the nature index
-                tolref = std::max(tolref, pointMaxResidualContribution_.at(ndx, k));
-            }
-
-            // Residual tolerance (Designer's Guide to Spice and Spectre, chapter 2.2.2)
-            auto tol = std::max(std::fabs(tolref*options.reltol), commons.residual_abstol[i]);
-
-            // Residual component
-            double rescomp = fabs(delta[1+(i-1)*nt+k]);
-
-            // Normalized residual component
-            double normResidual = rescomp/tol;
-
-            if (computeNorms) {
-                l2normResidual2 += normResidual*normResidual;
-                // Update largest normalized component
-                if (i==0 || normResidual>maxNormResidual) {
-                    maxResidual = rescomp;
-                    maxNormResidual = normResidual;
-                    maxResidualNode = rn;
-                    maxResidualTimepointIndex = k;
-                }
-            }
-
-            // See if residual component exceeds tolerance
-            if (rescomp>tol) {
-                residualWithinTol = false;
-                // Can exit if not computing norms
-                if (!computeNorms) {
-                    return std::make_tuple(true, residualWithinTol); 
-                }
-            }
-        }
-    }
-    
-    return std::make_tuple(true, residualWithinTol); 
+    return std::make_tuple(true, true); 
 }
 
 std::tuple<bool, bool> HBNRSolver::checkDelta() {
@@ -776,12 +615,15 @@ std::tuple<bool, bool> HBNRSolver::checkDelta() {
     
     // Number of unknowns (vector length includes a bucket at index 0)
     auto n = circuit.unknownCount();
+
+    // Number of timepoints and frequencies
     auto nt = timepoints.size();
+    auto nf = spurs_.spectrum().size();
 
     maxDelta = 0.0;
     maxNormDelta = 0.0;
     maxDeltaNode = nullptr;
-    maxDeltaTimepointIndex = 0;
+    maxDeltaFreqIndex = 0;
     
     // Check convergence (see if delta is small enough), 
     // but only if this is iteration 2 or later
@@ -790,43 +632,39 @@ std::tuple<bool, bool> HBNRSolver::checkDelta() {
     // Assume we converged
     deltaWithinTol = true;
     
-    // Get point maximum for each solution nature
     auto xold = solution.data();
-    // Skip bucket
+    auto xdelta = delta.data();
+    // Scan unknowns
     for(decltype(n) i=1; i<=n; i++) {
-        // Get unknown nature index -- here
-        auto ndx = commons.unknown_natureIndex[i];
-        for(decltype(nt) k=0; k<nt; k++) {
-            double c = std::fabs(xold[i]);
-            // Rows are natures, columns are frequency components (DC, f1, f2, ...)
-            if (c>pointMaxSolution_.at(ndx, k)) {
-                pointMaxSolution_.at(ndx, k) = c;
+        // Find maximal magnitude across frequencies to use as tolerance reference
+        double tolRef = std::abs(xold[(i-1)*nt]);
+        for(decltype(nt) j=1; j<nf; j++) {
+            auto baseI = (i-1)*nt+(j-1)*2+1;
+            double mag = std::sqrt(xold[baseI]*xold[baseI] + xold[baseI+1]*xold[baseI+1]);
+            if (mag>tolRef) {
+                tolRef = mag;
             }
         }
-    }
 
-    // Use 1-based index (with bucket) because same indexing is used for variables
-    auto xdelta = delta.data();
-    for(decltype(n) i=1; i<=n; i++) {
-        // Get unknown nature index
-        auto ndx = commons.unknown_natureIndex[i]; 
-        for(decltype(nt) j=0; j<nt; j++) {
-            // Compute tolerance reference
-            // Point local reference by default
-            // Compute tolerance reference, start with previous value of the i-th unknown at j-th frequency
-            double tolref = xold[1+(i-1)*nt+j];
-            
-            // Account for global references, no historic reference because we are in frequency domain
-            if (globalSolRef) {
-                // Point global reference, ndx is the nature index
-                tolref = std::max(tolref, pointMaxSolution_.at(ndx, j));
+        // Scan frequencies
+        for(decltype(nt) j=0; j<nf; j++) {
+            // Index of component, tolerance reference, absolute delta
+            size_t baseI;
+            double deltaAbs;
+            if (j==0) {
+                // Handle DC (real)
+                baseI = (i-1)*nt;
+                // tolref = std::abs(xold[baseI]);
+                deltaAbs = std::abs(xdelta[baseI]);
+            } else {
+                // Handle the rest (complex)
+                baseI = (i-1)*nt+(j-1)*2+1;
+                // tolref = std::sqrt(xold[baseI]*xold[baseI] + xold[baseI+1]*xold[baseI+1]);
+                deltaAbs = std::sqrt(xdelta[baseI]*xdelta[baseI] + xdelta[baseI+1]*xdelta[baseI+1]);
             }
             
             // Compute tolerance
-            double tol = std::max(std::fabs(tolref*options.reltol), commons.unknown_abstol[i]);
-
-            // Absolute solution change 
-            double deltaAbs = std::fabs(xdelta[1+(i-1)*nt+j]);;
+            double tol = std::max(std::fabs(tolRef*options.reltol), commons.unknown_abstol[i]);
 
             if (computeNorms) {
                 double normDelta = deltaAbs/tol;
@@ -834,7 +672,7 @@ std::tuple<bool, bool> HBNRSolver::checkDelta() {
                     maxDelta = deltaAbs;
                     maxNormDelta = normDelta;
                     maxDeltaNode = circuit.reprNode(i);
-                    maxDeltaTimepointIndex = j;
+                    maxDeltaFreqIndex = j;
                 }
             }
 
@@ -860,24 +698,6 @@ std::string HBNRSolver::formatConvergence() const {
     std::string s = (preventedConvergence ? "convergence not allowed" : "");
     if (!preventedConvergence) {
         s += (iterationConverged ? "converged" : "");
-        if (settings.residualCheck) {
-            ss.str(""); 
-            ss << maxResidual;
-            if (s.length()>0) {
-                s +=", ";
-            }
-            s += "worst residual=";
-            s += ss.str();
-            if (!residualWithinTol) {
-                s += " >TOL";
-            }
-            s += " @ ";
-            s += (maxResidualNode ? std::string(maxResidualNode->name()) : "(unknown)");
-            s += "~t";
-            s += std::to_string(maxResidualTimepointIndex);
-            s += "=";
-            s += std::to_string(timepoints[maxResidualTimepointIndex]);
-        }
         if (iteration>1) {
             ss.str(""); ss << maxDelta;
             if (s.length()>0) {
@@ -890,10 +710,10 @@ std::string HBNRSolver::formatConvergence() const {
             }
             s += " @ ";
             s += (maxDeltaNode ? std::string(maxDeltaNode->name()) : "(unknown)");
-            s += "~t";
-            s += std::to_string(maxDeltaTimepointIndex);
+            s += "~f";
+            s += std::to_string(maxDeltaFreqIndex);
             s += "=";
-            s += std::to_string(timepoints[maxDeltaTimepointIndex]);
+            s += std::to_string(spurs_.spectrum()[maxDeltaFreqIndex]);
         }
     }
 
@@ -922,10 +742,19 @@ bool HBNRSolver::formatError(Status& s, NameResolver* resolver) const {
 void HBNRSolver::dumpSolution(std::ostream& os, double* solution, const char* prefix) {
     auto n = circuit.unknownCount();
     auto nt = timepoints.size();
+    auto nf = spurs_.spectrum().size();
     for(decltype(n) i=1; i<=n; i++) {
         auto rn = circuit.reprNode(i);
-        for(decltype(nt) k=0; k<nt; k++) {
-            os << prefix << rn->name() << "@t" << k << " : " << solution[1+(i-1)*nt+k] << "\n";
+        auto base = (i-1)*nt;
+        for(decltype(nf) k=0; k<nf; k++) {
+            Complex x;    
+            if (k==0) {
+                x = solution[base];
+            } else {
+                auto ndx = base+1+(k-1)*2;
+                x = Complex(solution[ndx], solution[ndx+1]);
+            }
+            os << prefix << rn->name() << "@f" << k << " : " << x << "\n";
         }
     }
 }

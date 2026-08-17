@@ -9,6 +9,8 @@
 
 namespace NAMESPACE {
 
+Id OperatingPointCore::solutionTag = Id::createStatic("op");
+
 // Default parameters
 OperatingPointParameters::OperatingPointParameters() {
 }
@@ -30,7 +32,7 @@ OperatingPointCore::OperatingPointCore(
 ) : AnalysisCore(parentResolver, circuit, commons), params(params), outfile(nullptr), 
       nrSolver(circuit, commons, jacobian, states, solution, nrSettings), 
       jac(jacobian), solution(solution), states(states), 
-      converged_(false), continueState(nullptr) {
+      converged_(false), continueState(nullptr), nodesetsMasterSwitch(true) {
 }
 
 OperatingPointCore::~OperatingPointCore() {
@@ -47,14 +49,14 @@ bool OperatingPointCore::resolveOutputDescriptors(bool strict, Status& s) {
         Instance *inst;
         switch (it->type) {
         case OutdSolComponent:
-            ok = addRealVarOutputSource(strict, it->id, solution);
+            ok = addRealVarOutputSource(strict, it->id, solution, it->id, s);
             break;
         case OutdOutvar:
-            ok = addOutvarOutputSource(strict, it->idId.id1, it->idId.id2);
+            ok = addOutvarOutputSource(strict, it->idId.id1, it->idId.id2, it->name, s);
             break;
         default:
             // Delegate to parent
-            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict);
+            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, s);
             break;
         }
         if (!ok) {
@@ -64,25 +66,25 @@ bool OperatingPointCore::resolveOutputDescriptors(bool strict, Status& s) {
     return ok;
 }
 
-bool OperatingPointCore::addDefaultOutputDescriptors() {
+bool OperatingPointCore::addDefaultOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (savesCount==0) {
-        return addAllUnknowns(PTSave("default", Id(), Id()));
+        return addAllUnknowns(PTSave("default", Id(), Id()), s);
     }
     return true;
 }
 
-bool OperatingPointCore::initializeOutputs(Id name, Status& s) {
+bool OperatingPointCore::initializeOutputs(const std::string& name, Status& s) {
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     // Create output file if not created yet
     if (!outfile) {
         outfile = new OutputRawfile(
-            name, outputDescriptors, outputSources,
+            name, outputSources,
             (circuit.simulatorOptions().core().rawfile==SimulatorOptions::rawfileBinary ? OutputRawfile::Flags::Binary : OutputRawfile::Flags::None) |
                 OutputRawfile::Flags::Padded);
         outfile->setTitle(circuit.title());
@@ -102,9 +104,11 @@ bool OperatingPointCore::finalizeOutputs(Status &s) {
 
     // Write DC solution to repository if analysis is OK
     if (converged_ && params.store.length()>0) {
-        auto sol = circuit.newStoredSolution("dc", params.store);
-        sol->setNames(circuit);
-        sol->setValues(solution.vector());
+        auto& sol = circuit.newStoredSolution(params.store);
+        sol.setTypeTag(solutionTag);
+        sol.setNames(circuit);
+        sol.setValues(solution.vector());
+        // Do not store states
     }
 
     return true;
@@ -122,18 +126,17 @@ bool OperatingPointCore::deleteOutputs(Id name, Status &s) {
     }
     return true;
 }
-    
+
 bool OperatingPointCore::storeState(size_t ndx, bool storeDetails) {
     auto& repo = coreStates.at(ndx);
-    // Store current solution as annotated solution
+    repo.solution.setTypeTag(solutionTag);
     if (storeDetails) {
         repo.solution.setNames(circuit);
     } else {
         repo.solution.clearNames();
     }
     repo.solution.setValues(solution.vector());
-    // Store current state
-    repo.solution.setAuxData(states.vector());
+    repo.solution.setAuxRealVector(states.vector());
     // Stored state is coherent and valid
     repo.coherent = true;
     repo.valid = true;
@@ -141,6 +144,7 @@ bool OperatingPointCore::storeState(size_t ndx, bool storeDetails) {
 }
 
 bool OperatingPointCore::restoreState(size_t ndx) {
+    // States are op states for sure, no need to check
     auto& state = coreStates.at(ndx);
     if (state.valid) {
         // State is valid
@@ -202,6 +206,7 @@ bool OperatingPointCore::populateStructures(Status& s) {
 
 
 bool OperatingPointCore::rebuild(Status& s) {
+    clearError();
     // Bind Jacobian entries
     // Resistive parts bound to entries of jac, reactive parts not bound
     if (!circuit.bind(&jac, Component::Real, std::nullopt, nullptr, Component::Real, std::nullopt, s)) {
@@ -236,8 +241,8 @@ bool OperatingPointCore::rebuild(Status& s) {
         String& solutionName = params.nodeset.val<String>();
         if (solutionName.length()>0) {
             // Get solution from repository
-            auto solPtr = circuit.storedSolution("dc", solutionName);
-            if (!solPtr) {
+            auto solPtr = circuit.storedSolution(solutionName);
+            if (!solPtr || solPtr->typeTag()!=solutionTag) {
                 // No nodesets
                 nrSolver.forces(1).clear();
                 Simulator::wrn() << "Warning, solution '"+solutionName+"' not found. No user nodesets applied.\n";
@@ -271,7 +276,7 @@ bool OperatingPointCore::rebuild(Status& s) {
     }
     
     // Rebuild NR solver structures
-    if (!nrSolver.rebuild()) {
+    if (!nrSolver.rebuild(circuit.unknownCount())) {
         s.set(Status::NonlinearSolver, "Failed to rebuild internal structures of nonlinear solver.");
         return false;
     }
@@ -292,14 +297,15 @@ std::tuple<bool, bool> OperatingPointCore::runSolver(bool continuePrevious) {
         // Continue mode
         if (continueState &&
             continueState->valid && continueState->coherent &&
+            continueState->solution.typeTag()==solutionTag &&
             continueState->solution.values().size()==circuit.unknownCount()+1 &&
-            continueState->solution.auxData().size()==circuit.statesCount() 
+            continueState->solution.auxRealVector().size()==circuit.statesCount() 
         ) {
             // Continue a state
             // State is valid, coherent, and its lengths match those of the solver vectors
             // Restore current state
             solution.vector() = continueState->solution.values();
-            states.vector() = continueState->solution.auxData();
+            states.vector() = continueState->solution.auxRealVector();
             runInContinueMode = true;
             // No forces applied
             nrSolver.enableForces(0, false);
@@ -309,7 +315,10 @@ std::tuple<bool, bool> OperatingPointCore::runSolver(bool continuePrevious) {
             }
             // Use forced bypass if allowed
             commons.requestForcedBypass = commons.allowContinueStateBypass;
-        } else if (continueState && continueState->valid) {
+        } else if (
+            continueState && continueState->valid && 
+            continueState->solution.typeTag()==solutionTag
+        ) {
             // Stored analysis state is valid, but not coherent with current circuit, 
             // its lengths may not match those of the solver vectors. 
             // Use forces to continue, but set no initial states vector nor initial solution. 
@@ -349,7 +358,7 @@ std::tuple<bool, bool> OperatingPointCore::runSolver(bool continuePrevious) {
         nrSolver.enableForces(0, false);
 
         // Apply forces specified by user in slot 1
-        nrSolver.enableForces(1, true); 
+        nrSolver.enableForces(1, nodesetsMasterSwitch); 
         
         if (options.op_debug>1) {
             Simulator::dbg() << "OP using standard initial solution with forced nodesets.\n";

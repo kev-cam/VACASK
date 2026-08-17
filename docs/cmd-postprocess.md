@@ -5,10 +5,20 @@ The `postprocess` command runs an external program after simulation. It is typic
 ## Syntax
 
 ```text
-postprocess("program" [, "arg1", "arg2", ...])
+postprocess("program" [, arg1, arg2, ...])
 ```
 
-All arguments are string expressions. The first argument is the path to the program to execute. Subsequent arguments are passed as command-line arguments to that program.
+The first argument must evaluate to a string and is the path to the program to execute. Subsequent arguments can be expressions of any type and are passed as command-line arguments to that program:
+
+- A scalar string is passed as-is (unquoted).
+- Anything else (numbers, vectors, lists, ...) is converted to its textual representation, e.g. `5` becomes `5`, `[1, 2, 3]` becomes `[1, 2, 3]`. Strings nested inside vectors or lists are quoted in that representation, e.g. `["a", "b"]` becomes `["a", "b"]` (quotes included).
+
+```text
+var ns=500
+postprocess(PYTHON, "runme.py", ns)
+```
+
+passes `runme.py` and `500` as command-line arguments, which the script can read with `sys.argv`.
 
 ## The PYTHON variable
 
@@ -61,6 +71,15 @@ plt.show()
 ```
 
 The script is embedded in the netlist using the `embed` directive (see [Embedded Files](input-embed.md)), so no separate file needs to be maintained.
+
+## The SIM_PARENT_FILE_DIR environment variable
+
+VACASK sets the `SIM_PARENT_FILE_DIR` environment variable to the directory of the file containing the `postprocess` command before launching the program. If the netlist is split across files with `include` (see [Including a File](input-include.md)), this is the directory of the file where the `postprocess` command itself appears, not the top-level netlist file. Use it to locate files relative to the netlist rather than relative to the simulator's working directory:
+
+```text
+import os
+netlist_dir = os.environ["SIM_PARENT_FILE_DIR"]
+```
 
 ## Skipping postprocessing
 

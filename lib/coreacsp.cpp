@@ -23,8 +23,8 @@ template<> int Introspection<ACSPParameters>::setup() {
     registerMember(mode);
     registerMember(points);
     registerMember(values);
-    registerMember(writeop);
     registerMember(write);
+    registerNamedMember(opParams.write, "writeop");
     registerNamedMember(opParams.nodeset, "nodeset");
     registerNamedMember(opParams.store, "store");
     
@@ -57,7 +57,7 @@ ACSPCore::~ACSPCore() {
 
 // Converts an OutputDescriptor into an OutputSource. 
 // The former can be used to recreate the latter if the set of unknowns changes. 
-bool ACSPCore::resolveOutputDescriptors(bool strict) {
+bool ACSPCore::resolveOutputDescriptors(bool strict, Status& s) {
     // Clear output sources
     outputSources.clear();
     // Resolve output descriptors
@@ -68,22 +68,22 @@ bool ACSPCore::resolveOutputDescriptors(bool strict) {
             // stMatrix is the transpose of S
             if (it->ndxNdx.ndx1<stMatrix.nRows() && it->ndxNdx.ndx2<stMatrix.nRows()) {
                 // Matrix large enough
-                outputSources.emplace_back(&stMatrix.data(), stMatrix.indexOf(it->ndxNdx.ndx2, it->ndxNdx.ndx1));
+                outputSources.emplace_back(&stMatrix.data(), stMatrix.indexOf(it->ndxNdx.ndx2, it->ndxNdx.ndx1), it->name);
             } else if (strict) {
                 // Outside of matrix, strict mode, error
                 setError(SPError::MatrixEntryNotFound);
                 ok = false;
             } else {
                 // Outside of matrix, default source
-                outputSources.emplace_back();
+                outputSources.emplace_back(it->name);
             }
             break;
         case OutdFrequency:
-            outputSources.emplace_back(&frequency);
+            outputSources.emplace_back(&frequency, it->name);
             break;
         default:
             // Delegate to parent
-            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict);
+            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, s);
             break;
         }
         if (!ok) {
@@ -95,8 +95,7 @@ bool ACSPCore::resolveOutputDescriptors(bool strict) {
 
 
 // These OutputDescriptors are always added
-bool ACSPCore::addCoreOutputDescriptors() {
-    clearError();
+bool ACSPCore::addCoreOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
@@ -106,26 +105,23 @@ bool ACSPCore::addCoreOutputDescriptors() {
     auto portCount = params.ports.size() / 2;
     for(decltype(portCount) i=0; i<portCount; i++) {
         for(decltype(portCount) j=0; j<portCount; j++) {
-            if (!addOutputDescriptor(
-                OutputDescriptor(OutdSmat, std::string("s(")+std::to_string(i+1)+","+std::to_string(j+1)+")", i, j))
-            ) {
-                lastError = Error::Descriptor;
-                errorId = "frequency";
+            auto descName = std::string("s(")+std::to_string(i+1)+","+std::to_string(j+1)+")";
+            if (!addOutputDescriptor(OutputDescriptor(OutdSmat, descName, i, j))) {
+                s.set(Status::Analysis, std::string("Failed to add output descriptor for "+std::string(descName)+"."));
                 return false;
             }
         }
     }
     
     if (!addOutputDescriptor(OutputDescriptor(OutdFrequency, "frequency"))) {
-        lastError = Error::Descriptor;
-        errorId = "frequency";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for frequency."));
         return false;
     }
     return true;
 }
 
 // These OutputDescriptors are added if no save directives are given
-bool ACSPCore::addDefaultOutputDescriptors() {
+bool ACSPCore::addDefaultOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
@@ -135,7 +131,7 @@ bool ACSPCore::addDefaultOutputDescriptors() {
     return true;
 }
 
-bool ACSPCore::initializeOutputs(Id name, Status& s) {
+bool ACSPCore::initializeOutputs(const std::string& name, Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
@@ -143,7 +139,7 @@ bool ACSPCore::initializeOutputs(Id name, Status& s) {
     // Create output file if not created yet
     if (!outfile) {
         outfile = new OutputRawfile(
-            name, outputDescriptors, outputSources,
+            name, outputSources,
             (circuit.simulatorOptions().core().rawfile==SimulatorOptions::rawfileBinary ? OutputRawfile::Flags::Binary : OutputRawfile::Flags::None) |
                 OutputRawfile::Flags::Padded | OutputRawfile::Flags::Complex);
         outfile->setTitle(circuit.title());
@@ -521,7 +517,7 @@ CoreCoroutine ACSPCore::coroutine(bool continuePrevious) {
             acSolution[en] -= sourceVector[i]->scaledUnityExcitation();
             
             // Solve, set bucket to 0.0
-            if (!acMatrix.solve(dataWithoutBucket(acSolution))) {
+            if (!acMatrix.solve(dataWithoutBucket(acSolution, bucketSize))) {
                 setError(SPError::MatrixError);
                 if (debug>2) {
                     Simulator::dbg() << "Failed to solve factored system for injected current.\n";
@@ -531,7 +527,7 @@ CoreCoroutine ACSPCore::coroutine(bool continuePrevious) {
             }
             acSolution[0] = 0.0;
 
-            if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution), true, true)) {
+            if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution, bucketSize), true, true)) {
                 setError(SPError::SolutionError);
                 if (options.smsig_debug) {
                     Simulator::dbg() << "A solution entry for excitation at port "+std::to_string(i+1)+" is not finite. Solver failed.\n";

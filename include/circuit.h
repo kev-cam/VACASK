@@ -324,7 +324,8 @@ public:
             // Apply optionsMap now. elaborateChanges() applies it only if variables changed 
             // but we must apply it always. Apply to default set of circuit oiptions. 
             IStruct<SimulatorOptions> opt;
-            if (auto [ok, changed] = opt.setParameters(*optionsMap, variableEvaluator_, Parameterized::Write::All, s); !ok) {
+            RpnEvaluationNetlistContext ctx;
+            if (auto [ok, changed] = opt.setParameters(*optionsMap, variableEvaluator_, ctx, Parameterized::Write::All, s); !ok) {
                 return std::make_tuple(false, false, false);
             }
 
@@ -426,6 +427,23 @@ public:
     // - a new entry has been created
     // - ok
     std::tuple<bool, bool> createJacobianEntry(Node* ne, Node* nu, EntryFlags f = EntryFlags::ResistiveReactive, Status& s=Status::ignore);
+    void newResistiveContribution(Node* n) {
+        auto at = resistiveResidualContribCount[n->unknownIndex()];
+        resistiveResidualContribCount[n->unknownIndex()] = at<2 ? at+1 : at;
+    };
+    void newReactiveContribution(Node* n) {
+        auto at = reactiveResidualContribCount[n->unknownIndex()];
+        reactiveResidualContribCount[n->unknownIndex()] = at<2 ? at+1 : at;
+    };
+    bool checkDcResidual(EquationIndex ndx) {
+        return resistiveResidualContribCount[ndx]>1;
+    }
+    bool checkResidual(EquationIndex ndx) {
+        return (
+            resistiveResidualContribCount[ndx]+
+            reactiveResidualContribCount[ndx]
+        )>1;
+    }
     // Allocate n entries in state vector, return global state index of first allocated entry
     GlobalStorageIndex allocateStates(LocalStorageIndex n);
     GlobalStorageIndex allocateDeviceStates(LocalStorageIndex n);
@@ -467,10 +485,10 @@ public:
     void dumpDeviceCounts(int indent, std::ostream& os) const;
 
     // Create a new stored solution, if exists, return existing solution
-    AnnotatedSolution* newStoredSolution(Id typeCode, Id name);
+    AnnotatedSolution& newStoredSolution(Id name);
 
     // Return existing solution, if not found return nullptr
-    AnnotatedSolution* storedSolution(Id typeCode, Id name);
+    AnnotatedSolution* storedSolution(Id name);
     
     ParserTables& tables() { return tables_; };
 
@@ -549,6 +567,10 @@ private:
     // Mapping from unknown to representative node
     std::vector<Node*> unknownToReprNode;
 
+    // Flags indicatin if an equation has 0, 1, or 2+ residual contributions
+    std::vector<uint8_t> resistiveResidualContribCount;
+    std::vector<uint8_t> reactiveResidualContribCount;
+
     // Ordered map of Jacobian entries
     // Ordering is by column (unknown) first
     SparsityMap sparsityMap_;
@@ -585,7 +607,7 @@ private:
     IStruct<SimulatorOptions> simOptions;
 
     // Annotated solutions (for nodesets, ics, and hb-assisted hb)
-    std::unordered_map<std::pair<Id, Id>, AnnotatedSolution> solutionRepository;
+    std::unordered_map<Id, AnnotatedSolution> solutionRepository;
 
     template<typename T> bool singleSetterHelper(Id name, Id param, const Value& v, Status& s, const char* failMsg);
     template<typename T> bool groupSetterHelper(Id name, const PTParameters& params, Status& s, const char* failMsg);

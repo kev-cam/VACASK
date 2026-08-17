@@ -31,9 +31,9 @@ public:
 
 protected:
     virtual bool addCommonOutputDescriptor(const OutputDescriptor& desc);
-    virtual bool addCoreOutputDescriptors(Status& s=Status::ignore);
+    virtual bool addCoreOutputDescriptors(Status& s);
     virtual bool resolveSave(const PTSave& save, bool verify, Status& s=Status::ignore);
-    virtual bool addDefaultOutputDescriptors();
+    virtual bool addDefaultOutputDescriptors(Status& s);
     virtual void clearOutputDescriptors();
     virtual bool resolveOutputDescriptors(bool strict, Status& s=Status::ignore);
 
@@ -58,16 +58,20 @@ protected:
     virtual bool storeState(size_t ndx, bool storeDetails=true);
     virtual bool restoreState(size_t ndx);
     virtual void makeStateIncoherent(size_t ndx);
-
     
 private:
     IStruct<TranParameters> params;
-    OperatingPointCore opCore;
-    TranCore tranCore;
-    
+
+    // Declared before the cores so the references they bind in their init lists
+    // (jac, solution, states) refer to fully-constructed members. opCore precedes
+    // tranCore because tranCore binds a reference to opCore.
     KluRealMatrix jac; // Jacobian
+    VectorRepository<double> opSolution; // OP solution history
     VectorRepository<double> solution; // Solution history
     VectorRepository<double> states; // Circuit states
+
+    OperatingPointCore opCore;
+    TranCore tranCore;
 };
 
 }

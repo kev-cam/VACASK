@@ -5,10 +5,15 @@
 
 namespace NAMESPACE {
 
-Analysis::Analysis(Id name, Circuit& circuit, PTAnalysis& ptAnalysis) 
+Analysis::Analysis(const std::string& name, Circuit& circuit, PTAnalysis& ptAnalysis) 
     : name_(name), circuit(circuit), sweeper(circuit, ptAnalysis.sweeps()), 
       ptAnalysis(ptAnalysis), progressReporter(nullptr) {
+    prefixedName_ = name_;
 }
+
+void Analysis::setFileNamePrefix(const std::string& pfx) { 
+    prefixedName_ = pfx + name_; 
+};
 
 bool Analysis::registerFactory(Id name, Analysis::AnalysisFactory factory) {
     auto [it, inserted] = getRegistry().insert(std::make_pair(name, factory));
@@ -34,7 +39,8 @@ Analysis* Analysis::create(
     }
 
     // Set analysis parameters based on global circuit context
-    auto [ok, changed] = an->parameters().setParameters(ptAnalysis.parameters(), circuit.variableEvaluator(), s);
+    RpnEvaluationNetlistContext ctx;
+    auto [ok, changed] = an->parameters().setParameters(ptAnalysis.parameters(), circuit.variableEvaluator(), ctx, s);
     if (!ok) {
         delete an;
         return nullptr;
@@ -86,16 +92,16 @@ bool Analysis::addOutputDescriptors(Status& s) {
 
     // Add default saves if needed (no saves specified)
     // Ignore errors and conflicts
-    addDefaultOutputDescriptors();
+    addDefaultOutputDescriptors(s);
 
     return true;
 }
 
-bool Analysis::resolveOutputDescriptor(const OutputDescriptor& descr, Output::SourcesList& srcs, bool strict) {
+bool Analysis::resolveOutputDescriptor(const OutputDescriptor& descr, Output::SourcesList& srcs, bool strict, Status& s) {
     // Abstract analysis handles only sweep variables
     switch (descr.type) {
         case OutdSweepvar: 
-            srcs.emplace_back(&sweeper, descr.ndx);
+            srcs.emplace_back(&sweeper, descr.ndx, descr.name);
             break;
         default:
             DBGCHECK(true, "Unknown output descriptor type.");
@@ -120,7 +126,8 @@ AnalysisCoroutine Analysis::coroutine(Status& s) {
     simOptions.core() = originalSimOptions.core();
 
     // Update with options map
-    if (auto [ok, changed] = simOptions.setParameters(analysisOptions, circuit.variableEvaluator(), Parameterized::Write::All, s); !ok) {
+    RpnEvaluationNetlistContext ctx;
+    if (auto [ok, changed] = simOptions.setParameters(analysisOptions, circuit.variableEvaluator(), ctx, Parameterized::Write::All, s); !ok) {
         s.extend("Failed to set initial options.");
         co_yield AnalysisState::Aborted;
     }
@@ -169,6 +176,10 @@ AnalysisCoroutine Analysis::coroutine(Status& s) {
     // Skip this step to avoid wasting time
     // Mark as started
     // co_yield AnalysisState::Ready;
+
+    // Before analysis is called we call elaborateChanges() which calls
+    // 1) preMapping() to determine if analysis needs matrix entries
+    // 2) populateStructures() to add them if needed
 
     // Do we have sweep(s)
     if (ptAnalysis.sweeps().size()>0) {
@@ -247,20 +258,13 @@ AnalysisCoroutine Analysis::coroutine(Status& s) {
                     co_yield AnalysisState::Aborted;
                 }
             }
-
-            // Check if any core requests a rebuild
-            auto [okcrr, rebuildRequested] = requestsRebuild(s);
-            if (!okcrr) {
-                s.extend("Check whether a core needs to be rebuilt failed.");
-                co_yield AnalysisState::Aborted;
-            }
-
+            
             // Do not allow analysis to use forced bypass by default
             commons.allowContinueStateBypass = false;
 
             // If outputs not bound yet or core needs rebuilding, bind them to actual quantities
             bool systemChanged = false;
-            if (!outputsBound || needsCoreRebuild || rebuildRequested) {
+            if (!outputsBound || needsCoreRebuild) {
                 if (sweepDebug>1) {
                     Simulator::dbg() << "Rebuilding analysis internals and invalidating stored analysis states.\n";
                 }
@@ -272,10 +276,6 @@ AnalysisCoroutine Analysis::coroutine(Status& s) {
                         co_yield AnalysisState::Aborted;
                     }
                 }
-
-                // Every time core needs rebuild, rebind outputs
-                bool strict = (!outputsBound && circuit.simulatorOptions().core().strictsave>0) ||
-                              (outputsBound && circuit.simulatorOptions().core().strictsave>1);
                 
                 // Rebuild core
                 if (!rebuildCores(s)) {
@@ -283,12 +283,16 @@ AnalysisCoroutine Analysis::coroutine(Status& s) {
                     co_yield AnalysisState::Aborted;
                 }
 
+                // Every time core needs rebuild, rebind outputs
+                bool strict = (!outputsBound && circuit.simulatorOptions().core().strictsave>0) ||
+                              (outputsBound && circuit.simulatorOptions().core().strictsave>1);
+                
                 // Bind outputs
                 if (!resolveOutputDescriptors(strict, s)) {
                     s.extend("Failed to bind analysis outputs.");
                     co_yield AnalysisState::Aborted;
                 }
-
+                
                 outputsBound = true;
                 systemChanged = true;
 
@@ -651,7 +655,8 @@ std::tuple<bool, bool> Analysis::run(Status& s) {
 }
 
 std::tuple<bool, bool> Analysis::updateParameterExpressions(Status& s) {
-    return parameters().setParameters(ptAnalysis.parameters().expressions(), circuit.variableEvaluator(), s);
+    RpnEvaluationNetlistContext ctx;
+    return parameters().setParameters(ptAnalysis.parameters().expressions(), circuit.variableEvaluator(), ctx, s);
 }
 
 void Analysis::dump(std::ostream& os) const {

@@ -60,6 +60,11 @@ template<> int Introspection<DevSourceInstanceParams>::setup() {
     
     registerMember(mag);
     registerMember(phase);
+
+    registerMember(spur);
+    registerMember(smag);
+    registerMember(sphase);
+
     return 0;
 }
 instantiateIntrospection(DevSourceInstanceParams);
@@ -130,6 +135,11 @@ DevSourceInstanceParams::DevSourceInstanceParams() {
     // small signal parameters
     mag = 0.0;
     phase = 0.0;
+
+    // (quasi)periodic small-signal excitation
+    spur = ValueVector({});
+    smag = RealVector({});
+    sphase = RealVector({});
 }
 
 
@@ -706,11 +716,18 @@ std::tuple<double, double> sourceCompute(const InstanceParams& params, InstanceD
             val = params.sinedc+params.ampl*std::sin(params.tdphase*PI/180);
             nextBreak = params.delay;
         } else {
-            // For t >= delay start sine at given tdphase
+            // For t >= delay start sine at given phase
+            // Use two-product via fma to reduce freq*td to its fractional part
+            // with full precision, avoiding range reduction error for large t
+            auto td = time-params.delay;
+            auto prod = params.freq*td;
+            auto lo = std::fma(params.freq, td, -prod);
+            auto intpart = std::trunc(prod);
+            auto frac = (prod - intpart) + lo;
             val = params.sinedc+
                   params.ampl
-                    *std::sin(2*PI*params.freq*(time-params.delay)+params.tdphase*PI/180)
-                    *std::exp(-params.theta*(time-params.delay));
+                    *std::sin(2*PI*frac+params.tdphase*PI/180)
+                    *std::exp(-params.theta*td);
         }
         break;
     case IndependentSourceType::Exp:
@@ -1005,6 +1022,10 @@ template<> double BuiltinVSourceInstance::responseScalingFactor() const {
     return params.core().mfactor; 
 }
 
+template<> std::tuple<const ValueVector&, const RealVector&, const RealVector&> BuiltinVSourceInstance::spur() const {
+    return { params.core().spur, params.core().smag, params.core().sphase };
+}
+
 template<> std::tuple<EquationIndex,EquationIndex> BuiltinISourceInstance::sourceExcitation(Circuit& circuit) const { 
     return std::make_tuple(nodes_[1]->unknownIndex(), nodes_[0]->unknownIndex()); 
 }
@@ -1022,6 +1043,10 @@ template<> double BuiltinISourceInstance::responseScalingFactor() const {
     // Because the computed response (branch voltage) is the same for 
     // all parallel instances the scaling factor must be 1. 
     return 1.0; 
+}
+
+template<> std::tuple<const ValueVector&, const RealVector&, const RealVector&> BuiltinISourceInstance::spur() const {
+    return { params.core().spur, params.core().smag, params.core().sphase };
 }
 
 template<> bool BuiltinVSourceInstance::getOutvar(ParameterIndex ndx, Value& v, Status& s) const { 
@@ -1136,6 +1161,11 @@ template<> bool BuiltinVSourceInstance::populateStructuresCore(Circuit& circuit,
     if (auto [_, ok] = circuit.createJacobianEntry(nodes_[2], nodes_[1], EntryFlags::Resistive, s); !ok) {
         return false;
     }
+    
+    circuit.newResistiveContribution(nodes_[0]);
+    circuit.newResistiveContribution(nodes_[1]);
+    circuit.newResistiveContribution(nodes_[2]);
+    
     // No states to reserve
     return true;
 }
@@ -1143,6 +1173,10 @@ template<> bool BuiltinVSourceInstance::populateStructuresCore(Circuit& circuit,
 template<> bool BuiltinISourceInstance::populateStructuresCore(Circuit& circuit, Status& s) {
     // No Jacobian entries
     // No states to reserve
+
+    circuit.newResistiveContribution(nodes_[0]);
+    circuit.newResistiveContribution(nodes_[1]);
+    
     return true;
 }
 

@@ -332,19 +332,66 @@ public:
     // Solve Ax = rhs, destroy A, result in rhs
     // Use partial pivoting
     bool destructiveSolve(VectorView<T>& rhs) {
-        return solveCore(&rhs, nullptr);
+        return luSolveCore(&rhs, nullptr);
     };
 
     // Solve Ax = Rhs, destroy A, result in Rhs
     // Use partial pivoting
     bool destructiveSolve(DenseMatrixView<T>& rhs) {
-        return solveCore(&rhs, nullptr);
+        return luSolveCore(&rhs, nullptr);
     };
 
     // Perform LU decomposition in place, return row permutation vector
     // Use partial pivoting
     bool factor(VectorView<size_t>& rowPerm) {
-        return solveCore(static_cast<VectorView<T>*>(nullptr), &rowPerm);
+        return luSolveCore(static_cast<VectorView<T>*>(nullptr), &rowPerm);
+    };
+
+    // Solve Ax = rhs given the LU decomposition (stored in this matrix, see
+    // factor()) and the associated row permutation vector.
+    // Diagonal and upper triangle hold U, strictly below the diagonal holds
+    // L (unit diagonal, not stored).
+    // Permutes rhs in place, then solves by forward and backward substitution.
+    bool luSolve(VectorView<T>& rhs, const VectorView<size_t>& rowPerm) {
+        auto n = nCol_;
+        if (rhs.n()!=n) {
+            throw std::out_of_range("Vector length does not match matrix size.");
+        }
+        if (rowPerm.n()!=n) {
+            throw std::out_of_range("Row permutation vector length does not match matrix size.");
+        }
+        if (nRow_!=n) {
+            throw std::out_of_range("Matrix is not square.");
+        }
+
+        // Permute rhs in place by replaying the same interchanges performed
+        // on the matrix rows in luSolveCore(): rowPerm[i] is the row swapped
+        // with row i at elimination step i (LAPACK ipiv convention), so
+        // replaying the swaps in increasing i order reproduces the same
+        // permutation.
+        for(size_t i=0; i+1<n; i++) {
+            rhs.swap(i, rowPerm[i]);
+        }
+
+        // Forward substitution, L has implicit unit diagonal
+        for(size_t i=0; i<n; i++) {
+            auto matRow = row(i);
+            for(size_t j=0; j<i; j++) {
+                rhs[i] -= matRow[j]*rhs[j];
+            }
+        }
+
+        // Back substitution, U is stored on and above the diagonal
+        for(size_t cnt=0; cnt<n; cnt++) {
+            auto i = n-1-cnt;
+            auto matRow = row(i);
+            for(size_t j=i+1; j<n; j++) {
+                rhs[i] -= matRow[j]*rhs[j];
+            }
+            rhs[i] /= matRow[i];
+        }
+
+        return true;
     };
 
     // Multiply with vector, store result in result
@@ -358,6 +405,20 @@ public:
         }
         for(size_t i=0; i<nRow_; i++) {
             result[i] = row(i).dot(vector);
+        }
+    };
+
+    // Multiply with vector, add to result
+    // Vector must be distinct from result
+    void multiplyAdd(const VectorView<T>& vector, VectorView<T>& result) const {
+        if (nCol_!=vector.n()) {
+            throw std::out_of_range("Matrix is not compatible with vector.");
+        }
+        if (nRow_!=result.n()) {
+            throw std::out_of_range("Result is not compatible with product.");
+        }
+        for(size_t i=0; i<nRow_; i++) {
+            result[i] += row(i).dot(vector);
         }
     };
 
@@ -404,6 +465,76 @@ public:
         addScaled(other, -1.0, result);
     };
 
+    // Scale rows with values given by a vector, store in result
+    void scaleRows(const VectorView<T>& vector, DenseMatrixView<T>& result) {
+        if (nRow_!=vector.n()) {
+            throw std::out_of_range("Matrix is not compatible with vector.");
+        }
+        if (nRow_!=result.nRows() || nCol_!=result.nCols()) {
+            throw std::out_of_range("Result is not compatible with matrix.");
+        }
+        for(size_t i=0; i<nRow_; i++) {
+            auto src = row(i);
+            auto dest = result.row(i);
+            auto scl = vector[i];
+            for(size_t j=0; j<nCol_; j++) {
+                dest[j] = src[j]*scl;
+            }
+        }
+    };
+
+    // Scale rows with values given by a vector, add to result
+    void scaleRowsAdd(const VectorView<T>& vector, DenseMatrixView<T>& result) {
+        if (nRow_!=vector.n()) {
+            throw std::out_of_range("Matrix is not compatible with vector.");
+        }
+        if (nRow_!=result.nRows() || nCol_!=result.nCols()) {
+            throw std::out_of_range("Result is not compatible with matrix.");
+        }
+        for(size_t i=0; i<nRow_; i++) {
+            auto src = row(i);
+            auto dest = result.row(i);
+            auto scl = vector[i];
+            for(size_t j=0; j<nCol_; j++) {
+                dest[j] += src[j]*scl;
+            }
+        }
+    };
+
+    // Scale columns with values given by a vector, store in result
+    void scaleColumns(const VectorView<T>& vector, DenseMatrixView<T>& result) {
+        if (nCol_!=vector.n()) {
+            throw std::out_of_range("Matrix is not compatible with vector.");
+        }
+        if (nRow_!=result.nRows() || nCol_!=result.nCols()) {
+            throw std::out_of_range("Result is not compatible with matrix.");
+        }
+        for(size_t i=0; i<nRow_; i++) {
+            auto src = row(i);
+            auto dest = result.row(i);
+            for(size_t j=0; j<nCol_; j++) {
+                dest[j] = src[j]*vector[j];
+            }
+        }
+    };
+
+    // Scale columns with values given by a vector, add to result
+    void scaleColumnsAdd(const VectorView<T>& vector, DenseMatrixView<T>& result) {
+        if (nCol_!=vector.n()) {
+            throw std::out_of_range("Matrix is not compatible with vector.");
+        }
+        if (nRow_!=result.nRows() || nCol_!=result.nCols()) {
+            throw std::out_of_range("Result is not compatible with matrix.");
+        }
+        for(size_t i=0; i<nRow_; i++) {
+            auto src = row(i);
+            auto dest = result.row(i);
+            for(size_t j=0; j<nCol_; j++) {
+                dest[j] += src[j]*vector[j];
+            }
+        }
+    };
+
     // Apply function to each element, put result in result
     void apply(T (*func)(T), DenseMatrixView<T>& result) const {
         for(size_t i=0; i<nRow_; i++) {
@@ -441,7 +572,7 @@ public:
             throw std::out_of_range("Matrix is not square.");
         }
         result.identity();
-        return solveCore(&result);
+        return luSolveCore(&result);
     };
 
     void dump(std::ostream& os) const {
@@ -466,7 +597,7 @@ private:
     // Solution is placed in rhs. 
     // Stores row permutation vector. 
     // Returns true on success. 
-    template<typename RhsType> bool solveCore(RhsType* rhs, VectorView<size_t>* rowPerm = nullptr) {
+    template<typename RhsType> bool luSolveCore(RhsType* rhs, VectorView<size_t>* rowPerm = nullptr) {
         auto n = nCol_;
         if constexpr(std::is_same<RhsType, VectorView<T>>::value) {
             if (rhs && rhs->n()!=n) {
@@ -487,12 +618,6 @@ private:
         if (nRow_!=n) {
             throw std::out_of_range("Matrix is not square.");
         }
-        if (rowPerm) {
-            // Initialize row permutation
-            for(size_t i=0; i<n; i++) {
-                (*rowPerm)[i] = i;
-            }
-        }
         
         // Eliminate
         for(size_t i=0; i<n-1; i++) {
@@ -507,19 +632,20 @@ private:
                     pivI = j;
                 }
             }
-            auto pivot = pivCol[pivI];
             if (p==0) {
                 return false;
             }
             
+            // Record pivot partner for this step (LAPACK ipiv convention)
+            if (rowPerm) {
+                (*rowPerm)[i] = pivI;
+            }
+
             // Swap with pivot
             if (pivI!=i) {
                 auto pivRow = row(pivI);
                 auto pivDest = row(i);
                 pivRow.swap(pivDest);
-                if (rowPerm) {
-                    rowPerm->swap(i, pivI);
-                }
                 if (rhs) {
                     if constexpr(std::is_same<RhsType, VectorView<T>>::value) {
                         rhs->swap(i, pivI);
@@ -658,8 +784,8 @@ public:
     // Move assignment
     DenseMatrix<T>& operator=(DenseMatrix<T>&& other) {
         major_ = other.major_;
-        data_ = other.data_;
-        start_ = std::move(data_.data());
+        data_ = std::move(other.data_);
+        start_ = data_.data();
         nRow_ = other.nRow_;
         nCol_ = other.nCol_;
         setStride();
@@ -691,6 +817,17 @@ public:
                 return data_[row+nRow_*col]; 
         }
     }; 
+
+    // Override for DenseMatrix
+    const T& at(size_t row, size_t col) const { 
+        switch (major_) {
+            case Major::Row:
+                return data_[row*nCol_+col]; 
+            case Major::Column:
+            default:
+                return data_[row+nRow_*col]; 
+        }
+    };
     
     // Override for DenseMatrix
     VectorView<T> row(size_t i) { 
@@ -702,6 +839,16 @@ public:
                 return VectorView<T>(data_.data()+i, nCol_, nRow_); 
         }   
     };
+
+    const VectorView<T> row(size_t i) const {
+        switch (major_) {
+            case Major::Row:
+                return VectorView<T>(start_+nCol_*i, nCol_, 1);
+            case Major::Column:
+            default:
+                return VectorView<T>(start_+i, nCol_, nRow_);
+        }
+    };
     
     // Override for DenseMatrix
     VectorView<T> column(size_t i) { 
@@ -711,6 +858,16 @@ public:
             case Major::Column:
             default:
                 return VectorView<T>(data_.data()+i*nRow_, nRow_, 1); 
+        }
+    };
+
+    const VectorView<T> column(size_t i) const {
+        switch (major_) {
+            case Major::Row:
+                return VectorView<T>(start_+i, nRow_, nCol_);
+            case Major::Column:
+            default:
+                return VectorView<T>(start_+i*nRow_, nRow_, 1);
         }
     };
 

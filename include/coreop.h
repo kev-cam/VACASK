@@ -38,7 +38,6 @@ typedef struct OperatingPointParameters {
     Value nodeset {Value("")}; // String specifying stored solution slot to read or
                                // list specifying nodesets
     String store {""};         // Name of stored solution slot to write
-
     Int write {1};             // Write the results to a file
 
     OperatingPointParameters(); 
@@ -72,14 +71,14 @@ public:
     // Format error, return false on error - this function is not cheap (works with strings)
     bool formatError(Status& s=Status::ignore) const; 
 
-    bool addDefaultOutputDescriptors();
+    bool addDefaultOutputDescriptors(Status& s);
     bool resolveOutputDescriptors(bool strict, Status& s=Status::ignore);
 
     std::tuple<bool, bool> preMapping(Status& s=Status::ignore);
     bool populateStructures(Status& s=Status::ignore);
 
     bool rebuild(Status& s=Status::ignore); 
-    bool initializeOutputs(Id name, Status& s=Status::ignore);
+    bool initializeOutputs(const std::string& name, Status& s=Status::ignore);
     bool run(bool continuePrevious);
     CoreCoroutine coroutine(bool continuePrevious);
     bool finalizeOutputs(Status& s=Status::ignore);
@@ -95,7 +94,11 @@ public:
     // Get solver
     OpNRSolver& solver() { return nrSolver; }; 
 
+    void enableNodesets(bool enable) { nodesetsMasterSwitch = enable; };
+    
     void dump(std::ostream& os) const;
+
+    static Id solutionTag;
 
 protected:
     // Clear error
@@ -127,6 +130,8 @@ private:
     OpNRSolver nrSolver;
 
     OperatingPointParameters& params;
+
+    bool nodesetsMasterSwitch;
 };
 
 }

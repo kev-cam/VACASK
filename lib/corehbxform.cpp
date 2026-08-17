@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <random>
 #include <numbers>
+#include <cmath>
 #include "corehb.h"
 #include "simulator.h"
 #include "common.h"
@@ -36,26 +37,42 @@ namespace NAMESPACE {
 
 bool HBCore::buildTransformMatrix(DenseMatrix<double>& XF, Status& s) {
     auto n = timepoints.size();
-    auto m = freqGrid.spectrum().size();
+    auto m = spurs_.spectrum().size();
     auto ncoef = 2*m-1;
     
     XF.resize(n, ncoef);
     
     // Storage of (2 pi f t) factors for base frequencies
-    auto nBase = params.freq.size();
-    double baseFac[nBase];
-    
+    auto nBase = spurs_.fundamentals().size();
+    std::vector<double> baseFac(nBase);
+
+    // Precompute reduced phase at tstart for each base frequency.
+    // Use two-product via fma to get frac(f*tstart) with full precision,
+    // avoiding catastrophic cancellation when f*tstart is large.
+    std::vector<double> basePhaseAtTstart(nBase);
+    for(decltype(nBase) k=0; k<nBase; k++) {
+        auto f = spurs_.fundamentals()[k];
+        auto prod = f * params.tstart;
+        auto lo = std::fma(f, params.tstart, -prod);
+        auto intpart = std::trunc(prod);
+        auto frac = (prod - intpart) + lo;
+        if (frac<0) frac += 1.0;
+        if (frac>=1.0) frac -= 1.0;
+        basePhaseAtTstart[k] = 2 * std::numbers::pi * frac;
+    }
+
     // Loop through timepoints
     for(decltype(n) i=0; i<n; i++) {
         auto row = XF.row(i);
         auto t = timepoints[i];
-        
+
         // For base frequencies compute phase at t (2 pi f t)
-        // Subtract integer multiple of 2 pi to keep phase small
+        // Split as: 2*pi*frac(f*tstart) + 2*pi*f*(t-tstart)
+        // The first term is precomputed with extended precision.
+        // The second term is small (t-tstart spans a few periods) so it is precise.
         for(decltype(nBase) k=0; k<nBase; k++) {
-            auto prod = params.freq[k]*t; 
-            auto frac = prod - std::trunc(prod);
-            baseFac[k] = 2 * std::numbers::pi * frac;
+            baseFac[k] = basePhaseAtTstart[k]
+                       + 2 * std::numbers::pi * spurs_.fundamentals()[k] * (t - params.tstart);
         }
 
         // DC
@@ -64,15 +81,11 @@ bool HBCore::buildTransformMatrix(DenseMatrix<double>& XF, Status& s) {
         // Nonzero frequencies
         for(decltype(m) j=1; j<m; j++) {
             // Grid entry
-            auto weights = freqGrid.weights(j); 
+            auto weights = spurs_.spurWeights(j); 
             // Assemble phase from base frequency contributions
             double phase = 0;
             for(decltype(nBase) k=0; k<nBase; k++) {
                 phase += weights.at(k)*baseFac[k];
-            }
-            // If frequency was negated, so must be the phase
-            if (freqGrid.signedSpectrum()[j]<0) {
-                phase = -phase;
             }
             // Compute cosine and sine component
             row.at(j*2-1) =  std::cos(phase);
@@ -85,13 +98,13 @@ bool HBCore::buildTransformMatrix(DenseMatrix<double>& XF, Status& s) {
 
 bool HBCore::buildAPFT(Status& s) {
     auto n = timepoints.size();
-    auto m = freqGrid.spectrum().size();
+    auto m = spurs_.spectrum().size();
     auto ncoef = 2*m-1;
 
     if (!buildTransformMatrix(IAPFT, s)) {
         return false;
     }
-    
+
     // Make a copy that will be destroyed during matrix inversion
     DenseMatrix<double> coeffs = IAPFT;
     
@@ -102,8 +115,10 @@ bool HBCore::buildAPFT(Status& s) {
         return false;
     }
 
-    // Construct Omega matrix (for computing the derivative wrt. time on a spectrum)
-    // This matrix is the time derivative matrix that operates on frequency domain vectors.  
+    // Gamma = APFT
+    // GammaInv = IAPFT
+    
+    // Omega .. derivative operator operating on frequency-domain vectors
     // Assumes the first component is DC magnitude and the remaining ones are (cosine, -sine) 
     // magnitudes, i,e, (Re, Im) parts of a phasor
     // First 6 rows and columns are
@@ -114,25 +129,35 @@ bool HBCore::buildAPFT(Status& s) {
     //   0 0   0   w_2  0  .
     //   . .  .  .   .  .
     // where wi is (2 pi fi). 
-    DenseMatrix<double> Omega(n, n);
-    Omega.zero();
-    for(decltype(m) i=1; i<m; i++) {
-        auto base = 1+(i-1)*2;
-        auto omega = 2*std::numbers::pi*freqGrid.spectrum()[i];
-        Omega.at(base, base+1) = -omega;
-        Omega.at(base+1, base) = omega;
+
+    // Compute Omega Gamma as row-major matrix (default)
+    // DC row is 0
+    // cos row x omega   -> -sin row
+    // -sin row x -omega -> cos row
+    OmegaGamma.resize(n, n);
+    // DC row
+    auto destRow = OmegaGamma.row(0);
+    for(decltype(n) i=0; i<n; i++) {
+        destRow[i] = 0;
+    }
+    // cos and -sin row
+    for(decltype(n) i=1; i<m; i++) {
+        auto omega = 2*std::numbers::pi*spurs_.spectrum()[i];
+        auto baseNdx = 1+2*(i-1);
+        auto cosRow = APFT.row(baseNdx);
+        auto negSinRow = APFT.row(baseNdx+1);
+
+        auto destCosRow = OmegaGamma.row(baseNdx);
+        auto destNegSinRow = OmegaGamma.row(baseNdx+1);
+
+        destCosRow.writeScaled(negSinRow, -omega);
+        destNegSinRow.writeScaled(cosRow, omega);
     }
 
-    // Compute DDT matrix as IAPFT * Omega * APFT
-    DDT.resize(n, n);
-    DenseMatrix<double> tmp(n, n);
-    IAPFT.multiply(Omega, tmp);
-    tmp.multiply(APFT, DDT);
-
-    // Reorganize DDT in column major form for better cache locality in solver
-    DDTcolMajor.resize(n, n, DenseMatrix<double>::Major::Column);
+    // Form GammaInv as column-major matrix
+    GammaInvColumnMajor.resize(n, n, DenseMatrix<double>::Major::Column);
     for(decltype(n) i=0; i<n; i++) {
-        DDTcolMajor.row(i) = DDT.row(i);
+        GammaInvColumnMajor.row(i) = IAPFT.row(i);
     }
 
     return true;

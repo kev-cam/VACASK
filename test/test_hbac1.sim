@@ -1,0 +1,138 @@
+Single tone HBAC, synthetic example
+
+ground 0 
+
+load "nl.va"
+
+model vsource vsource
+model nl nl
+
+// 1kHz large signal (magnitude=1 at 0Hz spur, cosine, i.e. tdphase=90)
+v1 (1 0) vsource dc=0 type="sine" sinedc=0.0 ampl=1 freq=1k tdphase=90 spur={0.0} smag=[1]
+nl1 (1 0) nl a=3 c=5
+
+control
+  abort always
+  
+  print unknowns
+  print sparsity
+  options homotopy_debug=1 hb_debug=0 smsig_debug=1
+  options reltol=1e-12
+
+  // HBAC with preceding HB, use only first 3 harmonics from HB results
+  analysis hbac1 hbac freq=[1k] nharm=10 outspur={} values=[10.0] maxharm=3
+  
+  options smsig_debug=0
+  analysis hb1 hb freq=[1k] nharm=10 store="hbsol"
+  // HBAC using the solution of a past HB
+  analysis hbac2 hbac nodeset="hbsol" hbsolve=0 outspur={} values=[10.0]
+  // Small differences between hbac1 and hbac2 are because the TD solution at colocation points 
+  // is in case of hbac2 computed from the FD solution of hb1. 
+  // Effectively the TD solution is in hbac2 computed as 
+  //   TD solution -> APFT -> FD solution (stored) -> IAPTF -> TD solution with numerical errors
+  // hbac1 uses the TD solution without APFT -> IAPFT roundtrip.  
+  // When HB will use the FD formulation the two results should be identical because 
+  // both hbs will compute the TD solution from the FD solution as 
+  //   FD solution -> IAPFT -> TD solution
+  
+  postprocess(PYTHON, "runme.py")
+endc
+
+embed "nl.va" <<<FILE
+`include "constants.vams"
+`include "disciplines.vams"
+
+module nl(n1,n2);
+    // Terminals and internal nodes
+    inout n1, n2;
+    electrical n1,n2;
+    
+    (* desc = "Resistive a", type = "instance" *) parameter real a = 1;
+    (* desc = "Reactive c", type = "instance" *) parameter real c = 1;
+
+    analog begin
+        I(n1,n2) <+ pow(a*V(n1,n2), 2) + ddt(pow(c*V(n1,n2), 3));
+    end
+endmodule
+>>>FILE
+
+embed "runme.py" <<<FILE
+from rawfile import rawread
+from runtest import *
+import numpy as np
+import sys
+
+tests = []
+
+# (a x)^2 + ddt( (c x)^3 )
+# 
+# Periodic large signal x(t) = cos(w0 t)
+# 
+# Resistive Jacobian
+#   2 a^2 x(t) = 2 a^2 cos(w0 t)
+#   
+# Reactive Jacobian
+#   3 c^3 x(t)^2 = 3 c^3 / 2 (1 + cos(2 w0 t))
+# 
+# Spectrum
+#     0       w0     2 w0   3 w0    4 w0   5 w0
+# Jr  0       2a^2   0      0       0      0
+# Jc  3c^3/2  0      3c^3/2 0       0      0
+#
+# Small signal excitation: b cos(w t)
+#   (a (cos(w0 t) + b cos(w t)))^2 -> a^2 b cos((-w0 + w) t) + a^2 b cos((w0 + w) t)
+#   ddt((c (cos(w0 t) + b cos(w t)))^3) ->  
+#     b c^3 / 2 w cos(w t + pi/2) +
+#     3 b c^3 / 4 (-2 w0 + w) cos((-2 w0 + w) t + pi/2) + 3 b c^3 / 4 (2 w0 + w) cos((2 w0 + w) t + pi/2)
+#   a=3, b=1, c=5 -> a^2 b = 9
+#                    3 b c^3 / 4 * 2 pi (-2000 + 10) = -1172206.76
+#                    3 b c^3 / 4 * 2 pi (2000 + 10)  = 1183987.73
+# 
+#   (a (cos(w0 t) + b cos((w0 + w) t)))^2 -> a^2 b cos(w t) + a^2 b cos((2 w0 + w) t)
+#   a=3, b=1 -> a^2 b = 9
+a = 3.0 
+b = 1.0 
+c = 5.0
+f0 = 1e3 
+f = 10.0
+exact = np.array([
+    # -3
+    0,
+    # -2
+    3*c**3*b/4*2*np.pi*(-2*f0+f)*1j, 
+    # -1
+    a**2*b, 
+    # 0
+    3*c**3*b/2*2*np.pi*f*1j, 
+    # 1
+    a**2*b, 
+    # 2
+    3*c**3*b/4*2*np.pi*(2*f0+f)*1j, 
+    # 3
+    0
+])
+# print(exact)
+
+hbac1 = rawread('hbac1.raw').get()
+# print(hbac1.names)
+response = np.array([
+    -hbac1['v1:flow(br);'+str(spur)].item() for spur in range(-3, 4)
+])
+# print(response)
+ref = np.abs(response).max()
+delta = relDiff(response, exact, ref)
+print("Delta (with hb)", delta)
+tests.append(delta.max()<1e-14)
+
+hbac2 = rawread('hbac2.raw').get()
+response = np.array([
+    -hbac2['v1:flow(br);'+str(spur)].item() for spur in range(-3, 4)
+])
+ref = np.abs(response).max()
+delta = relDiff(response, exact, ref)
+print("Delta (stored hb)", delta)
+tests.append(delta.max()<1e-14)
+
+
+sys.exit(not all(tests))
+>>>FILE

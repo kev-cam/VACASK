@@ -40,17 +40,15 @@ namespace NAMESPACE {
 NRSolver::NRSolver(
     Accounting& acct, KluRealMatrixCore& jac, 
     VectorRepository<double>& solution, 
-    NRSettings& settings
+    NRSettings& settings, size_t bucketSize
 ) : acct(acct), jac(jac), solution(solution), settings(settings), 
-    iteration(0) {
+    bucketSize_(bucketSize), iteration(0) {
 }
 
-bool NRSolver::rebuild() {
+bool NRSolver::rebuild(size_t nSolComp) {
     // Allocate space in vectors
-    // Jacobian is already built, get number of unknowns excluding ground
-    auto n = jac.nRow();
-    delta.resize(n+1);
-    rowNorm.resize(n+1);
+    delta.resize(nSolComp+bucketSize_);
+    rowNorm.resize(nSolComp+bucketSize_);
     
     return true;
 }
@@ -91,8 +89,8 @@ bool NRSolver::run(bool continuePrevious) {
 
     jac.setAccounting(acct);
 
-    // Number of unknowns (vector length includes a bucket at index 0)
-    auto n = solution.length()-1;
+    // Number of unknowns (vector length includes a bucket)
+    auto n = solution.length()-bucketSize_;
     
     // Iteration limit and damping
     int itlim;
@@ -176,7 +174,12 @@ bool NRSolver::run(bool continuePrevious) {
             // Load error or abort
             break;
         }
-        xdelta[0] = 0.0; // Set RHS bucket to 0
+        if (bucketSize_>0) {
+            // Set RHS bucket to 0
+            for(size_t i=0; i<bucketSize_; i++) {
+                xdelta[i] = 0.0; 
+            }
+        }
 
         // Check if system is finite
         if (settings.matrixCheck && !jac.isFinite(true, true)) {
@@ -188,7 +191,7 @@ bool NRSolver::run(bool continuePrevious) {
             break;
         }
 
-        if (settings.rhsCheck && !jac.isFinite(dataWithoutBucket(delta), true, true)) {
+        if (settings.rhsCheck && !jac.isFinite(dataWithoutBucket(delta, bucketSize_), true, true)) {
             lastError = Error::LinearSolver;
             errorIteration = iteration;
             if (settings.debug) {
@@ -227,7 +230,7 @@ bool NRSolver::run(bool continuePrevious) {
         
         if (settings.debug>=4) {
             Simulator::dbg() << "Linear system at iteration " << iteration << "\n";
-            jac.dump(Simulator::dbg(), dataWithoutBucket(delta));
+            jac.dump(Simulator::dbg(), dataWithoutBucket(delta, bucketSize_));
             Simulator::dbg() << "\n\n";
         }
         
@@ -263,8 +266,8 @@ bool NRSolver::run(bool continuePrevious) {
             }
         }
 
-        // Solve, use vector without ground component (+1)
-        if (!jac.solve(dataWithoutBucket(delta))) {
+        // Solve, use vector without ground component
+        if (!jac.solve(dataWithoutBucket(delta, bucketSize_))) {
             lastError = Error::LinearSolver;
             errorIteration = iteration;
             if (settings.debug) {
@@ -284,7 +287,7 @@ bool NRSolver::run(bool continuePrevious) {
 
         acct.acctNew.nriter++;
 
-        if (settings.solutionCheck && !jac.isFinite(dataWithoutBucket(delta), true, true)) {
+        if (settings.solutionCheck && !jac.isFinite(dataWithoutBucket(delta, bucketSize_), true, true)) {
             lastError = Error::SolutionError;
             errorIteration = iteration;
             if (settings.debug) {
@@ -300,9 +303,13 @@ bool NRSolver::run(bool continuePrevious) {
         // dumpSolution(std::cout, solution.futureArray(), "  ");
         // std::cout << "\n";
         
-        // Set solution delta and new solution buckets to 0. 
-        xdelta[0] = 0.0;
-        xnew[0] = 0.0; 
+        // Set solution delta and new solution bucket to 0. 
+        if (bucketSize_>0) {
+            for(size_t i=0; i<bucketSize_; i++) {
+                xdelta[i] = 0.0;
+                xnew[i] = 0.0; 
+            }
+        }
 
         // std::cout << "Negative solution delta at iteration " << iteration << "\n";
         // dumpSolution(std::cout, delta.data(), "  ");
@@ -370,7 +377,7 @@ bool NRSolver::run(bool continuePrevious) {
         // Not converged yet, compute new solution 
         
         // Compute new solution, use static damping
-        for(decltype(n) i=1; i<=n; i++) {
+        for(decltype(n) i=bucketSize_; i<bucketSize_+n; i++) {
             xnew[i] = xprev[i] - xdelta[i]*settings.dampingFactor;
         }
 

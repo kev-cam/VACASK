@@ -187,6 +187,7 @@ public:
     virtual std::tuple<UnknownIndex,UnknownIndex> sourceResponse(Circuit& circuit) const { return std::make_tuple(0, 0); };
     virtual double scaledUnityExcitation() const { return 1.0; };
     virtual double responseScalingFactor() const { return 1.0; };
+    virtual std::tuple<const ValueVector&, const RealVector&, const RealVector&> spur() const { return {dummyValueVector, dummyRealVector, dummyRealVector}; };
     virtual ParameterIndex outvarCount() const { return data.parameterCount(); };
     virtual std::tuple<ParameterIndex, bool> outvarIndex(Id name) const { return data.parameterIndex(name); };
     virtual Id outvarName(ParameterIndex ndx) const { return data.parameterName(ndx); };
@@ -423,7 +424,8 @@ Model* BuiltinDevice<ModelParams, InstanceParams, InstanceData>::createModel(
     }
 
     // Set model's parameters, use the evaluator whose latest context is the parent instance's context
-    auto [ok, changed] = model->setParameters(parsedModel.parameters(), evaluator, s);
+    RpnEvaluationNetlistContext ctx(MCData::CtxType::Model, model->name());
+    auto [ok, changed] = model->setParameters(parsedModel.parameters(), evaluator, ctx, s);
     if (!ok) {
         return nullptr;
     }
@@ -536,7 +538,8 @@ Instance* BuiltinModel<ModelParams, InstanceParams, InstanceData>::createInstanc
     }
 
     // Set instance's parameters, use the evaluator whose latest context is the parent instance's context
-    auto [ok, changed] = instance->setParameters(parsedInstance.parameters(), evaluator, s);
+    RpnEvaluationNetlistContext ctx(MCData::CtxType::Instance, instance->name());
+    auto [ok, changed] = instance->setParameters(parsedInstance.parameters(), evaluator, ctx, s);
     if (!ok) {
         return nullptr;
     }

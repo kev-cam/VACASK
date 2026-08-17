@@ -44,7 +44,7 @@ We tested scalability of VACASK with [digital multiplier simulations ranging fro
 |128        |681216  |8756.7       |22.1           |5245               |
 |256        |2738688 |35235.6      |100            |24766              |
 
-Of course, simulation is slower for large circuits. The runtime grows superlinearly because with increasing circuit size linear algebra becomes a significant part of the total runtime. Unfortunately LU decomposition time grows superlinearly with matrix size and there is little one can do about it. Nevertheless, this demonstrates that VACASK can handle very large circuits. 
+Of course, simulation is slower for large circuits. The runtime grows slightly superlinearly because with increasing circuit size the share of runtime spent on linear algebra also increases. Linear algebra (LU decomposition, solve) scales superlinearly with matrix size and there is little one can do about it. Nevertheless, this demonstrates that VACASK can handle very large circuits. 
 
 # Do you have a user's manual? 
 
@@ -60,17 +60,15 @@ Yes we do. It is bundled with the binary packages. [The user's manual](docs/inde
 
 # What does VACASK offer? 
 
-- user defined global and ground nodes
-- fully parameterized hierarchical circuit description
-- conditional netlist blocks (@if-@elseif-@else-@end)
+- fully parameterized hierarchical circuit description with user defined global and ground nodes
+- behavioral voltage and current sources
+- conditional netlist blocks (@if-@elseif-@else-@end) - can be used for implementing automated binning
 - RPN interpreter for parameterized expression evaluation
-- integer, real, and string data types
-- vectors (homogeneous containers) and lists (heterogeneous containers)
+- integer, real, and string data types; vectors (homogeneous containers) and lists (heterogeneous containers)
 - a library of [built-in functions and constants](lib/context.cpp) for use in parameterized expressions
 - all SPICE analyses + [many more](#supported-analyses)
 - [options](lib/options.cpp) for fine tuning the simulator
 - selection of what should be saved during simulation (save directives)
-- collection of output variables (OSDI opvars) computed by device models
 - [parametric sweep](include/answeep.h) of any analysis with arbitrary depth
 - almost anything can be swept (instance, model, and subcircuit parameters, options, and circuit variables)
 - anything that can be swept can also be modified without reloading the circuit (no need to build a new netlist and restart the simulator)
@@ -80,8 +78,8 @@ Yes we do. It is bundled with the binary packages. [The user's manual](docs/inde
 - inactive instances bypass in nonlinear solver (disabled by default, see the `nr_bypass`, `nr_convtol`, and `nr_bypasstol` options)
 - instance evaluation bypass in the first iteration of nonlinear solver running in continuation mode (enabled by default, see the `nr_contbypass` option)
 - several homotopy algorithms (SPICE3/adaptive gmin stepping and source stepping) for finding the operating point of problematic circuits
-- nodesets for improving convergence speed and selecting the operating point
-- analysis results can be used as nodesets for subsequent analyses (combined with circuit variable sweeps this feature can be used for implementing custom arc length homotopy algorithms at the netlist level)
+- nodesets for improving convergence speed and reusing/selecting the operating point
+- analysis results can be used as nodesets for subsequent analyses (combined with circuit variable sweeps this feature can be used for implementing custom homotopy algorithms at the netlist level)
 - setting initial conditions (Spectre style and legacy SPICE3 style)
 - backward Euler, trapezoidal, and Gear integration algorithms
 - predictor-corrector local truncation error control in transient analysis
@@ -96,8 +94,10 @@ Yes we do. It is bundled with the binary packages. [The user's manual](docs/inde
 - [Xschem](https://xschem.sourceforge.io/stefan/index.html) schematic entry, analysis setup, and results display (use the latest development release). See [demo/xschem](demo/xschem) for more information. 
 - [IHP Open PDK](https://github.com/IHP-GmbH/IHP-Open-PDK) support. See [demo/ihp-sg13g2](demo/ihp-sg13g2) for more information. 
 - Verilog-A natures and disciplines for setting absolute tolerances on unknowns and residuals (see [demo/natures](demo/natures)). 
+- Monte Carlo analysis with Latin hypercube sampling (see [demo/mc](demo/mc)). 
+- Touchstone file to VACASK lumped model converter based on scikit-rf (see [demo/ts](demo/ts)). 
  
-Certain devices (independent voltage and current sources, linear controlled sources, and inductive coupling) are implemented as builtin devices because certain features needed by these devices are not available in OpenVAF-reloaded or even Verilog-A. 
+Certain devices (independent voltage and current sources, linear controlled sources, and inductive coupling) are implemented as builtin devices because some features needed by these devices are not available in OpenVAF-reloaded or even Verilog-A. 
 
 VACASK is being developed by Árpád Bűrmen at the EDA Laboratory, University of Ljubljana, Slovenia. It is written in C++20 and is free software released under the [GNU Affero General Public License 3.0](LICENSE). 
 
@@ -115,7 +115,9 @@ VACASK is being developed by Árpád Bűrmen at the EDA Laboratory, University o
 |acsp    |[small-signal AC S-parameter analysis](docs/cmd-analysis-acsp.md) |
 |noise   |[small-signal noise analysis](docs/cmd-analysis-noise.md) |
 |tran    |[transient (time-domain) analysis](docs/cmd-analysis-tran.md) with optional [time-domain noise](docs/cmd-analysis-trannoise.md) |
+|pss     |[periodic steady-state analysis (Newton shooting method)](docs/cmd-analysis-pss.md) |
 |hb      |[(multitone) harmonic balance analysis](docs/cmd-analysis-hb.md) |
+|hbac    |[(quasi)periodic small-signal analysis (harmonic balance-based)](docs/cmd-analysis-hbac.md) |
 
 
 # What about device models? 
@@ -131,6 +133,7 @@ The following device models are supplied with VACASK.
 |Current-controlled voltage source|ccvs   |
 |Current-controlled current source|cccs   |
 |Inductive coupling               |mutual |
+|Behavioral voltage/current source|n/a    |
 
 |Verilog-A device          |File               |OSDI file       |Module   |
 |--------------------------|-------------------|----------------|---------|
@@ -416,3 +419,11 @@ In Windows select the MinGW64 toolchain. In Linux select GCC. Configure the proj
 * Á. Bűrmen, ["Recent developments in the Verilog-A circuit analysis kernel"](https://wiki.f-si.org/index.php?title=Recent_developments_in_the_Verilog-A_circuit_analysis_kernel), Free Silicon Conference 2025, Frankfurt (Oder), July 2025. 
 * Á. Bűrmen, ["The OpenVAF Verilog-A Compiler for the OpenPDK Ecosystem"](https://doi.org/10.5281/zenodo.17113774), MOS-AK Workshop/ESSERC 2025, Munich, September 2025. 
 * Á. Bűrmen, ["VACASK - a novel analog integrated circuit simulator"](https://doi.org/10.5281/zenodo.17434615), 60th International Conference on Microelectronics, Devices and Materials (MIDEM2025), Ljubljana, October 2025. 
+* Á. Bűrmen, ["VACASK: One year toward a modern open analog simulation stack"](https://wiki.f-si.org/index.php?title=VACASK:_One_year_toward_a_modern_open_analog_simulation_stack), Free Silicon Conference 2026, Ljubljana, July 2026. 
+
+# Acknowledgement
+
+This project is funded through [NGI0 Commons Fund](https://nlnet.nl/commonsfund), a fund established by [NLnet](https://nlnet.nl) with financial support from the European Commission's [Next Generation Internet](https://ngi.eu) program. Learn more at the [NLnet project page](https://nlnet.nl/project/VACASK).
+
+[<img src="https://nlnet.nl/logo/banner.png" alt="NLnet foundation logo" width="20%" />](https://nlnet.nl)
+[<img src="https://nlnet.nl/image/logos/NGI0_tag.svg" alt="NGI Zero Logo" width="20%" />](https://nlnet.nl/commonsfund)

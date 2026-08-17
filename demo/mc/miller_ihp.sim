@@ -1,0 +1,147 @@
+Miller OTA simulation, IHP SG13G2 PDK
+
+ground 0
+
+include "sg13g2_vacask_common.lib"
+include "cornerMOSlv.lib" section=mos_tt_mismatch
+
+// Generic devices for compensation network and load
+load "resistor.osdi"
+load "capacitor.osdi"
+// vsource and isource are builtins
+
+model resistor resistor
+model capacitor capacitor
+model isource isource
+model vsource vsource
+model vcvs vcvs
+
+// Miller OTA definition, IHP SG13G2 devices
+subckt miller(inp inn out vdd vss)
+  i0 (vdd net002) isource dc=ibias
+  xmn3 (net002 net002 vss vss) sg13_lv_nmos w=mirr_w  l=mirr_l  m=mirr_m
+  xmn4 (net003 net002 vss vss) sg13_lv_nmos w=mirr_wd l=mirr_ld m=mirr_md
+  xmn5 (out net002 vss vss)    sg13_lv_nmos w=mirr_wo l=mirr_l  m=mirr_mo
+  xmp1 (net005 net005 vdd vdd) sg13_lv_pmos w=load_w  l=load_l  m=load_m
+  xmp2 (net004 net005 vdd vdd) sg13_lv_pmos w=load_w  l=load_l  m=load_m
+  xmp3 (out net004 vdd vdd)    sg13_lv_pmos w=out_w   l=out_l   m=out_m
+  r1 (out net001) resistor r=r_out
+  c1 (net001 net004) capacitor c=c_out
+  xmn1 (net005 inn net003 vss) sg13_lv_nmos w=diff_w  l=diff_l  m=diff_m
+  xmn2 (net004 inp net003 vss) sg13_lv_nmos w=diff_w  l=diff_l  m=diff_m
+ends
+
+// Global hierarchical parameters
+parameters vdd=1.2 ibias=50u rload=100M cload=1p
+
+// Testbench circuit for open-loop differential DC sweep
+subckt dctest()
+  parameters vicm=vdd/2
+
+  x1 (inp inn out vdd vss) miller
+  vdd1 (vdd 0) vsource dc=vdd/2
+  vss1 (vss 0) vsource dc=-vdd/2
+  vcm1 (cm 0) vsource dc=vicm-vdd/2
+  vid1 (inp cm) vsource dc=0
+  eid1 (inn cm inp cm) vcvs gain=-1
+  cl1 (out 0) capacitor c=cload
+  rl1 (out 0) resistor r=rload
+ends
+
+// Global parameters for sizing the OTA
+parameters mirr_w=5u  mirr_l=1u    mirr_m=2
+parameters mirr_wd=5u mirr_ld=1u   mirr_md=4
+parameters mirr_wo=5u              mirr_mo=4
+parameters out_w=1.53u out_l=0.5u  out_m=8
+parameters load_w=5u  load_l=1u    load_m=2
+parameters diff_w=5u  diff_l=0.5u  diff_m=2
+parameters r_out=5k
+parameters c_out=2p
+
+control
+  abort always
+
+  elaborate circuit("dctest")
+  print hierarchy
+
+  analysis op1 op
+
+  sweep vid instance="vid1" parameter="dc" from=-10m to=10m mode="lin" points=1000
+    analysis dc1 op
+
+  // We are going to pass this to mc and postprocess  
+  var ns=8000
+
+  // By default uses Latin hypercube sampling
+  mc mc1 samples=ns debug=0
+    sweep vid instance="vid1" parameter="dc" from=-10m to=10m mode="lin" points=200
+      analysis dc2 op
+  endmc
+
+  postprocess(PYTHON, "runme.py", ns)
+endc
+
+embed "runme.py" <<<FILE
+from rawfile import rawread
+import numpy as np
+import matplotlib.pyplot as plt
+import sys
+
+nsamples = int(sys.argv[1])
+print("Number of samples to postprocess:", nsamples)
+sys.stdout.flush()
+
+plot = rawread('op1.raw').get()
+print("Output operating point:", plot["out"])
+
+plot = rawread('dc1.raw').get()
+
+fig1 = plt.figure(figsize=(8, 6))
+ax_dict = fig1.subplot_mosaic("""
+AB
+CC
+""")
+
+ax_dict["A"].set_title('Open-loop DC transfer characteristic, Miller OTA')
+ax_dict["A"].set_ylabel('Vout [V]')
+ax_dict["A"].set_xlabel('Vp-Vn [mV]')
+ax_dict["A"].plot((plot['inp']-plot['inn'])*1e3, plot['out'])
+ax_dict["A"].grid(True)
+
+# Zero crossings (input-referred offset) collected while scanning MC samples
+crossings = []
+
+ax_dict["B"].set_title('Monte Carlo spread')
+ax_dict["B"].set_ylabel('Vout [V]')
+ax_dict["B"].set_xlabel('Vp-Vn [mV]')
+for i in range(1, nsamples+1):
+    mcplot = rawread(f"mc1.{i}.dc2.raw").get()
+    vid = mcplot['inp']-mcplot['inn']
+    vout = mcplot['out']
+    ax_dict["B"].plot(vid*1e3, vout, color="steelblue", alpha=0.15, linewidth=1.2)
+
+    # Find the first sign change of vout and linearly interpolate the crossing
+    idx = np.where(np.diff(np.sign(vout)) != 0)[0]
+    if len(idx) > 0:
+        i0 = idx[0]
+        x0, x1 = vid[i0], vid[i0+1]
+        y0, y1 = vout[i0], vout[i0+1]
+        xc = x0 + (0-y0)*(x1-x0)/(y1-y0)
+        crossings.append(xc*1e3)
+
+crossings = np.array(crossings)
+ax_dict["B"].set_xlim(-20, 20)
+ax_dict["B"].grid(True)
+
+print(f"Offset: mean={crossings.mean():.4f} mV, std={crossings.std():.4f} mV, n={len(crossings)}")
+
+ax_dict["C"].set_title('Input-referred offset distribution')
+ax_dict["C"].set_ylabel('Count')
+ax_dict["C"].set_xlabel('Offset [mV]')
+ax_dict["C"].hist(crossings, bins=30, color="steelblue", edgecolor="black")
+ax_dict["C"].grid(True)
+
+fig1.tight_layout()
+
+plt.show()
+>>>FILE

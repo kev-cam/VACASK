@@ -24,8 +24,8 @@ template<> int Introspection<NoiseParameters>::setup() {
     registerMember(mode);
     registerMember(points);
     registerMember(values);
-    registerMember(writeop);
     registerMember(write);
+    registerNamedMember(opParams.write, "writeop");
     registerNamedMember(opParams.nodeset, "nodeset");
     registerNamedMember(opParams.store, "store");
 
@@ -58,8 +58,9 @@ NoiseCore::~NoiseCore() {
     delete outfile;
 }
 
-bool NoiseCore::resolveOutputDescriptors(bool strict) {
-    clearError();
+bool NoiseCore::resolveOutputDescriptors(bool strict, Status& s) {
+    // Clear output sources
+    outputSources.clear();
     // Clear contribution offsets
     contributionOffset.clear();
     size_t atOffset = 2;
@@ -90,10 +91,10 @@ bool NoiseCore::resolveOutputDescriptors(bool strict) {
                 if (inst) {
                     // Add to contribution offsets
                     auto [insIt, inserted] = contributionOffset.insert({{name, Id()}, contributionOffset.size()});
-                    outputSources.emplace_back(&results, insIt->second);
+                    outputSources.emplace_back(&results, insIt->second, it->name);
                 } else {
                     // Instance not found, constant source
-                    outputSources.emplace_back();
+                    outputSources.emplace_back(it->name);
                 }
                 break;
             case OutdNoiseContribInstPartial:
@@ -120,28 +121,28 @@ bool NoiseCore::resolveOutputDescriptors(bool strict) {
                     if (found) {
                         // Add to contribution offsets
                         auto [insIt, inserted] = contributionOffset.insert({{name, contrib}, contributionOffset.size()});
-                        outputSources.emplace_back(&results, insIt->second);
+                        outputSources.emplace_back(&results, insIt->second, it->name);
                     } else {
                         // Contribution not found, constant source
-                        outputSources.emplace_back();
+                        outputSources.emplace_back(it->name);
                     }
                 } else {
                     // Instance not found, constant source
-                    outputSources.emplace_back();
+                    outputSources.emplace_back(it->name);
                 }
                 break;
             case OutdFrequency:
-                outputSources.emplace_back(&frequency);
+                outputSources.emplace_back(&frequency, it->name);
                 break;
             case OutdOutputNoise:
-                outputSources.emplace_back(&outputNoise);
+                outputSources.emplace_back(&outputNoise, it->name);
                 break;
             case OutdPowerGain:
-                outputSources.emplace_back(&powerGain);
+                outputSources.emplace_back(&powerGain, it->name);
                 break;
             default:
                 // Delegate to parent
-                ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict);
+                ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, s);
         }
         if (!ok) {
             break;
@@ -150,50 +151,46 @@ bool NoiseCore::resolveOutputDescriptors(bool strict) {
     return ok;
 }
 
-bool NoiseCore::addCoreOutputDescriptors() {
-    clearError();
+bool NoiseCore::addCoreOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdFrequency, "frequency"))) {
-        lastError = Error::Descriptor;
-        errorId = "frequency";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for frequency."));
         return false;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdOutputNoise, "onoise"))) {
-        lastError = Error::Descriptor;
-        errorId = "onoise";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for output noise."));
         return false;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdPowerGain, "gain"))) {
-        lastError = Error::Descriptor;
-        errorId = "gain";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for gain."));
         return false;
     }
     return true;
 }
 
-bool NoiseCore::addDefaultOutputDescriptors() {
+bool NoiseCore::addDefaultOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (savesCount==0) {
         // Add total noise contributions of all instances (details=false)
-        return addAllNoiseContribInst(PTSave("default", Id(), Id()), false);
+        return addAllNoiseContribInst(PTSave("default", Id(), Id()), false, s);
     }
     return true;
 }
 
-bool NoiseCore::initializeOutputs(Id name, Status& s) {
+bool NoiseCore::initializeOutputs(const std::string& name, Status& s) {
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     // Create output file if not created yet
     if (!outfile) {
         outfile = new OutputRawfile(
-            name, outputDescriptors, outputSources,
+            name, outputSources,
             (circuit.simulatorOptions().core().rawfile==SimulatorOptions::rawfileBinary ? OutputRawfile::Flags::Binary : OutputRawfile::Flags::None) |
                 OutputRawfile::Flags::Padded);
         outfile->setTitle(circuit.title());
@@ -227,6 +224,7 @@ bool NoiseCore::deleteOutputs(Id name, Status& s) {
 }
     
 bool NoiseCore::rebuild(Status& s) {
+    clearError();
     // AC analysis matrix
     if (!acMatrix.rebuild(circuit.sparsityMap(), circuit.unknownCount())) {
         acMatrix.formatError(s);
@@ -468,12 +466,12 @@ CoreCoroutine NoiseCore::coroutine(bool continuePrevious) {
 
         if (debug>=100) {
             Simulator::dbg() << "Linear system for power gain\n";
-            acMatrix.dump(Simulator::dbg(), dataWithoutBucket(acSolution)); 
+            acMatrix.dump(Simulator::dbg(), dataWithoutBucket(acSolution, bucketSize)); 
             Simulator::dbg() << "\n";
         }
 
         // Solve, set bucket to 0.0
-        if (!acMatrix.solve(dataWithoutBucket(acSolution))) {
+        if (!acMatrix.solve(dataWithoutBucket(acSolution, bucketSize))) {
             setError(NoiseError::MatrixError);
             if (debug>2) {
                 Simulator::dbg() << "Failed to solve factored system.\n";
@@ -483,7 +481,7 @@ CoreCoroutine NoiseCore::coroutine(bool continuePrevious) {
         }
         acSolution[0] = 0.0;
 
-        if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution), true, true)) {
+        if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution, bucketSize), true, true)) {
             setError(NoiseError::SolutionError);
             if (options.smsig_debug) {
                 Simulator::dbg() << "A solution entry is not finite. Solver failed.\n";
@@ -574,12 +572,12 @@ CoreCoroutine NoiseCore::coroutine(bool continuePrevious) {
 
                         if (debug>=100) {
                             Simulator::dbg() << "Linear system for contribution '"+std::string(contrib)+"' of '"+std::string(name)+"'\n";
-                            acMatrix.dump(Simulator::dbg(), dataWithoutBucket(acSolution)); 
+                            acMatrix.dump(Simulator::dbg(), dataWithoutBucket(acSolution, bucketSize)); 
                             Simulator::dbg() << "\n";
                         }
 
                         // Solve, set bucket to 0.0
-                        if (!acMatrix.solve(dataWithoutBucket(acSolution))) {
+                        if (!acMatrix.solve(dataWithoutBucket(acSolution, bucketSize))) {
                             setError(NoiseError::MatrixError);
                             if (debug>2) {
                                 Simulator::dbg() << "Failed to solve factored system.\n";

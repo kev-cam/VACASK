@@ -46,12 +46,15 @@ add_library(simlib STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/sourceloc.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/pool.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/rpnexpr.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/rpnexprva.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/identifier.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/rpnfunctor.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/rpnbuiltin.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/context.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/rpnstack.h 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/rpnevalctx.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/rpneval.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/asa241.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/options.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/comdata.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/natures.h 
@@ -70,7 +73,7 @@ add_library(simlib STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/hmtpgmin.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/hmtpsrc.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/progress.h 
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include/freqgrid.h 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/spurs.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/core.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/coreop.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/coreopnr.h 
@@ -97,14 +100,19 @@ add_library(simlib STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/anacxf.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/anacstb.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/anacsp.h 
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include/annoise.h 
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include/antran.h 
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include/anhb.h 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/annoise.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/antran.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/anhb.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/corepsstran.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/corepss.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/anpss.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/tdnblock.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/tdnzohwhite.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/tdnzohflicker.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/tdnsdewhite.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/tdnsdeflicker.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/anhb.h 
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/anhbac.h
     acct.cpp
     libplatform.cpp 
     dynload.cpp 
@@ -131,10 +139,13 @@ add_library(simlib STATIC
     pool.cpp
     identifier.cpp
     rpnexpr.cpp
+    rpnexprva.cpp
     rpnbuiltin.cpp
     context.cpp
     rpnstack.cpp
+    rpnevalctx.cpp
     rpneval.cpp
+    asa241.cpp
     introspection.cpp
     options.cpp 
     comdata.cpp
@@ -157,7 +168,7 @@ add_library(simlib STATIC
     hmtpgmin.cpp
     hmtpsrc.cpp
     progress.cpp
-    freqgrid.cpp
+    spurs.cpp
     core.cpp 
     coreop.cpp 
     coreopnr.cpp 
@@ -175,6 +186,7 @@ add_library(simlib STATIC
     corehbcoloc.cpp
     corehbxform.cpp
     corehbnr.cpp
+    corehbac.cpp
     an.cpp
     ansupport.cpp 
     ansolution.cpp 
@@ -187,13 +199,17 @@ add_library(simlib STATIC
     anacstb.cpp 
     anacsp.cpp 
     annoise.cpp 
-    antran.cpp 
+    antran.cpp
     anhb.cpp
     tdnblock.cpp
     tdnzohwhite.cpp
     tdnzohflicker.cpp
     tdnsdewhite.cpp
     tdnsdeflicker.cpp
+    anhbac.cpp
+    corepsstran.cpp
+    corepss.cpp
+    anpss.cpp
     location.cpp
     "${BISON_dflparser_OUTPUTS}"
     "${FLEX_dfllexer_OUTPUTS}"

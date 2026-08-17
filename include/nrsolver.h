@@ -48,7 +48,7 @@ class Forces {
 public:
     Forces();
 
-    Forces           (const Forces&)  = delete;
+    explicit Forces  (const Forces&)  = default; // Allow explicit copy constructor
     Forces           (      Forces&&) = default;
     Forces& operator=(const Forces&)  = delete;
     Forces& operator=(      Forces&&) = default;
@@ -57,6 +57,8 @@ public:
     void clear();
 
     void dump(Circuit& circuit, std::ostream& os) const;
+
+    bool empty() const { return unknownValue_.size()==0 && deltaValue_.size()==0; };
     
     Vector<double> unknownValue_;
     Vector<bool> unknownForced_;
@@ -105,7 +107,8 @@ public:
     NRSolver(
         Accounting& acct, 
         KluRealMatrixCore& jac, VectorRepository<double>& solution, 
-        NRSettings& settings
+        NRSettings& settings, 
+        size_t bucketSize=0
     );
 
     // Clear error
@@ -124,7 +127,7 @@ public:
     virtual std::tuple<bool, bool> checkDelta() = 0;
 
     // Rebuild internal structures that depend on topology
-    virtual bool rebuild();
+    virtual bool rebuild(size_t n);
 
     // Initialize run (upsize internal structures)
     // Called once at the beginning of NRSolver::run() 
@@ -211,6 +214,9 @@ public:
     virtual std::string formatConvergence() const { return ""; };
     
 protected:
+    // Bucket size
+    size_t bucketSize_;
+    
     // High precision requested
     bool highPrecision;
 

@@ -3,15 +3,17 @@ Switched capacitor low-pass filter
 load "psp103v4.osdi"
 load "opamp.osdi"
 load "capacitor.osdi"
+load "resistor.osdi"
 
 include "models.inc"
 
 model v vsource
 model c capacitor
 model oa opamp
+model r resistor
+model vcvs vcvs
 
-parameters fclk=100k 
-parameters trf=1u
+parameters trf=0.1u
 
 parameters fin=1k
 parameters inmag=0.02
@@ -22,41 +24,66 @@ parameters tclk=1/fclk
 parameters c2=cf*f3db*2*M_PI/fclk
 parameters c1=c2*gain
 
-v1 (in 0) v type="sine" sinedc=0 ampl=inmag freq=fin
+v1 (in 0) v type="sine" sinedc=0 ampl=inmag freq=fin spur={0.0} smag=[1]
 
-subckt switch(s1 s2 clk vdd vss)
+subckt switch(s1 s2 clk clkn vdd vss)
   parameters w=2u l=0.2u
   m1 (s1 clk s2 vss) nmos w=w l=l
+  m2 (s1 vdd s2 vdd) pmos w=w l=l
 ends
 
 x1 (0 n out) oa gain=10000 rin=100k rout=0.1 va=0.5 vb=-0.5
 
-xs11 (in in1 clk vdd vss) switch
+xs11 (in in1 clk clkn vdd vss) switch
 c1 (in1 0) c c=c1
-xs12 (in1 n clkn vdd vss) switch
+xs12 (in1 n clkn clk vdd vss) switch
 
-xs21 (n 2 clk vdd vss) switch
+xs21 (n 2 clk clkn vdd vss) switch
 c2 (2 0) c c=c2
-xs22 (2 out clkn vdd vss) switch
+xs22 (2 out clkn clk vdd vss) switch
 
 cf (n out) c c=cf
 
-vclk (clk 0)   v type="pulse" val0=-0.6 val1= 0.6 delay=tclk rise=trf fall=trf width=tclk/2 period=tclk
-vclkn (clkn 0) v type="pulse" val0= 0.6 val1=-0.6 delay=tclk rise=trf fall=trf width=tclk/2 period=tclk
+rx (in out1) r r=1k
+
+vclk (clk 0)   v type="pulse" val0=-0.6 val1=0.6 delay=0 rise=trf fall=trf width=tclk/2-2*trf period=tclk
+// vclkn (clkn 0) v type="pulse" val0=-0.6 val1=0.6 delay=tclk/2 rise=trf fall=trf width=tclk/2-2*trf period=tclk
+vclkn (clkn 0 clk 0) vcvs gain=-1
 
 vdd (vdd 0) v dc=0.6
 vss (vss 0) v dc=-0.6
 
 control
-  options tolmode="mixed" tolscale=1
+  var fclk=100k
+
+  // options tolmode="mixed" tolscale=1
   // print instance("cf")
   // print device("capacitor")  // print device_files
   // print device_file("capa")
   print counts
   // print device_file("Debug")
   // print tolerances
+  print unknowns
+
+  // print device("psp103va")
+  print instance("c1", "c2")
 
   analysis tran1 tran step=0.1u stop=3m
+  
+  save default p('xs11:m1:m',gm) p('xs11:m1:m',gds)
+  alter instance("v1") type="dc" dc=0
+  analysis tran2 tran step=0.1u stop=3m
+  clear saves
+
+  // For now HBAC does not work. APFT has an odd number of time samples. 
+  // Therefore even harmonics alias into odd harmonics and vice versa. 
+  // Once PAC is implemented, we will try again. 
+  // This should also improve if we switch to FFT. 
+  // // No excitation signal for HB, just clock
+  // alter instance("v1") type="dc" dc=0.01
+  // // save dv(in) dv(out) dv(out1)
+  // options reltol=1e-6 abstol=1e-12 vntol=1e-8
+  // analysis hbac1 hbac freq=[fclk] tstart=4/fclk nharm=50 maxharm=10 from=100 to=20k mode="dec" points=10
 
   postprocess(PYTHON, "runme.py")
 endc
@@ -88,6 +115,30 @@ fig1.axes[1].legend(loc='lower right')
 
 fig1.axes[1].set_xlabel('time [s]')
 fig1.axes[1].set_ylabel('Vout [V]')
+
+fig1.tight_layout()
+
+
+# raw = rawread('hbac1.raw')
+# plot = raw.get()
+# f = np.real(plot["frequency"])
+# vout = plot['out;0']
+# 
+# 
+# fig1, ax1 = plt.subplots(2, 1, figsize=(6,6), dpi=100)
+# fig1.suptitle('S-C filter frequency response')
+# 
+# fig1.axes[0].set_title('Magnitude')
+# fig1.axes[0].semilogx(f, 20*np.log10(np.abs(vout)))
+# fig1.axes[0].set_xlabel('f [Hz]')
+# fig1.axes[0].set_ylabel('H [dB]')
+# 
+# 
+# raw = rawread('tran2.raw')
+# plot = raw.get()
+# #fig1.axes[1].plot(plot["time"], plot["xs11:m1:m.gds"], marker=".")
+# fig1.axes[1].plot(plot["time"], plot["clk"])
+# fig1.axes[1].plot(plot["time"], plot["clkn"])
 
 fig1.tight_layout()
 

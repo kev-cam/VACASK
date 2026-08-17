@@ -162,7 +162,8 @@ OpNRSolver::OpNRSolver(
     VectorRepository<double>& states, VectorRepository<double>& solution, 
     NRSettings& settings, Int forcesSize
 ) : circuit(circuit), commons(commons), states(states), 
-    NRSolver(circuit.tables().accounting(), jac, solution, settings) {
+    NRSolver(circuit.tables().accounting(), jac, solution, settings, 1) {
+    // Bucket size is 1
     // Slot 0 is for sweep continuation and homotopy (set via CoreStateStorage object)
     // Slot 1 is 
     resizeForces(forcesSize);
@@ -390,16 +391,25 @@ bool OpNRSolver::setForceOnUnknown(Forces& f, Node* node, double value) {
     return true;
 }
 
+void OpNRSolver::rebuildCheckResidualFlags() {
+    // Build flags indicating residual can be checked for a node
+    auto n = circuit.unknownCount();
+    residualCheckable.assign(n+1, false);
+    for(decltype(n) i=1; i<=n; i++) {
+        residualCheckable[i] = circuit.checkDcResidual(i) &&
+            !circuit.reprNode(i)->checkFlags(Node::Flags::InternalDeviceNode);
+    }
+}
 
-bool OpNRSolver::rebuild() {
+bool OpNRSolver::rebuild(size_t nSolComp) {
     // Call parent's rebuild
-    if (!NRSolver::rebuild()) {
+    auto n = nSolComp;
+    if (!NRSolver::rebuild(n)) {
         // Assume parent has set the error flag
         return false;
     }
 
     // Allocate space in vetors
-    auto n = circuit.unknownCount();
     dummyStates.resize(circuit.statesCount());
     maxResidualContribution_.resize(n+1);       
     historicMaxSolution_.resize(n+1);
@@ -441,12 +451,15 @@ bool OpNRSolver::rebuild() {
     }
 
     // Build flags indicating a shunt can be applied to node
-    shuntable.resize(n+1);
+    shuntable.assign(n+1, false);
     for(decltype(n) i=1; i<=n; i++) {
         auto* node = circuit.reprNode(i);
         shuntable[i] = node->checkFlags(Node::Flags::Shuntable);
     }
-    
+
+    // Build flags indicating residual can be checked for a node
+    rebuildCheckResidualFlags();
+
     return true;
 }
 
@@ -734,7 +747,7 @@ bool OpNRSolver::loadForces(bool loadJacobian) {
     auto nf = forcesList.size();
     
     // Get row norms
-    jac.rowMaxNorm(dataWithoutBucket(rowNorm));
+    jac.rowMaxNorm(dataWithoutBucket(rowNorm, bucketSize_));
 
     // Load forces
     auto n = jac.nRow();
@@ -865,7 +878,7 @@ std::tuple<bool, bool> OpNRSolver::checkResidual() {
         // Representative node, associated flow nature index
         auto rn = circuit.reprNode(i);
         // Skip this node if residual check is not allowed
-        if (!rn->checkFlags(Node::Flags::ResidualCheck)) {
+        if (!residualCheckable[i]) {
             continue;
         }
         // Get residual nature index

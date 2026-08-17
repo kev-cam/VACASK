@@ -6,15 +6,14 @@
 #include "rpnexpr.h"
 #include "rpnstack.h"
 #include "rpnfunctor.h"
+#include "hash.h"
+#include "rpnevalctx.h"
 #include <cmath>
-#include <type_traits>
+#include <iostream>
 #include "common.h"
 
 
 namespace NAMESPACE {
-
-// General RPN builtin function/operator
-typedef bool (*RpnBuiltinFunc)(RpnStack& stack, Rpn::Arity argc, Status& s);
 
 // Unary operator / single argument function
 // Applied in the same way to all vector components
@@ -203,7 +202,7 @@ template<typename Tin, typename F> bool rpnAggregateFunc1(Value* arg, Status& s=
 }
 
 // Math function with 1 argument, applied component-wise
-template<typename F> inline bool mathFuncComp1(RpnStack& stack, Rpn::Arity argc, Status& s) { 
+template<typename F> inline bool mathFuncComp1(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s) { 
     Value* vp = stack.get(); 
     DBGCHECK(!vp, "Internal error. Attempt to get value from empty stack."); 
     bool coreSt = false;
@@ -223,7 +222,7 @@ template<typename F> inline bool mathFuncComp1(RpnStack& stack, Rpn::Arity argc,
 }
 
 // Math function with 2 arguments, applied component-wise
-template<typename F> inline bool mathFuncComp2(RpnStack& stack, Rpn::Arity argc, Status& s) { 
+template<typename F> inline bool mathFuncComp2(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s) { 
     Value* v1p = stack.get(1); 
     DBGCHECK(!v1p, "Internal error. Attempt to get value from empty stack."); 
     Value* v2p = stack.get(); 
@@ -265,7 +264,7 @@ template<typename F> inline bool mathFuncComp2(RpnStack& stack, Rpn::Arity argc,
 bool mathFuncSelector2(RpnStack& stack, Rpn::Arity argc, Status& s);
 
 // Aggregates scalars/vectors into a numeric value
-template<typename F> inline bool mathAggregateFunc1(RpnStack& stack, Rpn::Arity argc, Status& s) { 
+template<typename F> inline bool mathAggregateFunc1(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s) { 
     Value* vp = stack.get(); 
     DBGCHECK(!vp, "Internal error. Attempt to get value from empty stack."); 
     bool coreSt = false;
@@ -289,7 +288,7 @@ template<typename F> inline bool mathAggregateFunc1(RpnStack& stack, Rpn::Arity 
 }
 
 // Aggregates numerical scalars/vectors into a numeric value
-template<typename F> inline bool mathAggregateNumFunc1(RpnStack& stack, Rpn::Arity argc, Status& s) { 
+template<typename F> inline bool mathAggregateNumFunc1(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s) { 
     Value* vp = stack.get(); 
     DBGCHECK(!vp, "Internal error. Attempt to get value from empty stack."); 
     bool coreSt = false;
@@ -311,7 +310,7 @@ template<typename F> inline bool mathAggregateNumFunc1(RpnStack& stack, Rpn::Ari
 }
 
 // Relational operator with 2 arguments, applied component-wise
-template<typename F> inline bool mathRelOpComp2(RpnStack& stack, Rpn::Arity argc, Status& s) { 
+template<typename F> inline bool mathRelOpComp2(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s) { 
     Value* v1p = stack.get(1); 
     DBGCHECK(!v1p, "Internal error. Attempt to get value from empty stack."); 
     Value* v2p = stack.get(); 
@@ -355,7 +354,7 @@ template<typename F> inline bool mathRelOpComp2(RpnStack& stack, Rpn::Arity argc
 }
 
 // Bitwise operator with 1 argument, applied component-wise
-template<typename F> inline bool mathBitOpComp1(RpnStack& stack, Rpn::Arity argc, Status& s) { 
+template<typename F> inline bool mathBitOpComp1(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s) { 
     Value* vp = stack.get(); 
     DBGCHECK(!vp, "Internal error. Attempt to get value from empty stack."); 
     bool coreSt = false;
@@ -373,7 +372,7 @@ template<typename F> inline bool mathBitOpComp1(RpnStack& stack, Rpn::Arity argc
 }
 
 // Bitwise operator with 2 arguments, applied component-wise
-template<typename F> inline bool mathBitOpComp2(RpnStack& stack, Rpn::Arity argc, Status& s) { 
+template<typename F> inline bool mathBitOpComp2(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s) { 
     Value* v1p = stack.get(1); 
     DBGCHECK(!v1p, "Internal error. Attempt to get value from empty stack."); 
     Value* v2p = stack.get(); 
@@ -397,7 +396,7 @@ template<typename F> inline bool mathBitOpComp2(RpnStack& stack, Rpn::Arity argc
 }
 
 // Logical operator with 1 argument, applied only to scalars
-template<typename F> inline bool mathLogicOp1(RpnStack& stack, Rpn::Arity argc, Status& s) { 
+template<typename F> inline bool mathLogicOp1(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s) { 
     Value* vp = stack.get(); 
     DBGCHECK(!vp, "Internal error. Attempt to get value from empty stack."); 
     bool coreSt = false;
@@ -417,7 +416,7 @@ template<typename F> inline bool mathLogicOp1(RpnStack& stack, Rpn::Arity argc, 
 }
 
 // Relational operator with 2 arguments, applied only to scalars
-template<typename F> inline bool mathLogicOp2(RpnStack& stack, Rpn::Arity argc, Status& s) { 
+template<typename F> inline bool mathLogicOp2(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s) { 
     Value* v1p = stack.get(1); 
     DBGCHECK(!v1p, "Internal error. Attempt to get value from empty stack."); 
     Value* v2p = stack.get(); 
@@ -448,7 +447,7 @@ template<typename F> inline bool mathLogicOp2(RpnStack& stack, Rpn::Arity argc, 
 }
 
 // Type checking function
-template<Value::Type typeCode> inline bool scalarTypeCheck(RpnStack& stack, Rpn::Arity argc, Status& s) {
+template<Value::Type typeCode> inline bool scalarTypeCheck(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s) {
     Value* vp = stack.get(); 
     DBGCHECK(!vp, "Internal error. Attempt to get value from empty stack."); 
     // Get type code, remove vector bit
@@ -457,13 +456,13 @@ template<Value::Type typeCode> inline bool scalarTypeCheck(RpnStack& stack, Rpn:
 }
 
 // Vector checking function
-bool vectorCheck(RpnStack& stack, Rpn::Arity argc, Status& s);
+bool vectorCheck(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
 
 // Vector checking function
-bool listCheck(RpnStack& stack, Rpn::Arity argc, Status& s);
+bool listCheck(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
 
 // Conversion function
-template<Value::Type typeCode> inline bool typeConversion(RpnStack& stack, Rpn::Arity argc, Status& s) {
+template<Value::Type typeCode> inline bool typeConversion(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s) {
     Value* vp = stack.get(); 
     DBGCHECK(!vp, "Internal error. Attempt to get value from empty stack."); 
     // Need conversion?
@@ -480,45 +479,48 @@ template<Value::Type typeCode> inline bool typeConversion(RpnStack& stack, Rpn::
 }
 
 // Vector/list length function
-bool len(RpnStack& stack, Rpn::Arity argc, Status& s);
+bool len(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
 
 // Construct a vector with n components that have the same value
-bool vectorBuild(RpnStack& stack, Rpn::Arity argc, Status& s);
+bool vectorBuild(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
 
 // Construct a vector holding a range of values
-bool vectorRange(RpnStack& stack, Rpn::Arity argc, Status& s);
+bool vectorRange(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
 
 // Construct a vector holding uniformly distributed random numbers from [0,1)
-bool vectorRandUnif(RpnStack& stack, Rpn::Arity argc, Status& s);
+bool vectorRandUnif(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
 
 // Construct a vector by interleaving argument vectors with matching lengths
-bool vectorInterleave(RpnStack& stack, Rpn::Arity argc, Status& s);
+bool vectorInterleave(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
 
 // Extract a vector holding components indexed n*k+i, where n and i are the second and the third argument
-bool vectorSeparate(RpnStack& stack, Rpn::Arity argc, Status& s);
+bool vectorSeparate(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
 
 // Pack scalars and vectors in a vector [ 1, 2, 3 ]
-bool vectorPack(RpnStack& stack, Rpn::Arity argc, Status& s);
+bool vectorPack(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
 
 // Pack scalars, vectors, and lists in a list [ 1; 2; 3 ]
-bool listPack(RpnStack& stack, Rpn::Arity argc, Status& s);
+bool listPack(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
 
-// Concatenate lists [ a : b : c ]
-bool listMerge(RpnStack& stack, Rpn::Arity argc, Status& s);
+// Flatten a list (one level)
+bool listFlatten(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
 
 // Min and max wrapper (1 or 2 arguments)
-bool minWrapper(RpnStack& stack, Rpn::Arity argc, Status& s);
-bool maxWrapper(RpnStack& stack, Rpn::Arity argc, Status& s);
+bool minWrapper(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
+bool maxWrapper(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
 
 // Monte-Carlo
 template<typename F, int narg>
-bool mcGenerator(RpnStack& stack, Rpn::Arity argc, Status& s) { 
-    Value* v1p = stack.get(2); 
+bool mcGenerator(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s) { 
+    Value* v1p = stack.get(narg-1); 
     DBGCHECK(!v1p, "Internal error. Attempt to get value from empty stack."); 
-    Value* v2p = stack.get(1); 
+    Value* v2p = stack.get(narg-2); 
     DBGCHECK(!v2p, "Internal error. Attempt to get value from empty stack."); 
-    Value* v3p = stack.get(); 
-    DBGCHECK(!v3p, "Internal error. Attempt to get value from empty stack."); 
+    Value* v3p;
+    if constexpr(narg>2) {
+        v3p = stack.get(narg-3); 
+        DBGCHECK(!v3p, "Internal error. Attempt to get value from empty stack."); 
+    }
 
     // Nominal value
     if (v1p->isVector()) {
@@ -543,28 +545,61 @@ bool mcGenerator(RpnStack& stack, Rpn::Arity argc, Status& s) {
     }
 
     // Sigma
-    if (v3p->isVector()) {
-        s.set(Status::BadArguments, "Sigma must be scalar."); 
-        return false; 
-    }
+    if constexpr(narg>2) {
+        if (v3p->isVector()) {
+            s.set(Status::BadArguments, "Sigma must be scalar."); 
+            return false; 
+        }
 
-    if (!v3p->convertInPlace(Value::Type::Real)) {
-        s.set(Status::BadArguments, "Sigma must be real.");
-        return false;
+        if (!v3p->convertInPlace(Value::Type::Real)) {
+            s.set(Status::BadArguments, "Sigma must be real.");
+            return false;
+        }
     }
 
     auto nom = v1p->val<Real>();
     auto delta = v2p->val<Real>();
-    auto sigma = v3p->val<Real>();
-
-    // TODO: Apply functor to get result
-    auto result = nom;
-
+    
+    // Compute result
+    double result;
+    // Do we have MC data
+    if (ctx.mcData()) {
+        // Yes, check the MC generator's context. 
+        // Generate random numbers only in Instance, Model, and Parameters
+        auto c = ctx.ctxType();
+        if (c==MCData::CtxType::Instance || c==MCData::CtxType::Model || c==MCData::CtxType::Parameters) {
+            // Retrieve uniformly distributed random number from (0,1)
+            auto r = ctx.mcData()->retrieveOrAdd(ctx.generatorId());
+            // Apply functor to shape distribution
+            F functor;
+            if constexpr(narg>2) {
+                // 3 arguments, Gaussian distribution
+                auto sigma = v3p->val<Real>();
+                result = functor(nom, delta, sigma, r);
+            } else {
+                // 2 arguments, uniform distribution
+                result = functor(nom, delta, r);
+            }
+            if (ctx.mcData()->debugStream()) {
+                *(ctx.mcData()->debugStream()) << "Eval " << ctx.generatorId() << " unif=" << r << " value=" << result << "\n";
+            }
+        } else {
+            // Not the right context, return nominal
+            result = nom;
+        }
+    } else {
+        // No MC data, return nominal
+        result = nom;
+    }
+        
     // Return result, pop all but the first argument
     stack.pop(narg-1);
     
     // Write result to first argument
     *v1p = result;
+
+    // Advance call counter in context
+    ctx.nextCallIndex();
 
     return true;
 }

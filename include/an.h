@@ -14,6 +14,8 @@
 
 namespace NAMESPACE {
 
+// TODO: name_ -> prefixedName_ in output init/finalize/delete in all analyses in other branches
+
 // Default value is Uninitialized
 enum class AnalysisState { Uninitilized=0, Aborted, Stopped, Finished, SweepPoint };
 
@@ -25,7 +27,7 @@ class Analysis : public OutputDescriptorResolver {
 public:
     typedef Analysis* (*AnalysisFactory)(PTAnalysis& ptAnalysis, Circuit& circuit, Status& s);
 
-    Analysis(Id name, Circuit& circuit, PTAnalysis& ptAnalysis);
+    Analysis(const std::string& name, Circuit& circuit, PTAnalysis& ptAnalysis);
     virtual ~Analysis() = default;
 
     Analysis           (const Analysis&)  = delete;
@@ -34,12 +36,14 @@ public:
     Analysis& operator=(      Analysis&&) = delete;
 
     Id name() const { return name_; };
-    
+
+    void setFileNamePrefix(const std::string& pfx);
+
     // Inherited from OutputDescriptorResolver, overide it
     // Converts an output descriptor to output source and stores it in the given output sources list
     // This handles output descriptors that are not specific for an analysis core, 
     // i.e. it is called by a core when resolving a descriptor is delegated to the analysis
-    virtual bool resolveOutputDescriptor(const OutputDescriptor& descr, Output::SourcesList& srcs, bool strict);
+    virtual bool resolveOutputDescriptor(const OutputDescriptor& descr, Output::SourcesList& srcs, bool strict, Status& s);
 
     // Sweep API
     size_t sweepCount() const { return ptAnalysis.sweeps().size(); };
@@ -116,11 +120,6 @@ public:
     // Return value: ok, changed
     std::tuple<bool, bool> updateParameterExpressions(Status& s=Status::ignore); 
 
-    // Mechanism for requesting a re-bind due to changed analysis parameters
-    // e.g. for HB when the set of frequencies changes
-    // Return value: ok, rebuild requested
-    virtual std::tuple<bool, bool> requestsRebuild(Status& s=Status::ignore) { return std::make_tuple(true, false); };
-
     // Mechanism for adding entries to sparsity map and states vector
     // (part of setSweepState() and setAnalysisOptions())
     // used by analyses (and their cores)
@@ -136,7 +135,8 @@ public:
     virtual void dump(std::ostream& os) const;
 
 protected:
-    Id name_;
+    std::string name_;
+    std::string prefixedName_;
     Circuit& circuit;
     CommonData commons;
     ParameterSweeper sweeper;
@@ -189,7 +189,7 @@ protected:
     // produced no output descriptors. 
     // Called by addOutputDescriptors() after all save directives were interpreted. 
     // Calls addDefaultOutputDescriptors() method of all analysis cores. 
-    virtual bool addDefaultOutputDescriptors() = 0;
+    virtual bool addDefaultOutputDescriptors(Status& s) = 0;
     
     // Resolve output descriptors of all analysis cores
     // Called by toplevel analysis function (an.cpp) when setting data sources 
@@ -233,6 +233,8 @@ protected:
     
     // Store analysis state in internal repository 
     // Used for homotopy and sweeps
+    // storeDetails=false does not store the names of the results. 
+    // It is used by homotopy algorithms to rapidly store/restore state. 
     virtual bool storeState(size_t ndx, bool storeDetails=true) { return true; };
 
     // Restore analysis state from internal repository 

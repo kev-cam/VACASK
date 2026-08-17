@@ -51,6 +51,13 @@ namespace NAMESPACE {
     // before main(), i.e. before any ordinary "save" id could exist -- the intended
     // usage documented in identifier.h (static ids created before ordinary ones).
     static Id saveCmd = Id::createStatic("save");
+    // Behavioral source parameter names: "v" selects a potential (voltage)
+    // source, "i" selects a flow (current) source.
+    static Id vParamId = Id::createStatic("v");
+    static Id iParamId = Id::createStatic("i");
+    static Id potentialParamId = Id::createStatic("potential");
+    static Id flowParamId = Id::createStatic("flow");
+    static Id disciplineParamId = Id::createStatic("discipline");
 }
 
 // The following definitions is missing when %locations isn't used
@@ -155,6 +162,8 @@ typedef struct subckt {
 %token               POWER        "**"
 %token               LBRACKET     "["
 %token               RBRACKET     "]"
+%token               LCURLY       "{"
+%token               RCURLY       "}"
 %token               LPAREN       "("
 %token               RPAREN       ")"
 %token               ASSIGN       "="
@@ -177,7 +186,7 @@ typedef struct subckt {
 %token               BITSHIFTL    "<<"
 
 %token               COLON        ":"
-%token               SEMICOLON    ";"
+%token               SEMICOLON    ";"   // reserved for future use
 %token               RIGHTARROW   "->"  // reserved for future use
 // Not allowed due to conflict with <-5 (could be <- 5 or < -5)
 // %token               LEFTARROW    "<-" 
@@ -209,22 +218,19 @@ typedef struct subckt {
 %right POWER
 %right NEG NOT BITNOT
 %left LPAREN RPAREN LBRACKET RBRACKET
-
-// exprlist e  e,e
-// bracketlist1 [ [1 
-// commabracketlist1 [, [1, [1,2,3
-// semicolonbracketlist1 [; [1; [1;2;3
+%left LCURLY RCURLY
 
 // Nonterminal symbols
 %type <Int>                             intnum
 %type <Id>                              terminal
 %type <PTIdentifierList>                terminal_list global ground keywords
-%type <std::vector<Rpn>>                exprlist semexprlist colexprlist
+%type <std::vector<Rpn>>                exprlist
 %type <Value>                           value
 %type <struct pexpr>                    parameter_expression
 %type <struct paramlist>                parameter_list opt_broken_parameter_list subcktparameters 
 %type <PTInstance>                      instance
 %type <PTModel>                         model
+%type <PTBehavioral>                    behavioral
 %type <PTSubcircuitDefinition>          subckt
 %type <struct subckt>                   subckt_build
 %type <PTBlockSequence>                 condblock_build condblock
@@ -337,6 +343,10 @@ subckt_build
     $$ = std::move($1);
     $$.def.add(std::move($2));
   }
+  | subckt_build behavioral {
+    $$ = std::move($1);
+    $$.def.add(std::move($2));
+  }
   | subckt_build condblock {
     $$ = std::move($1);
     $$.def.add(std::move($2));
@@ -429,6 +439,13 @@ condblock_build
     $$.add(std::move($2), std::move(blk), @1.loc());
   }
   | condblock_build instance {
+    $$ = std::move($1);
+    // back() is always valid here: the only base production (BLKIF expr NEWLINE)
+    // adds a block, and every other production keeps the sequence non-empty, so a
+    // reduced condblock_build always holds >=1 block. Same for the model/condblock cases.
+    $$.back().add(std::move($2));
+  }
+  | condblock_build behavioral {
     $$ = std::move($1);
     // back() is always valid here: the only base production (BLKIF expr NEWLINE)
     // adds a block, and every other production keeps the sequence non-empty, so a
@@ -715,18 +732,15 @@ expr
     }
     $$.extend(Rpn::PackVec(static_cast<Rpn::Arity>($2.size())), @1.loc());
   }
-  | LBRACKET SEMICOLON RBRACKET {
+  | LCURLY RCURLY {
     // Empty list
-    $$.extend(Rpn::PackList(0), @1.loc()); 
+    $$.extend(Rpn::PackList(0), @1.loc());  
   }
-  | LBRACKET expr SEMICOLON RBRACKET {
-    // List with single element
-    // Pack values in a list, keep members that are lists themselves intact
-    // This produces a list of lists of ...
-    $$.extend(std::move($2)); 
-    $$.extend(Rpn::PackList(1), @1.loc()); 
+  | LCURLY COMMA RCURLY {
+    // Empty list
+    $$.extend(Rpn::PackList(0), @1.loc());  
   }
-  | LBRACKET semexprlist RBRACKET {
+  | LCURLY exprlist RCURLY {
     // List with two or more elements
     // Pack values in a list, keep members that are lists themselves intact
     // This produces a list of lists of ...
@@ -740,30 +754,6 @@ expr
     }
     $$.extend(Rpn::PackList(static_cast<Rpn::Arity>($2.size())), @1.loc());
   }
-  | LBRACKET COLON RBRACKET {
-    // Empty list
-    $$.extend(Rpn::PackList(0), @1.loc()); 
-  }
-  | LBRACKET expr COLON RBRACKET {
-    // List with single element unpacked
-    // Merge scalars and lists in one list
-    $$.extend(std::move($2)); 
-    $$.extend(Rpn::MergeList(1), @1.loc()); 
-  }
-  | LBRACKET colexprlist RBRACKET {
-    // List with two or more elements unpacked
-    // Merge scalars and lists in one list
-    if ($2.size() > std::numeric_limits<Rpn::Arity>::max()) {
-        status.set(Status::BadArguments, "List has too many elements.");
-        status.extend(@1.loc());
-        YYERROR;
-    }
-    for(Rpn::Arity i=0; i<$2.size(); i++) {
-        $$.extend(std::move($2[i]));
-    }
-    $$.extend(Rpn::MergeList(static_cast<Rpn::Arity>($2.size())), @1.loc());
-  }
-  
   | expr LBRACKET expr RBRACKET {
     // Vector and list selector
     $$.extend(std::move($1)); 
@@ -785,32 +775,6 @@ exprlist
     $$.push_back(std::move($3));
   }
 
-// Semicolon separated expression list is always in brackets, 
-// no need to handle NEWLINE. 
-// List has always at least two expressions. 
-semexprlist
-  : expr SEMICOLON expr {
-    $$.push_back(std::move($1));
-    $$.push_back(std::move($3));
-  }
-  | semexprlist SEMICOLON expr {
-    $$ = std::move($1);
-    $$.push_back(std::move($3));
-  }
-
-// Colon separated expression list is always in brackets, 
-// no need to handle NEWLINE. 
-// List has always at least two expressions. 
-colexprlist
-  : expr COLON expr {
-    $$.push_back(std::move($1));
-    $$.push_back(std::move($3));
-  }
-  | colexprlist COLON expr {
-    $$ = std::move($1);
-    $$.push_back(std::move($3));
-  }
-
 parameter_expression
   : IDENTIFIER ASSIGN expr { 
     $$.id = $1;
@@ -823,7 +787,8 @@ parameter_list
     $$.locations[$1.id] = $1.loc;
     if (evaluator.isConstant($1.expr)) {
         Value v;
-        if (!evaluator.evaluate($1.expr, v, status)) {
+        RpnEvaluationNetlistContext ctx;
+        if (!evaluator.evaluate($1.expr, v, ctx, status)) {
             YYERROR;
         }
         $$.params.add(PTParameterValue($1.id, std::move(v), @1.loc()));
@@ -844,7 +809,8 @@ parameter_list
     $$.locations[$2.id] = $2.loc;
     if (evaluator.isConstant($2.expr)) {
         Value v;
-        if (!evaluator.evaluate($2.expr, v, status)) {
+        RpnEvaluationNetlistContext ctx;
+        if (!evaluator.evaluate($2.expr, v, ctx, status)) {
             YYERROR;
         }
         $$.params.add(PTParameterValue($2.id, std::move(v), @2.loc()));
@@ -897,6 +863,118 @@ instance
         $5, 
         std::move($3), 
         std::move($6.params), 
+        @1.loc()
+    ));
+  }
+
+behavioral
+  : IDENTIFIER LPAREN terminal_list RPAREN opt_broken_parameter_list NEWLINE {
+    // Extract expresion, type, and optional discipline with accessors
+    Rpn expr;
+    bool haveExpr = false;
+    bool isCurrentSource = false;
+    std::string discipline = "electrical";
+    std::string potentialAccessor = "V";
+    std::string flowAccessor ="I";
+    Loc exprLoc;
+    // Go through value parameters, extract behavioral expression, check for redefinition
+    // Extract optional discipline and accessors. 
+    for (auto& pv : $5.params.values()) {
+      if (pv.name()==vParamId || pv.name()==potentialParamId) {
+        if (haveExpr) {
+          status.set(Status::Redefinition, "Behavioral source expression already defined.");
+          status.extend(pv.location());
+          status.extend("Expression first defined here.");
+          status.extend(exprLoc);
+          YYERROR;
+        }
+        exprLoc = pv.location();
+        expr.extend(std::move(pv.val()), pv.location());
+        haveExpr = true;
+        isCurrentSource = false;
+      } else if (pv.name()==iParamId || pv.name()==flowParamId) {
+        if (haveExpr) {
+          status.set(Status::Redefinition, "Behavioral source expression already defined.");
+          status.extend(pv.location());
+          status.extend("Expression first defined here.");
+          status.extend(exprLoc);
+          YYERROR;
+        }
+        exprLoc = pv.location();
+        expr.extend(std::move(pv.val()), pv.location());
+        haveExpr = true;
+        isCurrentSource = true;
+      } else if (pv.name()==disciplineParamId) {
+        // Must be a string vector with 3 components: discipline, potential accessor, flow accessor
+        const Value& v = pv.val();
+        if (v.type()!=Value::Type::StringVec || v.size()!=3) {
+          status.set(Status::BadArguments, "Parameter \"discipline\" must be a constant string vector with 3 elements: discipline, potential accessor, flow accessor.");
+          status.extend(pv.location());
+          YYERROR;
+        }
+        const StringVector& sv = v.val<const StringVector>();
+        discipline = sv[0];
+        potentialAccessor = sv[1];
+        flowAccessor = sv[2];
+      } else {
+        // Unknown parameter, error
+        status.set(Status::BadArguments, "Unknown parameter \""+std::string(pv.name())+"\" for behavioral source instance.");
+        status.extend(pv.location());
+        YYERROR;
+      }
+    }
+    // Go through expression parameters, extract behavioral expression, check for redefinition
+    for (auto& pe : $5.params.expressions()) {
+      if (pe.name()==vParamId || pe.name()==potentialParamId) {
+          if (haveExpr) {
+            status.set(Status::Redefinition, "Behavioral source expression already defined.");
+            status.extend(pe.location());
+            status.extend("Expression first defined here.");
+            status.extend(exprLoc);
+            YYERROR;
+          }
+          exprLoc = pe.location();
+          expr = std::move(pe.rpn());
+          haveExpr = true;
+          isCurrentSource = false;
+      } else if (pe.name()==iParamId || pe.name()==flowParamId) {
+        if (haveExpr) {
+          status.set(Status::Redefinition, "Behavioral source expression already defined.");
+          status.extend(pe.location());
+          status.extend("Expression first defined here.");
+          status.extend(exprLoc);
+          YYERROR;
+        }
+        exprLoc = pe.location();
+        expr = std::move(pe.rpn());
+        haveExpr = true;
+        isCurrentSource = true;
+      } else if (pe.name()==disciplineParamId) {
+        // Error, discipline must be a constant string vector with 3 components
+        status.set(Status::BadArguments, "Parameter \"discipline\" must be a constant string vector with 3 elements: discipline, potential accessor, flow accessor.");
+        status.extend(pe.location());
+        YYERROR;
+      } else {
+        // Error, unknown parameter
+        status.set(Status::BadArguments, "Unknown parameter \""+std::string(pe.name())+"\" for behavioral source instance.");
+        status.extend(pe.location());
+        YYERROR;
+      }
+    }
+    // Exactly one of v/potential or i/flow must have been given
+    if (!haveExpr) {
+      status.set(Status::BadArguments, "Behavioral source instance requires exactly one of parameters \"v\"/\"potential\" or \"i\"/\"flow\".");
+      status.extend(@1.loc());
+      YYERROR;
+    }
+    $$ = std::move(PTBehavioral(
+        $1, 
+        std::move($3), 
+        std::move(expr), 
+        isCurrentSource, 
+        std::move(discipline), 
+        std::move(potentialAccessor), 
+        std::move(flowAccessor), 
         @1.loc()
     ));
   }

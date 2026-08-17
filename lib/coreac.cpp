@@ -22,8 +22,8 @@ template<> int Introspection<ACParameters>::setup() {
     registerMember(mode);
     registerMember(points);
     registerMember(values);
-    registerMember(writeop);
     registerMember(write);
+    registerNamedMember(opParams.write, "writeop");
     registerNamedMember(opParams.nodeset, "nodeset");
     registerNamedMember(opParams.store, "store");
     
@@ -52,7 +52,7 @@ ACCore::~ACCore() {
     delete outfile;
 }
 
-bool ACCore::resolveOutputDescriptors(bool strict) {
+bool ACCore::resolveOutputDescriptors(bool strict, Status& s) {
     // Clear output sources
     outputSources.clear();
     // Resolve output descriptors
@@ -62,14 +62,14 @@ bool ACCore::resolveOutputDescriptors(bool strict) {
         Instance *inst;
         switch (it->type) {
         case OutdSolComponent:
-            ok = addComplexVarOutputSource(strict, it->id, acSolution);
+            ok = addComplexVarOutputSource(strict, it->id, acSolution, 1, 0, it->id, s);
             break;
         case OutdFrequency:
-            outputSources.emplace_back(&frequency);
+            outputSources.emplace_back(&frequency, it->name);
             break;
         default:
             // Delegate to parent
-            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict);
+            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, s);
             break;
         }
         if (!ok) {
@@ -79,32 +79,30 @@ bool ACCore::resolveOutputDescriptors(bool strict) {
     return ok;
 }
 
-bool ACCore::addCoreOutputDescriptors() {
-    clearError();
+bool ACCore::addCoreOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdFrequency, "frequency"))) {
-        lastError = Error::Descriptor;
-        errorId = "frequency";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for frequency."));
         return false;
     }
     return true;
 }
 
-bool ACCore::addDefaultOutputDescriptors() {
+bool ACCore::addDefaultOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (savesCount==0) {
-        return addAllUnknowns(PTSave("default", Id(), Id()));
+        return addAllUnknowns(PTSave("default", Id(), Id()), s);
     }
     return true;
 }
 
-bool ACCore::initializeOutputs(Id name, Status& s) {
+bool ACCore::initializeOutputs(const std::string& name, Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
@@ -112,7 +110,7 @@ bool ACCore::initializeOutputs(Id name, Status& s) {
     // Create output file if not created yet
     if (!outfile) {
         outfile = new OutputRawfile(
-            name, outputDescriptors, outputSources,
+            name, outputSources,
             (circuit.simulatorOptions().core().rawfile==SimulatorOptions::rawfileBinary ? OutputRawfile::Flags::Binary : OutputRawfile::Flags::None) |
                 OutputRawfile::Flags::Padded | OutputRawfile::Flags::Complex);
         outfile->setTitle(circuit.title());
@@ -322,7 +320,7 @@ CoreCoroutine ACCore::coroutine(bool continuePrevious) {
         
         if (debug>=100) {
             Simulator::dbg() << "Linear system at frequency " << frequency << "\n";
-            acMatrix.dump(Simulator::dbg(), dataWithoutBucket(acSolution)); 
+            acMatrix.dump(Simulator::dbg(), dataWithoutBucket(acSolution, bucketSize)); 
             Simulator::dbg() << "\n";
         }
 
@@ -380,7 +378,7 @@ CoreCoroutine ACCore::coroutine(bool continuePrevious) {
         }
 
         // Solve, set bucket to 0.0
-        if (!acMatrix.solve(dataWithoutBucket(acSolution))) {
+        if (!acMatrix.solve(dataWithoutBucket(acSolution, bucketSize))) {
             setError(AcError::MatrixError);
             if (debug>2) {
                 Simulator::dbg() << "Failed to solve factored system.\n";
@@ -390,7 +388,7 @@ CoreCoroutine ACCore::coroutine(bool continuePrevious) {
         }
         acSolution[0] = 0.0;
 
-        if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution), true, true)) {
+        if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution, bucketSize), true, true)) {
             setError(AcError::SolutionError);
             if (options.smsig_debug) {
                 Simulator::dbg() << "A solution entry is not finite. Solver failed.\n";

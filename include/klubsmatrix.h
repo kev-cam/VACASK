@@ -55,7 +55,7 @@ public:
         row--;
         col--;
         return std::make_tuple(
-            DenseMatrixView<ValueType>(Ax+nzPosition, nbRow_, nbCol_, 1, blockColumnStride[col]), 
+            DenseMatrixView<ValueType>(Ax.data()+nzPosition, nbRow_, nbCol_, 1, blockColumnStride[col]), 
             true
         );
     };
@@ -63,7 +63,9 @@ public:
     // Rebuild it based on the given sparsity map of dense blocks, 
     // n x n dense blocks with nb x nb elements
     // Set elements to zero, clear error
-    bool rebuild(SparsityMap& m, EquationIndex n, EquationIndex nbRow, UnknownIndex nbCol);
+    // If storageOnly is true the structures for accessing scalar entries (AP, AI) are not built. 
+    // Such matrices cannot be factored/solved. 
+    bool rebuild(SparsityMap& m, EquationIndex n, EquationIndex nbRow, UnknownIndex nbCol, bool storageOnly=false);
 
     // Returns the linear nonzero element index coresponding to dense block
     // at block position mep (0-based), block element position blockMep (1-based). 
@@ -108,10 +110,10 @@ public:
         // Return pointer
         if constexpr(std::is_same<ValueType, Complex>::value) {
             return (comp==Component::Imaginary) ? 
-                reinterpret_cast<double*>(Ax+nzPosition)+1 : 
-                reinterpret_cast<double*>(Ax+nzPosition);
+                reinterpret_cast<double*>(Ax.data()+nzPosition)+1 : 
+                reinterpret_cast<double*>(Ax.data()+nzPosition);
         } else {
-            return (comp==Component::Imaginary) ? nullptr : (Ax+nzPosition);
+            return (comp==Component::Imaginary) ? nullptr : (Ax.data()+nzPosition);
         }
     };
 
@@ -125,6 +127,7 @@ public:
 protected:
     using Error = KluMatrixCore<IndexType, ValueType>::Error;
     using KluMatrixCore<IndexType, ValueType>::smap;
+    using KluMatrixCore<IndexType, ValueType>::nnz_;
     using KluMatrixCore<IndexType, ValueType>::AN;
     using KluMatrixCore<IndexType, ValueType>::AP;
     using KluMatrixCore<IndexType, ValueType>::AI;
@@ -148,24 +151,35 @@ protected:
 
     // Origin of dense block column (origin of topmost dense block).
     // This is the linear index of the nonzero element at the topmost block's origin. 
+    // Index is within the array of scalars holding matrix nomnzeros. 
     // Array has n entries. 
-    IndexType* blockColumnOrigin;
+    Vector<IndexType> blockColumnOrigin;
     
     // Number of nnz elements to skip to reach the element 
     // in the next column of the same row of a dense block. 
     // Depends on the number of dense blocks in a column. 
     //   number of dense blocks in the column x nb
     // Array has n elements. 
-    IndexType* blockColumnStride;
+    Vector<IndexType> blockColumnStride;
 
-    // Linear index of the first dense block in a column of dense blocks
-    // when the dense blocks are ordered in a column major ordering. 
-    // has n+1 elements where the n+1-th element is the number of dense blocks. 
-    IndexType* denseColumnBegin;
+    // Dense blocks are organized in the same order as nonzeros in ordinary 
+    // sparse matrices (column major order) in a linear sequence. 
+    // For a dense block we can get its 0-based index in this sequence from 
+    // the sparsity map. 
+    // If we know the index of the first block in the column stored in 
+    // denseColumnBegin and the index of the block we are interested in 
+    // we can compute the 0-based consecutive number of this block in its 
+    // column. This distance multiplied by the number of elements in a 
+    // dense block's column is the offset of blocks's origin from the 
+    // origin of the first block in this column in terms of scalars. 
+    // Has n+1 elements where the n+1-th element is the number of dense blocks. 
+    Vector<IndexType> denseColumnBegin;
 
+    // TODO: make bucket static, resize when a larger one is requested
     // We need a block bucket because Jacobian load with offset could add an offset to bucket pointer
-    bool largeBucket_;
     ValueType* blockBucket_;
+    bool largeBucket_;
+    Vector<ValueType> bucketStorage_;
     
 public:
     // Matrix binding interface

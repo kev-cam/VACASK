@@ -12,56 +12,77 @@ model i isource
 model r sp_resistor
 model c capacitor
 
-subckt gilbert(rfp rfn lop lon ifp ifn vdd vss)
-  rd1 (vdd ifp) r r=10k 
-  rd2 (vdd ifn) r r=10k 
-  m1 (ifp rfp dg1 vss) nmos w=2u l=0.2u
-  m2 (ifn rfn dg1 vss) nmos w=2u l=0.2u
-  m3 (ifn rfp dg2 vss) nmos w=2u l=0.2u
-  m4 (ifp rfn dg2 vss) nmos w=2u l=0.2u
-  m5 (dg1 lop s  vss) nmos w=2u l=0.2u
-  m6 (dg2 lon s  vss) nmos w=2u l=0.2u
+subckt gilbert(outp outn lop lon inp inn vdd vss)
+  rd1 (vdd outp) r r=10k 
+  rd2 (vdd outn) r r=10k 
+  m1 (outp lop dg1 vss) nmos w=2u l=0.2u
+  m2 (outn lon dg1 vss) nmos w=2u l=0.2u
+  m3 (outn lop dg2 vss) nmos w=2u l=0.2u
+  m4 (outp lon dg2 vss) nmos w=2u l=0.2u
+  m5 (dg1 inp s  vss) nmos w=2u l=0.2u
+  m6 (dg2 inn s  vss) nmos w=2u l=0.2u
   i0 (s 0) i dc=40u
   r0 (s 0) r r=1G
 ends
 
 vdd (vdd 0) v dc=1.2
 
-x1 (rfp rfn lop lon ifp ifn vdd 0) gilbert
-vrfb (rfb 0) v dc=0.5
-vlob (lob 0) v dc=0.3
+x1 (outp outn lop lon inp inn vdd 0) gilbert
+vinb (inb 0) v dc=0.3
+vlob (lob 0) v dc=0.5
 
 subckt dctest()
-  vrf (rfp rfb) v dc=0
-  erf (rfn rfb rfp rfb) vcvs gain=-1
+  vrf (inp inb) v dc=0
+  erf (inn inb inp inb) vcvs gain=-1
   vlo (lop lob) v dc=0
   elo (lon lob lop lob) vcvs gain=-1
 ends
 
 subckt sintest()
-  vrf (rfp rfb) v type="sine" sinedc=0 ampl=2m freq=50k
-  erf (rfn rfb rfp rfb) vcvs gain=-1
-  vlo (lop lob) v type="sine" sinedc=0 ampl=50m freq=1M
+  vin (inp inb) v type="sine" sinedc=0 ampl=2m freq=50k spur={0.0} smag=[1]
+  ein (inn inb inp inb) vcvs gain=-1
+  vlo (lop lob) v type="sine" sinedc=0 ampl=20m freq=1M
   elo (lon lob lop lob) vcvs gain=-1
 ends
 
+subckt swtest()
+  vin (inp inb) v type="sine" sinedc=0 ampl=2m freq=50k spur={0.0} smag=[1] //2m
+  ein (inn inb inp inb) vcvs gain=-1
+  vlo (lop lob) v type="pulse" val0=-0.5 val1=0.5 delay=0 rise=10n fall=10n width=1u/2-10n period=1u
+  elo (lon lob lop lob) vcvs gain=-1
+ends
 
 control
   elaborate circuit("dctest")
 
-  save p('x1:rd1',i) p('x1:rd2',i) v(ifp) v(ifn)
+  // OP analysis to test if the bias is correct
+  save p('x1:rd1',i) p('x1:rd2',i) v(inp) v(inn)
   analysis op1 op
 
+  // DC sweep of Gilbert cell when used as a multiplier
   clear saves
   sweep vlo instance="vlo" parameter="dc" from=-100m to=100m mode="lin" points=6
   sweep vrf instance="vrf" parameter="dc" from=-100m to=100m mode="lin" points=50
     analysis op2 op
 
-  
   elaborate circuit("sintest")
   
+  // Gilbert cell with upper quad in switching mode does not work. 
+  // APFT has an odd number of time samples. Therefore odd harmonics 
+  // alias into even harmonics which should be 0. 
+  // Once PAC is implemented, we will try again. 
+  // This should also improve if we switch to FFT. 
+  // elaborate circuit("swtest")
+  
+  // Transient, 2-tone HB
   analysis tran1 tran step=1n stop=40u maxstep=2n 
-  analysis hb1 hb freq=[50k, 1M] truncate="box" nharm=[3, 5]
+  options reltol=1e-9 abstol=1e-12 vntol=1e-10 hb_debug=0 hb_skipinitial=1
+  analysis hb1 hb freq=[50k, 1M] truncate="box" nharm=[2, 10]
+  
+  // HBAC, turn off vin so it does not disturb the HB periodic operating point
+  alter instance("vin") ampl=0
+  // Use only first 10 harmonics in HBAC
+  analysis hbac1 hbac freq=[1M] truncate="box" nharm=15 outspur={} from=1 to=500k mode="dec" points=10 maxharm=10 
 
   postprocess(PYTHON, "runme.py")
 endc
@@ -76,12 +97,13 @@ plot = raw.get()
 for name in plot.names:
   print(name, plot[name])
 
-fig1 = plt.figure(figsize=(9,7), dpi=100)
-fig1.suptitle('Gilbert cell')
+fig1 = plt.figure(figsize=(8,10), dpi=100)
+# fig1.suptitle('Gilbert cell')
 ax_dict = fig1.subplot_mosaic("""
 AB
 AC
 ED
+FF
 """)
 
 ax_dict["A"].set_title('DC response')
@@ -90,13 +112,14 @@ ax_dict["A"].set_xlabel('vin [V]')
 
 ax_dict["B"].set_title('Transient response for 1MHz + 50kHz')
 ax_dict["D"].set_xlabel('time [us]')
-ax_dict["B"].set_ylabel('vlo [V]')
-ax_dict["C"].set_ylabel('vin [V]')
-ax_dict["D"].set_ylabel('vout [V]')
+ax_dict["B"].set_ylabel('vlo [mV]')
+ax_dict["C"].set_ylabel('vin [mV]')
+ax_dict["D"].set_ylabel('vout [mV]')
 
 ax_dict["E"].set_title('Spectrum of vout (HB)')
 ax_dict["E"].set_xlabel('f [MHz]')
 ax_dict["E"].set_ylabel('mag [V]')
+
 
 raw = rawread('op2.raw')
 plot = raw.get(sweeps=1)
@@ -104,25 +127,26 @@ plot = raw.get(sweeps=1)
 for ii in range(plot.sweepGroups):
     sdata = plot.sweepData(ii)
     vlo = sdata['vlo']*2
-    vrf = plot[ii, 'rfp']-plot[ii, 'rfn']
-    vif = plot[ii, 'ifp']-plot[ii, 'ifn']
-    ax_dict["A"].plot(vrf, vif, label='vlo={:.2e}'.format(vlo))
+    vout = plot[ii, 'outp']-plot[ii, 'outn']
+    vin = plot[ii, 'inp']-plot[ii, 'inn']
+    ax_dict["A"].plot(vin, vout, label='vlo={:.2e}'.format(vlo))
 ax_dict["A"].legend(loc="lower right")
+
 
 raw = rawread('tran1.raw')
 plot = raw.get()
 t = plot["time"]*1e6
 vlo = plot['lop']-plot['lon']
-vrf = plot['rfp']-plot['rfn']
-vif = plot['ifp']-plot['ifn']
-ax_dict["B"].plot(t, vlo)
-ax_dict["C"].plot(t, vrf)
-ax_dict["D"].plot(t, vif)
+vin = plot['inp']-plot['inn']
+vout = plot['outp']-plot['outn']
+ax_dict["B"].plot(t, vlo*1e3)
+ax_dict["C"].plot(t, vin*1e3)
+ax_dict["D"].plot(t, vout*1e3)
 
 
 hb1 = rawread('hb1.raw').get()
 f = np.real(hb1['frequency'])
-S = hb1['ifp']-hb1['ifn']
+S = hb1['outp']-hb1['outn']
 Smag = np.abs(S)
 
 # fig1, ax1 = plt.subplots(1, 1, figsize=(5,3), dpi=100, constrained_layout=True)
@@ -131,8 +155,22 @@ Smag = np.abs(S)
 ax_dict["E"].stem(f/1e6, Smag, markerfmt='.')
 ax_dict["E"].set_yscale('log')
 
-fig1.tight_layout()
 
+hbac1 = rawread('hbac1.raw').get()
+f = np.real(hbac1['frequency'])
+
+flo = 1e6
+for spur in range(-10,11):
+  out = 20*np.log10(np.abs(hbac1[f'outp;{spur}']-hbac1[f'outn;{spur}']))
+  fspur = flo*spur
+  ls = '-' if fspur>=0 else ':'
+  ax_dict["F"].plot(np.abs(fspur+f)/1e6, out, label='spur={}MHz'.format(flo*spur/1e6), linestyle=ls)
+
+ax_dict["F"].set_title('HBAC gain from baseband input')
+ax_dict["F"].set_xlabel('f [MHz]')
+ax_dict["F"].set_ylabel('gain [dB]')
+
+fig1.tight_layout()
 
 plt.show()
 >>>FILE

@@ -18,17 +18,24 @@ bool HBCore::buildColocation(Status& s) {
     auto debug = options.hb_debug;
     
     // Includes DC
-    auto n = freqGrid.spectrum().size();
+    auto n = spurs_.spectrum().size();
+
+    // Need DC + at least one nonzero frequency to read fmin / fmax below
+    if (n<2) {
+        s.set(Status::BadArguments, "Spectrum must contain at least one nonzero frequency.");
+        return false;
+    }
 
     // Must have 2 timepoints for each nonzero frequency and one for DC
     auto nt = 2*n-1;
 
-    // Maximal frequency
-    auto fmax = freqGrid.spectrum().back();
-    auto fmin = freqGrid.spectrum()[1];
+    // Maximal and minimal nonzero frequency
+    auto fmax = spurs_.spectrum().back();
+    auto fmin = spurs_.spectrum()[1];
 
     if (params.samplefac<1.0) {
         s.set(Status::BadArguments, "samplefac must be >=1.");
+        return false;
     }
     
     // Number of samples
@@ -43,18 +50,17 @@ bool HBCore::buildColocation(Status& s) {
         }
         auto tstep = range/nsam;
         for(decltype(nsam) i=0; i<nsam; i++) {
-            timepoints.push_back(i*tstep+tstep*params.shift);
+            timepoints.push_back(params.tstart+i*tstep+tstep*params.shift);
         }
     } else if (params.sample==HBCore::sampleRandom) {
         std::mt19937_64 gen;
         gen.seed(1);
         std::uniform_real_distribution dist(0.0, 1.0);
-        // Select across 3 periods of fmin
         if (debug>2) {
             Simulator::dbg() << "Generating pool of " << nsam << " random points, tmax=" << range << "\n" ;
         }
         for(decltype(nsam) i=0; i<nsam; i++) {
-            timepoints.push_back(dist(gen)*range);
+            timepoints.push_back(params.tstart+dist(gen)*range);
         }
     } else if (params.sample==HBCore::sampleMixed) {
         if (debug>2) {
@@ -65,7 +71,7 @@ bool HBCore::buildColocation(Status& s) {
         gen.seed(1);
         std::uniform_real_distribution dist(0.0, tstep*params.shift);
         for(decltype(nsam) i=0; i<nsam; i++) {
-            timepoints.push_back(i*tstep+dist(gen));
+            timepoints.push_back(params.tstart+i*tstep+dist(gen));
         }
     } else {
         s.set(Status::BadArguments, "Unknown samplmode.");
@@ -73,7 +79,10 @@ bool HBCore::buildColocation(Status& s) {
     }
 
     // Build fd->td transform matrix from timepoints
-    buildTransformMatrix(IAPFT);
+    if (!buildTransformMatrix(IAPFT)) {
+        s.set(Status::CreationFailed, "Failed to build transform matrix.");
+        return false;
+    }
     
     // Number of cadidate rows
     auto ncand = IAPFT.nRows();

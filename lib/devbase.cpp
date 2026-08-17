@@ -141,6 +141,32 @@ Id Instance::translatePeer(Id peer) {
     }
 }
 
+Instance* Instance::findPeerInstance(Circuit& circuit, Id name, Status& s) {
+    auto peerInstanceName = translatePeer(name);
+    auto* peerInstance = circuit.findInstance(peerInstanceName);
+    if (!peerInstance) {
+        s.set(Status::NotFound, "Peer instance '"+std::string(peerInstanceName)+"' not found.");
+        s.extend(location());
+        return nullptr;
+    }
+    return peerInstance;
+}
+
+Node* Instance::findControl(Circuit& circuit, Id instanceName, Id internalNodeName, Status& s) {
+    auto peerInstance = findPeerInstance(circuit, instanceName, s);
+    if (!peerInstance) {
+        return nullptr;
+    }
+    Id nodeName = peerInstance->translateNode(circuit, internalNodeName);
+    auto* node = circuit.findNode(nodeName);
+    if (!node) {
+        s.set(Status::NotFound, "Controlling unknown '"+std::string(nodeName)+"' not found.");
+        s.extend(location());
+        return nullptr;
+    }
+    return node;
+}
+
 std::tuple<Value::Type,bool> Instance::outvarType(Id name, Status& s) const {
     auto [ndx, found] = outvarIndex(name);
     if (!found) {
@@ -169,15 +195,18 @@ Node* Instance::getInternalNode(Circuit& circuit, const std::string& name, Node:
     }
     // Residual check is not performed on internal nodes. 
     node->setFlags(Node::Flags::InternalDeviceNode);
-    node->clearFlags(Node::Flags::ResidualCheck);
     return node;
 }
 
 std::tuple<bool, size_t> Instance::enterContext(Circuit& circuit, Context* externalContext, bool addToPath, bool rebuild, Status& s) { 
+    // By default do nothing, just return current stack position marker
+    // so that revertContext() can return to that marker
+    // Simple instances have no context. They keep the parent device's context. 
     return std::make_tuple(true, circuit.paramEvaluator().contextMarker()); 
 }
 
 bool Instance::revertContext(Circuit& circuit, size_t contextMarker) { 
+    // By default do nothing, just return to given stack position marker
     return circuit.paramEvaluator().revertContext(contextMarker); 
 }
 
@@ -269,5 +298,8 @@ void Instance::HierarchicalIterator::stopDescent() {
     // Instead it should move to next peer instance
     forcePeer = true;
 }
+
+ValueVector Instance::dummyValueVector = ValueVector({});
+RealVector Instance::dummyRealVector = RealVector({});
 
 }

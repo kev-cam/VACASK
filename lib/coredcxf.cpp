@@ -14,8 +14,8 @@ DCXFParameters::DCXFParameters() {
 
 template<> int Introspection<DCXFParameters>::setup() {
     registerMember(out);
-    registerMember(writeop);
     registerMember(write);
+    registerNamedMember(opParams.write, "writeop");
     registerNamedMember(opParams.nodeset, "nodeset");
     registerNamedMember(opParams.store, "store");
     
@@ -45,8 +45,7 @@ DCXFCore::~DCXFCore() {
     delete outfile;
 }
 
-bool DCXFCore::resolveOutputDescriptors(bool strict) {
-    clearError();
+bool DCXFCore::resolveOutputDescriptors(bool strict, Status& s) {
     // Clear output sources
     outputSources.clear();
     // Clear source instance pointers, initialize to nullptrs
@@ -85,7 +84,7 @@ bool DCXFCore::resolveOutputDescriptors(bool strict) {
                 }
                 // No instance and we reached this point, create constant source
                 if (!inst) {
-                    outputSources.emplace_back();
+                    outputSources.emplace_back(it->name);
                 }
                 break;
         }
@@ -94,17 +93,17 @@ bool DCXFCore::resolveOutputDescriptors(bool strict) {
         }
         switch (it->type) {
         case OutdTf:
-            outputSources.emplace_back(&tf, ndx);
+            outputSources.emplace_back(&tf, ndx, it->name);
             break;
         case OutdZ:
-            outputSources.emplace_back(&zin, ndx);
+            outputSources.emplace_back(&zin, ndx, it->name);
             break;
         case OutdY:
-            outputSources.emplace_back(&yin, ndx);
+            outputSources.emplace_back(&yin, ndx, it->name);
             break; 
         default:
             // Delegate to parent
-            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict);
+            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, s);
         }
         if (!ok) {
             break;
@@ -113,25 +112,25 @@ bool DCXFCore::resolveOutputDescriptors(bool strict) {
     return ok;
 }
 
-bool DCXFCore::addDefaultOutputDescriptors() {
+bool DCXFCore::addDefaultOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (savesCount==0) {
-        return addAllTfZin(PTSave("default", Id(), Id()), sourceIndex);
+        return addAllTfZin(PTSave("default", Id(), Id()), sourceIndex, s);
     }
     return true;
 }
 
-bool DCXFCore::initializeOutputs(Id name, Status& s) {
+bool DCXFCore::initializeOutputs(const std::string& name, Status& s) {
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     // Create output file if not created yet
     if (!outfile) {
         outfile = new OutputRawfile(
-            name, outputDescriptors, outputSources,
+            name, outputSources,
             (circuit.simulatorOptions().core().rawfile==SimulatorOptions::rawfileBinary ? OutputRawfile::Flags::Binary : OutputRawfile::Flags::None) |
                 OutputRawfile::Flags::Padded);
         outfile->setTitle(circuit.title());
@@ -165,6 +164,7 @@ bool DCXFCore::deleteOutputs(Id name, Status& s) {
 }
     
 bool DCXFCore::rebuild(Status& s) {
+    clearError();
     return true;
 }
 
@@ -235,12 +235,12 @@ CoreCoroutine DCXFCore::coroutine(bool continuePrevious) {
 
         if (debug>=100) {
             Simulator::dbg() << "Linear system for instance " << inst->name() << "\n";
-            jacobian.dump(Simulator::dbg(), dataWithoutBucket(incrementalSolution)); 
+            jacobian.dump(Simulator::dbg(), dataWithoutBucket(incrementalSolution, bucketSize)); 
             Simulator::dbg() << "\n";
         }
 
         // Solve
-        if (!jacobian.solve(dataWithoutBucket(incrementalSolution))) {
+        if (!jacobian.solve(dataWithoutBucket(incrementalSolution, bucketSize))) {
             setError(DCXFError::MatrixError);
             error = true;
             break;
@@ -249,7 +249,7 @@ CoreCoroutine DCXFCore::coroutine(bool continuePrevious) {
         // Set bucket to 0
         rhsVec[0] = 0.0;
 
-        if (options.solutioncheck && !jacobian.isFinite(dataWithoutBucket(incrementalSolution), true, true)) {
+        if (options.solutioncheck && !jacobian.isFinite(dataWithoutBucket(incrementalSolution, bucketSize), true, true)) {
             setError(DCXFError::SolutionError);
             if (options.smsig_debug) {
                 Simulator::dbg() << "A solution entry is not finite. Solver failed.\n";

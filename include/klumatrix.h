@@ -11,6 +11,8 @@
 #include "flags.h"
 #include "hash.h"
 #include "acct.h"
+#include "ansupport.h"
+#include "densematrix.h"
 #include "common.h"
 
 
@@ -128,7 +130,7 @@ DEFINE_FLAG_OPERATORS(Component);
 
 
 // Matrix binding interface for accessing element indices and pointers
-// Because Circuit::bind() should by matrix type agnostic we need this interface. 
+// Because Circuit::bind() should be matrix type agnostic we need this interface. 
 // Analyses can use different types of matrices, but instances must be able to 
 // handle them all in the same way via this interface. 
 // Assumes the underlying type of element is either double or std::complex<double> (Complex)
@@ -177,7 +179,6 @@ public:
 
     enum class Error {
         OK, 
-        Memory, 
         Defaults, 
         Analysis, 
         Factorization, 
@@ -186,6 +187,7 @@ public:
         ReciprocalCondEstimate, 
         MatrixInfNan, 
         VectorInfNan, 
+        MulVecSizeMismatch, 
         Solve
     };
     
@@ -198,6 +200,10 @@ public:
 
     virtual ~KluMatrixCore();
 
+    bool isBuilt() const { return smap!=nullptr; };
+
+    void deleteKluObjects();
+
     // Set accounting structure
     void setAccounting(Accounting& accounting) { acct = &accounting; }; 
 
@@ -209,9 +215,12 @@ public:
 
     // Error element
     std::tuple<IndexType, IndexType> errorElement() const {
-        for(IndexType col=0; col<AN; col++) {
-            if (AP[col]<=errorIndex && errorIndex<AP[col+1]) {
-                return std::make_tuple(AI[errorIndex], col); 
+        if (AP.size()==AN+1) {
+            // Search only if this matrix is not storage only
+            for(IndexType col=0; col<AN; col++) {
+                if (AP[col]<=errorIndex && errorIndex<AP[col+1]) {
+                    return std::make_tuple(AI[errorIndex], col); 
+                }
             }
         }
         return std::make_tuple(-1, -1);
@@ -240,22 +249,22 @@ public:
         auto offset = entry->index;
         if constexpr(std::is_same<ValueType, Complex>::value) {
             return (comp==Component::Imaginary) ? 
-                reinterpret_cast<double*>(Ax+offset)+1 : 
-                reinterpret_cast<double*>(Ax+offset);
+                reinterpret_cast<double*>(Ax.data()+offset)+1 : 
+                reinterpret_cast<double*>(Ax.data()+offset);
         } else {
-            return (comp==Component::Imaginary) ? nullptr : (Ax+offset);
+            return (comp==Component::Imaginary) ? nullptr : (Ax.data()+offset);
         }
     };
 
     // Returns internal data array or a real matrix
-    ValueType* data() { return reinterpret_cast<ValueType*>(Ax); };
+    ValueType* data() { return reinterpret_cast<ValueType*>(Ax.data()); };
 
     // Return number of unknowns
     IndexType nRow() const { return AN; };
     IndexType nCol() const { return AN; };
 
     // Return number of nonzeros
-    IndexType nnz() const { return AP[AN]; };
+    IndexType nnz() const { return nnz_; };
 
     // Set entries to 0, clear error
     void zero(Component what=Component::Real|Component::Imaginary);
@@ -282,10 +291,34 @@ public:
     
     // Solve after factorization, result is stored in rhs
     bool solve(ValueType* b);
-    
+
+    // Block solve: solve for nrhs right-hand sides simultaneously.
+    // B is stored column-major with leading dimension AN (ldim = AN).
+    // On return B contains the solution columns, overwriting the RHS.
+    bool solveBlock(ValueType* B, IndexType nrhs);
+
+    // Transpose solve after factorization, result is stored in b
+    bool tsolve(ValueType* b);
+
+    // Block transpose solve: solve A^T X = B for nrhs right-hand sides simultaneously.
+    // B is stored column-major with leading dimension AN (ldim = AN).
+    // On return B contains the solution columns, overwriting the RHS.
+    bool tsolveBlock(ValueType* B, IndexType nrhs);
+
     // Matrix-vector product, result is stored in res
     bool product(ValueType* vec, ValueType* res);
-    
+
+    // Matrix-vector product taking views (arbitrary stride, e.g. a matrix
+    // column), result is stored in res. vec and res must not overlap.
+    bool product(VectorView<ValueType> vec, VectorView<ValueType> res);
+
+    // Transpose matrix-vector product A^T v, result is stored in res
+    bool tproduct(ValueType* vec, ValueType* res);
+
+    // Transpose matrix-vector product A^T v taking views (arbitrary stride,
+    // e.g. a matrix column), result is stored in res. vec and res must not overlap.
+    bool tproduct(VectorView<ValueType> vec, VectorView<ValueType> res);
+
     // Residual (Ax-b), stored in res
     bool residual(ValueType* x, ValueType* b, ValueType* res);
     
@@ -319,10 +352,11 @@ public:
 protected:
     Accounting* acct;
     bool isComplex_;
+    IndexType nnz_;
     IndexType AN;
-    IndexType* AP;
-    IndexType* AI;
-    ValueType* Ax;
+    Vector<IndexType> AP;
+    Vector<IndexType> AI;
+    Vector<ValueType> Ax;
     Symbolic* symbolic;
     Numeric* numeric;
     Common common;

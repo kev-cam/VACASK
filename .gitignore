@@ -6,8 +6,12 @@ __pycache__
 bug
 benchmark/rundir
 *.osdi
+build/
+docs/internals/
+.cache
+*.raw
+runme.py
+*.origin
 *.swp
 venv/
-tran1.raw
-tran1.jpg
-build/
+

@@ -23,8 +23,8 @@ template<> int Introspection<ACXFParameters>::setup() {
     registerMember(mode);
     registerMember(points);
     registerMember(values);
-    registerMember(writeop);
     registerMember(write);
+    registerNamedMember(opParams.write, "writeop");
     registerNamedMember(opParams.nodeset, "nodeset");
     registerNamedMember(opParams.store, "store");
 
@@ -54,8 +54,7 @@ ACXFCore::~ACXFCore() {
     delete outfile;
 }
 
-bool ACXFCore::resolveOutputDescriptors(bool strict) {
-    clearError();
+bool ACXFCore::resolveOutputDescriptors(bool strict, Status& s) {
     // Clear output sources
     outputSources.clear();
     // Clear source instance pointers, initialize to nullptrs
@@ -94,7 +93,7 @@ bool ACXFCore::resolveOutputDescriptors(bool strict) {
                 }
                 // No instance and we reached this point, create constant source
                 if (!inst) {
-                    outputSources.emplace_back();
+                    outputSources.emplace_back(it->name);
                 }
                 break;
         }
@@ -103,20 +102,20 @@ bool ACXFCore::resolveOutputDescriptors(bool strict) {
         }
         switch (it->type) {
         case OutdFrequency:
-            outputSources.emplace_back(&frequency);
+            outputSources.emplace_back(&frequency, it->name);
             break;
         case OutdTf:
-            outputSources.emplace_back(&tf, ndx);
+            outputSources.emplace_back(&tf, ndx, it->name);
             break;
         case OutdZ:
-            outputSources.emplace_back(&zin, ndx);
+            outputSources.emplace_back(&zin, ndx, it->name);
             break;
         case OutdY:
-            outputSources.emplace_back(&yin, ndx);
+            outputSources.emplace_back(&yin, ndx, it->name);
             break; 
         default:
             // Delegate to parent
-            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict);
+            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, s);
         }
         if (!ok) {
             break;
@@ -125,39 +124,38 @@ bool ACXFCore::resolveOutputDescriptors(bool strict) {
     return ok;
 }
 
-bool ACXFCore::addCoreOutputDescriptors() {
+bool ACXFCore::addCoreOutputDescriptors(Status& s) {
     clearError();
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdFrequency, "frequency"))) {
-        lastError = Error::Descriptor;
-        errorId = "frequency";
+        s.set(Status::Analysis, std::string("Failed to add output descriptor for frequency."));
         return false;
     }
     return true;
 }
 
-bool ACXFCore::addDefaultOutputDescriptors() {
+bool ACXFCore::addDefaultOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (savesCount==0) {
-        return addAllTfZin(PTSave("default", Id(), Id()), sourceIndex);
+        return addAllTfZin(PTSave("default", Id(), Id()), sourceIndex, s);
     }
     return true;
 }
 
-bool ACXFCore::initializeOutputs(Id name, Status& s) {
+bool ACXFCore::initializeOutputs(const std::string& name, Status& s) {
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     // Create output file if not created yet
     if (!outfile) {
         outfile = new OutputRawfile(
-            name, outputDescriptors, outputSources,
+            name, outputSources,
             (circuit.simulatorOptions().core().rawfile==SimulatorOptions::rawfileBinary ? OutputRawfile::Flags::Binary : OutputRawfile::Flags::None) |
                 OutputRawfile::Flags::Padded | OutputRawfile::Flags::Complex);
         outfile->setTitle(circuit.title());
@@ -450,12 +448,12 @@ CoreCoroutine ACXFCore::coroutine(bool continuePrevious) {
 
             if (debug>=100) {
                 Simulator::dbg() << "Linear system for instance " << inst->name() << "\n";
-                acMatrix.dump(Simulator::dbg(), dataWithoutBucket(acSolution)); 
+                acMatrix.dump(Simulator::dbg(), dataWithoutBucket(acSolution, bucketSize)); 
                 Simulator::dbg() << "\n";
             }
 
             // Solve, set bucket to 0.0
-            if (!acMatrix.solve(dataWithoutBucket(acSolution))) {
+            if (!acMatrix.solve(dataWithoutBucket(acSolution, bucketSize))) {
                 setError(ACXFError::MatrixError);
                 if (debug>2) {
                     Simulator::dbg() << "Failed to solve factored system.\n";
@@ -465,7 +463,7 @@ CoreCoroutine ACXFCore::coroutine(bool continuePrevious) {
             }
             acSolution[0] = 0.0;
 
-            if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution), true, true)) {
+            if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution, bucketSize), true, true)) {
                 setError(ACXFError::SolutionError);
                 if (options.smsig_debug) {
                     Simulator::dbg() << "A solution entry is not finite. Solver failed.\n";

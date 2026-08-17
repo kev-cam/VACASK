@@ -18,7 +18,7 @@ In steady state, $x(t)$ is almost periodic with fundamental frequencies $f_1, \l
 
 $$\Gamma\, f(\Gamma^{-1} X) + \Omega\, \Gamma\, q(\Gamma^{-1} X) = 0$$
 
-where $\Gamma$ is the APFT (Almost Periodic Fourier Transform) mapping phasors to colocation timepoints, $\Gamma^{-1}$ is its inverse, and $\Omega$ is the frequency-domain time-derivative operator ($\Omega_{kk} = j\omega_k$). The Jacobian is assembled from the resistive and reactive circuit Jacobians evaluated at the colocation timepoints and is used by Newton-Raphson to converge to the solution.
+where $\Gamma$ is the APFT (Almost Periodic Fourier Transform) mapping phasors to colocation timepoints, $\Gamma^{-1}$ is its inverse, and $\Omega$ is the frequency-domain time-derivative operator. The Jacobian is assembled from the resistive and reactive circuit Jacobians evaluated at the colocation timepoints and is used by Newton-Raphson to converge to the solution.
 
 ### Spectrum truncation
 
@@ -51,6 +51,7 @@ Here $T = \text{nper}/f_\text{min}$ is the time range and $N_\mathrm{sam} = \lce
 | `immax` | integer | `0` | Maximum intermodulation order for `"diamond"` and `"hybrid"` truncation. If ≤ 0, defaults to the largest component of `nharm`. |
 | `truncate` | string | `"hybrid"` | Spectrum truncation scheme: `"hybrid"`, `"diamond"`, `"box"`, or `"raw"`. |
 | `samplefac` | real | `5` | Oversampling factor for colocation timepoints (≥ 1). Only the best $2n$ points are used where $n$ is the spectrum size. |
+| `tstart` | real | `0` | Starting time for the colocation point pool. Shifts the entire pool by this offset. |
 | `nper` | real | `1` | Number of lowest frequency periods over which colocation timepoints are distributed. |
 | `sample` | string | `"uniform"` | Colocation sampling mode: `"uniform"`, `"random"`, or `"mixed"`. |
 | `shift` | real | `0.2` | Fractional shift applied between consecutive colocation points in `"uniform"` and `"mixed"` sampling. |
@@ -146,6 +147,11 @@ ax_ph.stem(f / 1e3, np.angle(v2) * 180 / np.pi, markerfmt='.')
 plt.show()
 >>>FILE
 ```
+
+## See also
+
+- [(Quasi)Periodic Small-Signal Analysis (Harmonic Balance-based)](cmd-analysis-hbac.md)
+- [Periodic Steady-State Analysis](cmd-analysis-pss.md) — time-domain (shooting) periodic steady-state analysis.
 
 ## Options
 

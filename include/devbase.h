@@ -420,11 +420,20 @@ public:
     // the nodes bound to them. Therefore this must be virtual. 
     virtual Id translateNode(Circuit& cir, Id nodeName);
 
-    // Translates a peer object 
+    // Translates a peer object
     // Prepends it with parent instance's name or nothing if parent is toplevel instance
     Id translatePeer(Id peer);
 
-    // Adds a child instance/model to the list of child instances/model of a hierarchical instance. 
+    // Finds the peer instance named `name` (translated via translatePeer()),
+    // reporting an error via `s` if it does not exist.
+    Instance* findPeerInstance(Circuit& circuit, Id name, Status& s);
+
+    // Finds the node named `internalNodeName` internal to the peer instance
+    // named `instanceName`, reporting an error via `s` if the peer instance
+    // or the node does not exist.
+    Node* findControl(Circuit& circuit, Id instanceName, Id internalNodeName, Status& s);
+
+    // Adds a child instance/model to the list of child instances/model of a hierarchical instance.
     // By default does nothing. 
     // Maybe we should raise an exception because we should never end up here. 
     virtual void addChild(Instance* child) { return; };
@@ -527,6 +536,9 @@ public:
     // For a current source this should be 1. 
     // For a voltage source this should be $mfactor. 
     virtual double responseScalingFactor() const { return 1.0; };
+
+    // spur, smag, sphase
+    virtual std::tuple<const ValueVector&, const RealVector&, const RealVector&> spur() const { return {dummyValueVector, dummyRealVector, dummyRealVector}; };
     
     // Output variable API
     // Returns the number of output variables
@@ -599,13 +611,14 @@ protected:
         );
     }
 
-    
-    
     Id name_; // Hierarchical name of instance
     Model* model_;
     Instance* parent_;
     Flags flags_;
     const PTInstance& parsedInstance_;
+
+    static ValueVector dummyValueVector;
+    static RealVector dummyRealVector;
 };
 
 }

@@ -55,6 +55,16 @@ TranNRSolver::TranNRSolver(
     loadSetup_.integCoeffs = &integCoeffs;
 }
 
+void TranNRSolver::rebuildCheckResidualFlags() {
+    // Build flags indicating residual can be checked for a node
+    auto n = circuit.unknownCount();
+    residualCheckable.assign(n+1, false);
+    for(decltype(n) i=1; i<=n; i++) {
+        residualCheckable[i] = circuit.checkResidual(i) &&
+            !circuit.reprNode(i)->checkFlags(Node::Flags::InternalDeviceNode);
+    }
+}
+
 bool TranNRSolver::initialize(bool continuePrevious) {
     // This method is called once on entering run()
     // This is the right place to set vectors
@@ -314,7 +324,7 @@ std::tuple<bool, bool> TranNRSolver::buildSystem(bool continuePrevious) {
 
 bool TranNRSolver::computeNoiseSolutionContribution() {
     // Solve with last factored Jacobian
-    if (!jac.solve(dataWithoutBucket(noiseResidual))) {
+    if (!jac.solve(dataWithoutBucket(noiseResidual, bucketSize_))) {
         lastError = Error::LinearSolver;
         errorIteration = iteration;
         if (settings.debug) {
@@ -363,7 +373,7 @@ std::tuple<bool, bool> TranNRSolver::checkResidual() {
         // Representative node, associated flow nature index
         auto rn = circuit.reprNode(i);
         // Skip this node if residual check is not allowed
-        if (!rn->checkFlags(Node::Flags::ResidualCheck)) {
+        if (!residualCheckable[i]) {
             continue;
         }
         // Get residual nature index
@@ -401,6 +411,8 @@ std::tuple<bool, bool> TranNRSolver::checkResidual() {
         //       and the contribution is close to 0. 
         //       This means that absolute tolerances may be too low and prevent convergence forever. 
         //       This is somehow remedied if relrefres is set to pointglobal or global. 
+        //       Possible solution: count number of connected devices to each node. 
+        //       If that number is >1 use it in residual tolerance check. 
 
         // Residual component
         double rescomp = fabs(delta[i]);

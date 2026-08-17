@@ -98,7 +98,8 @@ public:
     TranCore(
         OutputDescriptorResolver& parentResolver, TranParameters& params, OperatingPointCore& opCore, 
         Circuit& circuit, CommonData& commons, 
-        KluRealMatrix& jacobian, VectorRepository<double>& solution, VectorRepository<double>& states
+        KluRealMatrix& jacobian, VectorRepository<double>& opSolution, VectorRepository<double>& solution, 
+        VectorRepository<double>& states
     ); 
     ~TranCore();
     
@@ -110,15 +111,15 @@ public:
     // Format error, return false on error - this function is not cheap (works with strings)
     bool formatError(Status& s=Status::ignore) const; 
 
-    bool addCoreOutputDescriptors();
-    bool addDefaultOutputDescriptors();
-    bool resolveOutputDescriptors(bool strict);
+    bool addCoreOutputDescriptors(Status& s);
+    bool addDefaultOutputDescriptors(Status& s);
+    bool resolveOutputDescriptors(bool strict, Status& s=Status::ignore);
 
     std::tuple<bool, bool> preMapping(Status& s=Status::ignore);
     bool populateStructures(Status& s=Status::ignore);
 
     bool rebuild(Status& s=Status::ignore); 
-    bool initializeOutputs(Id name, Status& s=Status::ignore);
+    bool initializeOutputs(const std::string& name, Status& s=Status::ignore);
     void install(ProgressReporter* p);
     CoreCoroutine coroutine(bool continuePrevious);
     bool run(bool continuePrevious);
@@ -126,6 +127,12 @@ public:
     bool deleteOutputs(Id name, Status& s=Status::ignore);
 
     void dump(std::ostream& os) const;
+
+    TranNRSolver& solver() { return nrSolver; }
+    // Slot number used for ic forces, by default 2 
+    // Analysies like PSS, use slot 3 in continue mode
+    // TranCore writes only slot 2
+    void setIcForcesSlot(size_t n) { icForcesSlot = n; };
 
     static Id icmodeOp;
     static Id icmodeUic;
@@ -147,6 +154,7 @@ protected:
     TranError lastTranError;
     Id errorId;
     
+    VectorRepository<double>& opSolution; // Solution history
     KluRealMatrix& jacobian; // Resistive Jacobian
     VectorRepository<double>& solution; // Solution history
     VectorRepository<double>& states; // Circuit states
@@ -160,7 +168,20 @@ protected:
 
     PreprocessedUserForces preprocessedIc;
     // Forces uicForces;
-    
+
+    const IntegratorCoeffs& getIntegCoeffs() const { return integCoeffs; }
+    const CircularBuffer<double>& getPastTimesteps() const { return pastTimesteps; }
+
+    // Called at every accepted timestep before pastTimesteps and tk are
+    // updated, and before solution/states history is advanced - so
+    // getIntegCoeffs()/getPastTimesteps() still reflect exactly the state
+    // used to solve this step, not a history already advanced past it.
+    // Return false to abort the analysis.
+    virtual bool onTimestepAccepted(double /*tSolve*/, double /*hk*/, Int /*order*/) { return true; }
+
+protected:
+    TranParameters& params;
+
 private:
     std::tuple<size_t, size_t, size_t> countNoiseSources() const;
     bool evalAndLoadWrapper(EvalSetup& evalSetup, LoadSetup& loadSetup);
@@ -174,18 +195,19 @@ private:
 
     OperatingPointCore& opCore_;
     NRSettings nrSettings;
+    // integCoeffs declared before nrSolver: nrSolver's init list binds a reference
+    // to it, so it must be fully constructed first.
+    IntegratorCoeffs integCoeffs;
     TranNRSolver nrSolver;
     CircularBuffer<double> pastTimesteps;
-    IntegratorCoeffs integCoeffs; 
-    IntegratorCoeffs predictorCoeffs; 
+    IntegratorCoeffs predictorCoeffs;
     CircularBuffer<double> breakPoints;
     double acceptedBoundStep;
     double acceptedHmax;
     
-    TranParameters& params;
-
     size_t nPoints;
     double tk;
+    size_t icForcesSlot;
     
     // Transient noise
     std::mt19937_64 randomGenerator;

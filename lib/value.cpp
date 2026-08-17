@@ -1,4 +1,5 @@
 #include <sstream>
+#include <limits>
 #include "value.h"
 #include "common.h"
 
@@ -221,9 +222,16 @@ bool Value::getScalar(Value& v, Int ndx, Status& s) const {
     return true;
 }
 
-std::string Value::str() const {
+std::string Value::str(bool roundTripExact) const {
     std::stringstream s;
+    std::streamsize oldPrecision;
+    if (roundTripExact) {
+        oldPrecision = s.precision(std::numeric_limits<double>::max_digits10);
+    }
     s << *this;
+    if (roundTripExact) {
+        s.precision(oldPrecision);
+    }
     return s.str();
 }
 
@@ -262,15 +270,15 @@ std::ostream& operator<<(std::ostream& os, const Value& obj) {
             }
             os << "]";
             break;
-        case Value::Type::ValueVec:
-            os << "[";
-            for(auto it=obj.vVec->cbegin(); it!=obj.vVec->cend(); ++it) {
+        case Value::Type::ValueVec: 
+            os << "{";
+            for(auto it=obj.vVec->cbegin(); it!=obj.vVec->cend(); ++it) { 
                 if (it!=obj.vVec->cbegin()) {
                     os << ", ";
                 }
-                os << *it;
+                os << *it; 
             }
-            os << "]";
+            os << "}";
             break;
     }
     return os;

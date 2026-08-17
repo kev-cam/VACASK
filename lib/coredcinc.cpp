@@ -13,8 +13,8 @@ DCIncrementalParameters::DCIncrementalParameters() {
 }
 
 template<> int Introspection<DCIncrementalParameters>::setup() {
-    registerMember(writeop);
     registerMember(write);
+    registerNamedMember(opParams.write, "writeop");
     registerNamedMember(opParams.nodeset, "nodeset");
     registerNamedMember(opParams.store, "store");
 
@@ -40,7 +40,7 @@ DCIncrementalCore::~DCIncrementalCore() {
     delete outfile;
 }
 
-bool DCIncrementalCore::resolveOutputDescriptors(bool strict) {
+bool DCIncrementalCore::resolveOutputDescriptors(bool strict, Status& s) {
     // Clear output sources
     outputSources.clear();
     // Resolve output descriptors
@@ -50,11 +50,11 @@ bool DCIncrementalCore::resolveOutputDescriptors(bool strict) {
         Instance *inst;
         switch (it->type) {
         case OutdSolComponent:
-            ok = addRealVarOutputSource(strict, it->id, incrementalSolution);
+            ok = addRealVarOutputSource(strict, it->id, incrementalSolution, it->id, s);
             break;
         default:
             // Delegate to parent
-            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict);
+            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, s);
             break;
         }
         if (!ok) {
@@ -64,25 +64,25 @@ bool DCIncrementalCore::resolveOutputDescriptors(bool strict) {
     return ok;
 }
 
-bool DCIncrementalCore::addDefaultOutputDescriptors() {
+bool DCIncrementalCore::addDefaultOutputDescriptors(Status& s) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (savesCount==0) {
-        return addAllUnknowns(PTSave("default", Id(), Id()));
+        return addAllUnknowns(PTSave("default", Id(), Id()), s);
     }
     return true;
 }
 
-bool DCIncrementalCore::initializeOutputs(Id name, Status& s) {
+bool DCIncrementalCore::initializeOutputs(const std::string& name, Status& s) {
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     // Create output file if not created yet
     if (!outfile) {
         outfile = new OutputRawfile(
-            name, outputDescriptors, outputSources,
+            name, outputSources,
             (circuit.simulatorOptions().core().rawfile==SimulatorOptions::rawfileBinary ? OutputRawfile::Flags::Binary : OutputRawfile::Flags::None) |
                 OutputRawfile::Flags::Padded);
         outfile->setTitle(circuit.title());
@@ -116,6 +116,7 @@ bool DCIncrementalCore::deleteOutputs(Id name, Status& s) {
 }
     
 bool DCIncrementalCore::rebuild(Status& s) {
+    clearError();
     return true;
 }
 
@@ -171,14 +172,14 @@ CoreCoroutine DCIncrementalCore::coroutine(bool continuePrevious) {
 
     if (debug>=100) {
         Simulator::dbg() << "Linear system\n";
-        jacobian.dump(Simulator::dbg(), dataWithoutBucket(incrementalSolution)); 
+        jacobian.dump(Simulator::dbg(), dataWithoutBucket(incrementalSolution, bucketSize)); 
         Simulator::dbg() << "\n";
     }
 
     // We don't need max residual contribution because we do not check residual
 
     // Solve 
-    if (!jacobian.solve(dataWithoutBucket(incrementalSolution))) {
+    if (!jacobian.solve(dataWithoutBucket(incrementalSolution, bucketSize))) {
         setError(DCIncrementalError::MatrixError);
         co_yield CoreState::Aborted;
     }
@@ -186,7 +187,7 @@ CoreCoroutine DCIncrementalCore::coroutine(bool continuePrevious) {
     // Set solution bucket to 0
     incrementalSolution[0] = 0.0;
 
-    if (options.solutioncheck && !jacobian.isFinite(dataWithoutBucket(incrementalSolution), true, true)) {
+    if (options.solutioncheck && !jacobian.isFinite(dataWithoutBucket(incrementalSolution, bucketSize), true, true)) {
         setError(DCIncrementalError::SolutionError);
         if (options.smsig_debug) {
             Simulator::dbg() << "A solution entry is not finite. Solver failed.\n";

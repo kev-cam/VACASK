@@ -14,6 +14,9 @@
 
 namespace NAMESPACE {
 
+// General RPN builtin function/operator
+typedef bool (*RpnBuiltinFunc)(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
+
 typedef struct Builtin {
     Rpn::Arity minArity;
     Rpn::Arity maxArity;
@@ -137,6 +140,9 @@ public:
 
     // Checks if name is a constant
     static bool isConstant(Id name) { return consts.get(name)!=nullptr; };
+
+    // Retrieves a constant, returns nullptr if name is not a constant
+    static const Value* getConstant(Id name) { return consts.get(name); };
 
     void dump(int indent, std::ostream& os) const;
 

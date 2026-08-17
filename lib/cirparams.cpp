@@ -290,6 +290,7 @@ std::tuple<bool, bool, bool> Circuit::elaborateChanges(
     // If options is given, then it is used, otherwise the circuit's simOptions structure is used
     auto optPtr = options ? options : &simOptions;
     
+    bool analysisParametersChanged = false;
     // If variables changed, rebuild global context, update options and analysis parameters
     if (variablesChanged) { 
         if (!updateGlobalContext(s)) {
@@ -300,7 +301,8 @@ std::tuple<bool, bool, bool> Circuit::elaborateChanges(
         
         // Options map (expressions only) -> options in optPtr
         if (optionsMap && optionsMap->size()>0) {
-            if (auto [ok, changed] = optPtr->setParameters(*optionsMap, variableEvaluator_, Parameterized::Write::Expressions, s); !ok) {
+            RpnEvaluationNetlistContext ctx;
+            if (auto [ok, changed] = optPtr->setParameters(*optionsMap, variableEvaluator_, ctx, Parameterized::Write::Expressions, s); !ok) {
                 s.extend("Failed to apply options map.");
                 tables_.accounting().acctNew.tchgelab += Accounting::wclkDelta(t0);
                 return std::make_tuple(false, false, false);
@@ -310,13 +312,17 @@ std::tuple<bool, bool, bool> Circuit::elaborateChanges(
         // Do we have an analysis
         if (an) {
             // Update analysis parameters with expressions
-            if (auto [ok, changed] = an->updateParameterExpressions(s); !ok) {
+            auto [ok, changed] = an->updateParameterExpressions(s);
+            if (!ok) {
                 s.extend("Failed to update analysis parameters.");
                 tables_.accounting().acctNew.tchgelab += Accounting::wclkDelta(t0);
                 return std::make_tuple(false, false, false);
             }
 
-            // Checking if analysis requests a rebuild is done in an.cpp
+            // Analysis parameters changed - require core rebuild
+            analysisParametersChanged = changed;
+
+            // If analysis parameters changed we need to rebuild() analysis. 
         }
     }
 
@@ -446,6 +452,7 @@ std::tuple<bool, bool, bool> Circuit::elaborateChanges(
     // Perform sparsity building and states allocation 
     // - unknowns were remapped
     // - analysis requires sparsity map entries
+    // - analysis parameters changed
     bool buildNeeded = mapUnknownsNeeded || analysisNeedsSparsity; 
     if (buildNeeded) {
         if (!buildSparsityAndStates(s)) {
@@ -500,7 +507,7 @@ std::tuple<bool, bool, bool> Circuit::elaborateChanges(
     setFlags(Flags::Elaborated);
     
     tables_.accounting().acctNew.tchgelab += Accounting::wclkDelta(t0);
-    return std::make_tuple(true, hierarchyChanged, mapUnknownsNeeded || buildNeeded);
+    return std::make_tuple(true, hierarchyChanged, mapUnknownsNeeded || buildNeeded || analysisParametersChanged);
 }
 
 template<typename T> bool Circuit::singleSetterHelper(Id name, Id param, const Value& v, Status& s, const char* failMsg) {
@@ -543,7 +550,14 @@ template<typename T> bool Circuit::groupSetterHelper(Id name, const PTParameters
         s.set(Status::NotFound, failMsg);
         return false;
     }
-    auto [ok, changed] = obj->setParameters(params, paramEvaluator(), s); 
+    RpnEvaluationNetlistContext ctx;
+    if constexpr(std::is_same_v<T, Instance>) {
+        ctx = RpnEvaluationNetlistContext(MCData::CtxType::Instance, name);
+    } else {
+        ctx = RpnEvaluationNetlistContext(MCData::CtxType::Model, name);
+    }
+    
+    auto [ok, changed] = obj->setParameters(params, paramEvaluator(), ctx, s); 
     if (!ok) {
         return false;
     }
