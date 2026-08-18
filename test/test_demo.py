@@ -7,20 +7,10 @@ from pyvacask import simulator as sim
 import numpy as np
 import matplotlib.pyplot as plt
 
-_THIS_FILE  = os.path.abspath(__file__)
-_TEST_DIR   = os.path.dirname(_THIS_FILE)
-ROOT_DIR    = os.path.normpath(os.path.join(_TEST_DIR, ".."))
-SITE_PATH   = os.path.join(ROOT_DIR, "venv", "lib", "python3.12", "site-packages")
-MODULE_PATH = os.path.join(SITE_PATH, "lib", "vacask", "mod")
-PY_LIB_PATH = os.path.join(SITE_PATH, "lib", "vacask", "python")
-
-sys.path.append(PY_LIB_PATH)
-from rawfile import rawread
+from pyvacask.lib.python.rawfile import rawread
 
 def test_demo1(): 
     sim.setup()
-    sim.prependModulePath([MODULE_PATH])
-
     s   = Status()
     tab = ParserTables("RC transient")
     p   = Parser(tab)

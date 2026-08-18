@@ -49,6 +49,9 @@ void InitSimulatorModule(py::module &m) {
         },
         py::arg("paths")
     );
+    m.def("modulePath", &sim::Simulator::modulePath);
+    m.def("startupPath", &sim::Simulator::startupPath);
+    m.def("includePath", &sim::Simulator::includePath);
 }
         
       

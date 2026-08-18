@@ -84,6 +84,11 @@ else()
     set(PROGRAM_LIB_DIR "lib/${PROGRAM_NAME}")
     add_compile_definitions("SIMLINUX")
 endif()
+
+if (SKBUILD)
+    set(PROGRAM_LIB_DIR "pyvacask/lib")
+endif()
+
 message(STATUS "Platform: ${SIM_PLATFORM}")
 
 # Compiler
