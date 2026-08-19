@@ -153,6 +153,13 @@ void InitParserOutputModule(py::module &m) {
             py::arg("device"),
             py::arg("parameters"),
             py::arg("location") = sim::Loc::bad)
+        .def(py::init([](std::string name, std::string device) {
+            return sim::PTModel(
+                sim::Id(name),
+                sim::Id(device));
+            }),
+            py::arg("name"),
+            py::arg("device"))
         .def("location",
             &sim::PTModel::location,
             py::return_value_policy::reference_internal)
@@ -203,6 +210,21 @@ void InitParserOutputModule(py::module &m) {
             return sim::PTSubcircuitDefinition(
                 name,
                 std::move(terms),
+                loc);
+            }),
+            py::arg("name"),
+            py::arg("terminals"),
+            py::arg("location") = sim::Loc::bad)
+        .def(py::init([](std::string name,
+                         std::list<std::string> terms,
+                         const sim::Loc& loc) {
+        	sim::PTIdentifierList identifiers;
+        	for (const auto& term : terms)
+            	identifiers.emplace_back(term);
+ 
+            return sim::PTSubcircuitDefinition(
+                sim::Id(name),
+                std::move(identifiers),
                 loc);
             }),
             py::arg("name"),
@@ -321,6 +343,27 @@ void InitParserOutputModule(py::module &m) {
             py::arg("terms"),
             py::arg("parameters"),
             py::arg("location") = sim::Loc::bad)
+        .def(
+            py::init([](
+                std::string name,
+                std::string master,
+                std::vector<std::string> terms
+            ) {
+                sim::PTIdentifierList identifiers;
+        
+                for (const auto& term : terms)
+                    identifiers.emplace_back(term);
+        
+                return sim::PTInstance(
+                    sim::Id(name),
+                    sim::Id(master),
+                    std::move(identifiers)
+                );
+            }),
+            py::arg("name"),
+            py::arg("master"),
+            py::arg("terms")
+        )
         // Getters
         .def("location",
             &sim::PTInstance::location,
@@ -463,6 +506,11 @@ void InitParserOutputModule(py::module &m) {
         .def(py::init<sim::Id, const sim::Loc&>(),
             py::arg("name"),
             py::arg("location") = sim::Loc::bad)
+        .def(py::init([](std::string name, const sim::Loc &loc) {
+            return sim::PTSweep(sim::Id(name), loc);
+        }),
+        py::arg("name"),
+        py::arg("loc") = sim::Loc::bad)
         .def(py::init([](sim::Id name,
                          sim::PTParameters &params,
                          const sim::Loc &loc) {
@@ -514,6 +562,12 @@ void InitParserOutputModule(py::module &m) {
             py::arg("name"),
             py::arg("type_name"),
             py::arg("location") = sim::Loc::bad)
+        .def(py::init([](std::string name,
+                         std::string type_name) {
+            return sim::PTAnalysis(sim::Id(name), sim::Id(type_name));
+            }),
+            py::arg("name"),
+            py::arg("type_name"))
         .def_property_readonly(
             "location",
             &sim::PTAnalysis::location,
@@ -566,11 +620,26 @@ void InitParserOutputModule(py::module &m) {
         .def(py::init<sim::Id, const sim::Loc &>(),
             py::arg("type_name"),
             py::arg("loc") = sim::Loc::bad)
+        .def(py::init([](std::string type_name, const sim::Loc &loc) {
+            	return sim::PTSave(sim::Id(type_name), loc);
+            }),
+            py::arg("type_name"),
+            py::arg("loc") = sim::Loc::bad)
         .def(py::init<sim::Id, sim::Id, const sim::Loc &>(),
             py::arg("type_name"),
             py::arg("obj_name"),
             py::arg("loc") = sim::Loc::bad)
         .def(py::init<sim::Id, sim::Id, sim::Id, const sim::Loc &>(),
+            py::arg("type_name"),
+            py::arg("obj_name"),
+            py::arg("sub_name"),
+            py::arg("loc") = sim::Loc::bad)
+        .def(py::init([](std::string type_name,
+						 std::string obj_name,
+						 std::string sub_name,
+						 const sim::Loc &loc) {
+            	return sim::PTSave(sim::Id(type_name), sim::Id(obj_name), sim::Id(sub_name), loc);
+            }),
             py::arg("type_name"),
             py::arg("obj_name"),
             py::arg("sub_name"),
@@ -765,6 +834,6 @@ void InitParserOutputModule(py::module &m) {
                 return self.verify(level, status);
             },
             py::arg("level"),
-            py::arg("status")
-        );
+            py::arg("status"));
 }
+        

@@ -41,10 +41,19 @@ void InitCircuitModule(py::module &m) {
             [](sim::Circuit& c, sim::Id name, const sim::Value& v) {
                 return c.setVariable(name, v);
             })
+        .def("setVariable",
+            [](sim::Circuit& c, std::string name, const sim::Value& v) {
+                return c.setVariable(sim::Id(name), v);
+            })
         .def("setOption",
             [](sim::Circuit& c, sim::Id name, const sim::Value& v) {
                 sim::Status s; // TODO
                 return c.setOption(name, v, s);
+            })
+        .def("setOption",
+            [](sim::Circuit& c, std::string name, const sim::Value& v) {
+                sim::Status s; // TODO
+                return c.setOption(sim::Id(name), v, s);
             })
         .def("setOptions",
             [](sim::Circuit& c, sim::IStruct<sim::SimulatorOptions>& opt) {
