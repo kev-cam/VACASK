@@ -14,38 +14,54 @@ namespace py = pybind11;
 void InitCircuitModule(py::module &m) {
     py::class_<sim::Circuit, std::unique_ptr<sim::Circuit>>(m, "Circuit")
         .def(py::init<sim::ParserTables&, sim::SourceCompiler*, sim::Status&>(),
-                py::arg("tables"),
-                py::arg("compiler") = nullptr,
-                py::arg("status"),
-                py::return_value_policy::reference_internal)
-        .def("is_valid", &sim::Circuit::isValid)
-        .def("needs_elaboration", &sim::Circuit::needsElaboration)
+            py::arg("tables"),
+            py::arg("compiler") = nullptr,
+            py::arg("status"),
+            py::return_value_policy::reference_internal)
+        .def("isValid", &sim::Circuit::isValid)
+        .def("needsElaboration", &sim::Circuit::needsElaboration)
         .def("clear", &sim::Circuit::clear)
         .def("title",
-                &sim::Circuit::title,
-                py::return_value_policy::reference_internal)
-        .def("set_title", &sim::Circuit::setTitle)
-        .def("device_count", &sim::Circuit::deviceCount)
-        .def("node_count", &sim::Circuit::nodeCount)
-        .def("unknown_count", &sim::Circuit::unknownCount)
-        .def("instance_count", &sim::Circuit::instanceCount)
-        .def("subcircuit_instance_count", &sim::Circuit::subcircuitInstanceCount)
-        .def("get_variable",
-                [](const sim::Circuit& c, sim::Id name) -> py::object {
-                    auto* v = c.getVariable(name);
-                    if (v)
-                        return py::cast(*v);
-                    return py::none();
-                })
-        .def("set_variable",
-                [](sim::Circuit& c, sim::Id name, const sim::Value& v) {
-                    return c.setVariable(name, v);
-                })
+            &sim::Circuit::title,
+            py::return_value_policy::reference_internal)
+        .def("setTitle", &sim::Circuit::setTitle)
+        .def("deviceCount", &sim::Circuit::deviceCount)
+        .def("nodeCount", &sim::Circuit::nodeCount)
+        .def("unknownCount", &sim::Circuit::unknownCount)
+        .def("instanceCount", &sim::Circuit::instanceCount)
+        .def("subcircuitInstanceCount", &sim::Circuit::subcircuitInstanceCount)
+        .def("getVariable",
+            [](const sim::Circuit& c, sim::Id name) -> py::object {
+                auto* v = c.getVariable(name);
+                if (v)
+                    return py::cast(*v);
+                return py::none();
+            })
+        .def("setVariable",
+            [](sim::Circuit& c, sim::Id name, const sim::Value& v) {
+                return c.setVariable(name, v);
+            })
         .def("setOption",
-                [](sim::Circuit& c, sim::Id name, const sim::Value& v) {
-                    sim::Status s; // TODO
-                    return c.setOption(name, v, s);
-                })
+            [](sim::Circuit& c, sim::Id name, const sim::Value& v) {
+                sim::Status s; // TODO
+                return c.setOption(name, v, s);
+            })
+        .def("setOptions",
+            [](sim::Circuit& c, sim::IStruct<sim::SimulatorOptions>& opt) {
+                return c.setOptions(opt);
+            })
+        .def("setOptions",
+            [](sim::Circuit& c, const sim::PTParameters& params) {
+                sim::Status s; // TODO
+                return c.setOptions(params);
+            }
+        )
+        .def("simulatorOptions",
+            [](sim::Circuit& c) {
+                const auto& options = c.simulatorOptions();
+                return options.core();
+            }
+        )
         .def(
             "elaborate",
             [](sim::Circuit &self,

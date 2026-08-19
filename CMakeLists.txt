@@ -345,6 +345,7 @@ pybind11_add_module(_pyvacask
     pyvacask/csrc/py_loc.cpp
     pyvacask/csrc/py_parseroutput.cpp
     pyvacask/csrc/py_simulator.cpp
+    pyvacask/csrc/py_options.cpp
 )
 #target_link_options(pyvacask PRIVATE "-Wl,-Bstatic")
 target_link_libraries(_pyvacask PRIVATE simlib ${SIM_EXE_LIBRARIES})

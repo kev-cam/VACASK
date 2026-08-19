@@ -6,13 +6,13 @@ from ._pyvacask.value import Value
 from ._pyvacask.rpnexpr import Rpn
 
 
-def PV(ident:str, value:str) -> PTParameterValue:
+def PV(ident:str, value) -> PTParameterValue:
     """
     Create a parameter value object.
 
     Args:
         ident (str): The identifier of the parameter.
-        value (str): The value of the parameter.
+        value: The value of the parameter.
 
     Returns:
         PTParameterValue: A parameter value object.

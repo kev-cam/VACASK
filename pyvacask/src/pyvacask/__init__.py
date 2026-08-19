@@ -36,6 +36,9 @@ from ._pyvacask.value import *
 simulator = _pyvacask.simulator
 from ._pyvacask.simulator import *
 
+options = _pyvacask.options
+from ._pyvacask.options import *
+
 from .helpers import *
 
 # Monkeypath the setup function because it always overwrites the "default module path" set above.

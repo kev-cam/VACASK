@@ -17,6 +17,7 @@ void InitParserOutputModule(py::module &m);
 void InitCircuitModule(py::module &m);
 void InitCompilerModule(py::module &m);
 void InitAnalysisModule(py::module &m);
+void InitOptionsModule(py::module &m);
 
 PYBIND11_MODULE(_pyvacask, m, py::mod_gil_not_used()) {
     m.doc() = "VACASK Simulator.";
@@ -116,6 +117,12 @@ PYBIND11_MODULE(_pyvacask, m, py::mod_gil_not_used()) {
 
     { // rpnexpr
         auto mod_rpnexpr = m.def_submodule("rpnexpr");
-        py::class_<sim::Rpn>(mod_rpnexpr, "Rpn");
+        py::class_<sim::Rpn>(mod_rpnexpr, "Rpn")
+            .def(py::init<>());
+    }
+
+    { // options
+        auto mod_options = m.def_submodule("options");
+        InitOptionsModule(mod_options);
     }
 }
