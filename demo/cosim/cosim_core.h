@@ -82,6 +82,7 @@ private:
     Core() = default;
     DigitalSim* sim_ = nullptr;
     void pump();
+    void cleanup();
 };
 
 } // namespace cosim

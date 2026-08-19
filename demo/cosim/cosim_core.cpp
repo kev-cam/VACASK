@@ -298,7 +298,7 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
     if (!sim_) { say("COSIM ERROR: no DigitalSim attached\n"); return false; }
     if (a2d.empty() && d2a.empty()) {
         say("COSIM ERROR: no ports bound before start()\n");
-        sim_->finish(1); return false;
+        cleanup(); sim_->finish(1); return false;
     }
     g_ticks_per_s = sim_->ticksPerSecond();
 
@@ -335,11 +335,11 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
     auto stackPos = vs.tab->fileStack().addFile(netlist.c_str());
     if (stackPos == FileStack::badFileId) {
         say("COSIM ERROR: cannot open netlist \"%s\"\n", netlist.c_str());
-        sim_->finish(1); return false;
+        cleanup(); sim_->finish(1); return false;
     }
     if (!vs.parser->parseNetlistFile(stackPos, vs.status)) {
         say("COSIM ERROR: parse: %s\n", vs.status.message().c_str());
-        sim_->finish(1); return false;
+        cleanup(); sim_->finish(1); return false;
     }
     vs.tab->defaultGround();
 
@@ -371,14 +371,14 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
 
     if (!vs.tab->verify(vs.status)) {
         say("COSIM ERROR: verify: %s\n", vs.status.message().c_str());
-        sim_->finish(1); return false;
+        cleanup(); sim_->finish(1); return false;
     }
 
     static OpenvafCompiler comp;
     vs.cir = new Circuit(*vs.tab, &comp, vs.status);
     if (!vs.cir->isValid()) {
         say("COSIM ERROR: circuit: %s\n", vs.status.message().c_str());
-        sim_->finish(1); return false;
+        cleanup(); sim_->finish(1); return false;
     }
 
     // The bridge builds its own "cosim_tran" analysis directly via the
@@ -419,7 +419,7 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
         if (!ok) {
             say("COSIM ERROR: netlist 'options' statement: %s\n",
                 vs.status.message().c_str());
-            sim_->finish(1); return false;
+            cleanup(); sim_->finish(1); return false;
         }
         vs.cir->setOptions(opt);
     }
@@ -438,7 +438,7 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
             say("COSIM HINT: D2A bridge needs resistor/capacitor/isource "
                 ".osdi modules loaded by your netlist\n");
         say("COSIM ERROR: elaborate: %s\n", emsg.c_str());
-        sim_->finish(1); return false;
+        cleanup(); sim_->finish(1); return false;
     }
 
     vs.tstop = tstop;
@@ -454,13 +454,13 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
     vs.tran = Analysis::create(vs.anDescriptor, *vs.cir, vs.status);
     if (!vs.tran) {
         say("COSIM ERROR: analysis: %s\n", vs.status.message().c_str());
-        sim_->finish(1); return false;
+        cleanup(); sim_->finish(1); return false;
     }
     vs.tran->add(PTSave("default"));
     vs.tranCast = dynamic_cast<Tran*>(vs.tran);
     if (!vs.tranCast) {
         say("COSIM ERROR: not a Tran analysis\n");
-        sim_->finish(1); return false;
+        cleanup(); sim_->finish(1); return false;
     }
 
     bool anyMissing = false;
@@ -480,7 +480,7 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
             anyMissing = true;
         }
     }
-    if (anyMissing) { sim_->finish(1); return false; }
+    if (anyMissing) { cleanup(); sim_->finish(1); return false; }
 
     shared.v.assign(a2d.size(), 0.0);
     cx.init(a2d.size());
@@ -502,7 +502,7 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
         if (vacask_stack_base == MAP_FAILED) {
             vacask_stack_base = nullptr;
             say("COSIM ERROR: mmap stack failed\n");
-            sim_->finish(1); return false;
+            cleanup(); sim_->finish(1); return false;
         }
         mprotect(vacask_stack_base, GUARD_SIZE, PROT_NONE);  // guard page
     }
@@ -520,13 +520,31 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
     return true;
 }
 
+void Core::cleanup() {
+    delete vs.tran;     vs.tran     = nullptr; vs.tranCast = nullptr;
+    delete vs.cir;      vs.cir      = nullptr;
+    delete vs.parser;   vs.parser   = nullptr;
+    delete vs.tab;      vs.tab      = nullptr;
+    if (vs.trace.is_open()) vs.trace.close();
+    vs.traceHeaderWritten = false;
+    vs.lastProgressPct = -1;
+    a2d.clear();
+    d2a.clear();
+    shared = Shared{};
+    cx = Crossing{};
+    if (vacask_stack_base) {
+        munmap(vacask_stack_base, STACK_SIZE + GUARD_SIZE);
+        vacask_stack_base = nullptr;
+    }
+}
+
 void Core::pump() {
     if (!analog_resume()) {
         double wallSec = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - vs.startTime).count();
         say("COSIM: transient complete, %ld yields, %ld crossings, %.2fs wall\n",
             shared.steps, cx.count, wallSec);
-        if (vs.trace.is_open()) vs.trace.close();
+        cleanup();
         sim_->finish(0);
         return;
     }
@@ -559,7 +577,7 @@ void Core::onSettled() {
                                               Value(i_src), vs.status)) {
                 say("COSIM ERROR: set %s.dc: %s\n",
                     d2a[i].isrc.c_str(), vs.status.message().c_str());
-                sim_->finish(1);
+                cleanup(); sim_->finish(1);
                 return;
             }
         }
