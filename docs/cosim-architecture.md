@@ -276,7 +276,7 @@ VACASK solver are needed beyond the timestep callback itself.
       side, which fails a `>=` comparison on roughly half of
       otherwise identical cycles — the crossing time was solved for
       that exact value, so there is no need for an epsilon nudge.
-   b. Yield via `swapcontext` at `t_cross` with these voltages
+   c. Yield via `swapcontext` at `t_cross` with these voltages
       published; the adapter's scheduled callback resumes at that
       time, `onAnalogTime()` writes the resulting bit(s), and control
       returns to the core for the next crossing (or step 6).
@@ -547,6 +547,15 @@ never actually crosses.
 For D2A paths smoothed by the Norton RC filter, the filter's time
 constant absorbs any residual latency.
 
+**Single breakpoint slot**: only the nearest predicted crossing
+breakpoint is stored per `setExternalBreakPoint()` call (it keeps the
+minimum).  When multiple A2D ports are approaching their thresholds
+simultaneously, only the earliest port's breakpoint is injected.  The
+farther port's breakpoint is re-injected on the next `timestep_cb`
+call once the solver accepts that step, so its prediction is at most
+one step delayed — negligible in practice because the step that landed
+on (or near) the nearer crossing is itself close to the farther one.
+
 ### Narrow-pulse detection
 
 The crossing detector compares voltage endpoints of each accepted
@@ -606,3 +615,57 @@ digital side changed state.
 The current bridge handles single-bit ports.  Multi-bit buses
 (e.g. an 8-bit DAC input) would require either one D2A port per bit
 or a weighted Norton source.  Not implemented.
+
+## 12. Linear interpolation limitation
+
+Threshold crossing times (Section 6.1) are computed by linear
+interpolation between consecutive accepted timesteps:
+
+```
+t_cross = t_prev + (vth - v_prev) / (v_curr - v_prev) * (t_curr - t_prev)
+```
+
+Breakpoint prediction (Section 10) reduces the step size near
+crossings, keeping the linear approximation accurate for most
+practical waveforms.  However, for signals with high curvature within
+a single step (e.g. an exponential RC charge approaching threshold),
+the timing error is O(h²) where h is the step size at the crossing.
+
+**Planned v2 enhancement**: quadratic interpolation using the solver's
+own derivative information (available via `getIntegCoeffs()` /
+`getPastTimesteps()` at callback time) would reduce the error to O(h³)
+for smooth waveforms.
+
+## 13. Consolidated known limitations
+
+- **Linear crossing interpolation**: threshold crossing times are
+  linearly interpolated between consecutive accepted timesteps.
+  Breakpoint prediction keeps steps small near crossings, but
+  high-curvature signals may see O(h²) timing error. Quadratic
+  interpolation is a planned v2 enhancement.
+
+- **Single-process, single-session**: all bridge state is global.
+  Only one cosimulation session per process. No concurrent or
+  sequential re-use without process restart. A future refactor
+  would move state into Core members.
+
+- **ucontext portability**: the bridge uses POSIX ucontext for
+  coroutine switching, which is deprecated since SUSv4 (2004).
+  Works on Linux/glibc. For other platforms, boost::context or
+  libco would be needed.
+
+- **No purely-digital breakpoints**: the analog solver cannot
+  predict events that originate entirely in the digital domain
+  (e.g. a digital PLL divider). Such events are seen only at
+  the next analog timestep. Signals derived from analog (e.g.
+  comparator-triggered clock) are not affected — their crossings
+  are predicted and breakpointed.
+
+- **PSS incompatibility**: PssTranCore overrides
+  onTimestepAccepted() without calling base. The timestep
+  callback does not fire during PSS analysis.
+
+- **Single breakpoint slot**: only the nearest predicted crossing
+  breakpoint is stored. Farther predictions are re-injected on
+  the next accepted step. One-step delay for non-nearest port —
+  negligible in practice.

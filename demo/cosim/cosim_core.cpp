@@ -9,6 +9,15 @@
 
 #include "cosim_core.h"
 
+// TODO(v2): De-singleton refactor
+// --------------------------------
+// All state is currently file-scope globals + singleton Core.
+// For v2: move state (a2d, d2a, shared, cx, vs, ucontext stacks) into
+// Core members; make Core constructible (not singleton).
+// Blocker: ucontext entry point (vacask_entry) is a plain C function —
+// needs a trampoline or thread-local to recover the Core* pointer.
+// Would enable: multi-session, proper unit testing, clean teardown.
+
 #include <ucontext.h>
 #include <algorithm>
 #include <chrono>
