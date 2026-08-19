@@ -19,6 +19,7 @@
 // Would enable: multi-session, proper unit testing, clean teardown.
 
 #include <ucontext.h>
+#include <sys/mman.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -65,9 +66,10 @@ std::vector<D2APort> d2a;
 
 ucontext_t main_ctx, vacask_ctx;
 constexpr size_t STACK_SIZE = 8 * 1024 * 1024;
-// makecontext() requires a suitably aligned stack.  No guard page: a deep
-// solver recursion overruns into adjacent BSS rather than faulting.
-alignas(16) char vacask_stack[STACK_SIZE];
+static constexpr size_t GUARD_SIZE = 4096;
+// Stack is mmap'd with a guard page at the bottom so that overflow
+// produces a clean SIGSEGV instead of silently corrupting BSS.
+static void* vacask_stack_base = nullptr;  // mmap'd region (guard + usable)
 
 struct Shared {
     double              time_s = 0.0;
@@ -492,8 +494,20 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
         vs.trace << std::setprecision(17);
     }
 
+    // Allocate guarded stack: [guard page | usable stack]
+    if (!vacask_stack_base) {
+        vacask_stack_base = mmap(nullptr, STACK_SIZE + GUARD_SIZE,
+                                PROT_READ | PROT_WRITE,
+                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (vacask_stack_base == MAP_FAILED) {
+            vacask_stack_base = nullptr;
+            say("COSIM ERROR: mmap stack failed\n");
+            sim_->finish(1); return false;
+        }
+        mprotect(vacask_stack_base, GUARD_SIZE, PROT_NONE);  // guard page
+    }
     getcontext(&vacask_ctx);
-    vacask_ctx.uc_stack.ss_sp   = vacask_stack;
+    vacask_ctx.uc_stack.ss_sp   = (char*)vacask_stack_base + GUARD_SIZE;
     vacask_ctx.uc_stack.ss_size = STACK_SIZE;
     vacask_ctx.uc_link          = &main_ctx;
     makecontext(&vacask_ctx, vacask_entry, 0);
