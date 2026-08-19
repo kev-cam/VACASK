@@ -85,6 +85,63 @@ def _tokenize(s):
             for t in _TOKEN_RE.findall(s)]
 
 
+# ---------------------------------------------------------------------------
+# Include resolution and line continuation pre-passes
+# ---------------------------------------------------------------------------
+
+_INCLUDE_RE = re.compile(r'^\s*include\s+["\']([^"\']+)["\']\s*$')
+
+
+def _resolve_includes(path, _depth=0, _visited=None):
+    """Recursively resolve `include "filename"` directives, returning a
+    flat list of all lines.  Tracks visited files to detect cycles."""
+    if _depth > 10:
+        raise ValueError(f"include depth exceeded at {path}")
+    if _visited is None:
+        _visited = set()
+    real = os.path.realpath(path)
+    if real in _visited:
+        raise ValueError(f"circular include: {path}")
+    _visited.add(real)
+    lines = []
+    base = os.path.dirname(real)
+    with open(path) as f:
+        for line in f:
+            m = _INCLUDE_RE.match(line)
+            if m:
+                inc_path = os.path.join(base, m.group(1))
+                lines.extend(_resolve_includes(inc_path, _depth + 1, _visited))
+            else:
+                lines.append(line.rstrip())
+    return lines
+
+
+def _join_continuations(lines):
+    """Join backslash-continued and plus-continued lines."""
+    joined = []
+    buf = ""
+    for line in lines:
+        stripped = line.rstrip()
+        if stripped.endswith("\\"):
+            buf += stripped[:-1] + " "
+            continue
+        if buf:
+            buf += stripped
+            joined.append(buf)
+            buf = ""
+        elif stripped.lstrip().startswith("+"):
+            # SPICE-style continuation: append to previous line
+            if joined:
+                joined[-1] += " " + stripped.lstrip()[1:].lstrip()
+            else:
+                joined.append(stripped)
+        else:
+            joined.append(stripped)
+    if buf:
+        joined.append(buf)
+    return joined
+
+
 def _split_instantiation(line):
     """Split a SPICE-like instantiation/device line into
     (name, connections_tokens, type). Returns None if the line doesn't
@@ -186,18 +243,18 @@ def find_tran_settings(netlist_path):
     without the caller having to re-type them and risk drift between
     the two. Explicit --tstop/--tstep always take priority over this."""
     tstop = tstep = None
-    with open(netlist_path) as f:
-        for raw in f:
-            line = raw.split("//")[0]
-            m = _TRAN_LINE_RE.match(line)
-            if not m:
-                continue
-            params = m.group("params")
-            sm = _TSTOP_RE.search(params)
-            tm = _TSTEP_RE.search(params)
-            if sm: tstop = sm.group(1)
-            if tm: tstep = tm.group(1)
-            break  # first (active, uncommented) tran statement wins
+    raw_lines = _resolve_includes(netlist_path)
+    for raw in _join_continuations(raw_lines):
+        line = raw.split("//")[0]
+        m = _TRAN_LINE_RE.match(line)
+        if not m:
+            continue
+        params = m.group("params")
+        sm = _TSTOP_RE.search(params)
+        tm = _TSTEP_RE.search(params)
+        if sm: tstop = sm.group(1)
+        if tm: tstep = tm.group(1)
+        break  # first (active, uncommented) tran statement wins
     return tstop, tstep
 
 
@@ -221,22 +278,22 @@ class Netlist:
     def _parse(self, path):
         scope = "ROOT"
         subckt_re = re.compile(r"^subckt\s+(\S+)\s*\((.*)\)\s*$")
-        with open(path) as f:
-            for raw in f:
-                line = raw.strip()
-                m = subckt_re.match(line)
-                if m:
-                    scope = m.group(1)
-                    self.subckt_ports[scope] = _tokenize(m.group(2))
-                    continue
-                if re.match(r"^ends(\s|$)", line):
-                    scope = "ROOT"
-                    continue
-                parsed = _split_instantiation(line)
-                if parsed is None:
-                    continue
-                name, conns, inst_type = parsed
-                self.instances[(scope, name)] = (conns, inst_type)
+        raw_lines = _resolve_includes(path)
+        for raw in _join_continuations(raw_lines):
+            line = raw.strip()
+            m = subckt_re.match(line)
+            if m:
+                scope = m.group(1)
+                self.subckt_ports[scope] = _tokenize(m.group(2))
+                continue
+            if re.match(r"^ends(\s|$)", line):
+                scope = "ROOT"
+                continue
+            parsed = _split_instantiation(line)
+            if parsed is None:
+                continue
+            name, conns, inst_type = parsed
+            self.instances[(scope, name)] = (conns, inst_type)
 
     def find_instance_paths(self, module_name):
         """Every instance path (outermost-first list of instance names)
