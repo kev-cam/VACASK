@@ -1,6 +1,7 @@
 #ifndef __ANCORETRAN_DEFINED
 #define __ANCORETRAN_DEFINED
 
+#include <limits>
 #include <random>
 #include <functional>
 #include "status.h"
@@ -138,7 +139,7 @@ public:
     // Cosimulation: read current solution value by unknown index.
     // Index 0 = ground. Use Node::unknownIndex() to map node names.
     double solutionValue(size_t index) const {
-        return (index < solution.length()) ? solution.data()[index] : 0.0;
+        return (index < solution.length()) ? solution.data()[index] : std::numeric_limits<double>::quiet_NaN();
     }
     size_t solutionLength() const { return solution.length(); }
 
