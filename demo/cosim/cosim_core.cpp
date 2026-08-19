@@ -429,7 +429,13 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
     vs.cir->setOption("gshunt", 1e-12);
 
     if (!vs.cir->elaborate({}, "__topdef__", "__topinst__", nullptr, vs.status)) {
-        say("COSIM ERROR: elaborate: %s\n", vs.status.message().c_str());
+        std::string emsg = vs.status.message();
+        if (emsg.find("resistor") != std::string::npos ||
+            emsg.find("capacitor") != std::string::npos ||
+            emsg.find("isource") != std::string::npos)
+            say("COSIM HINT: D2A bridge needs resistor/capacitor/isource "
+                ".osdi modules loaded by your netlist\n");
+        say("COSIM ERROR: elaborate: %s\n", emsg.c_str());
         sim_->finish(1); return false;
     }
 
@@ -478,12 +484,13 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
     cx.init(a2d.size());
     vs.tranCast->core().setTimestepCallback(timestep_cb);
 
-    // Header is written from timestep_cb() on the first accepted step, not
-    // here: solutionLength() is not meaningful until the analysis has
-    // actually solved once (it reads 0 at this point, before the solution
-    // vector is allocated).
-    vs.trace.open("cosim_trace.csv");
-    vs.trace << std::setprecision(17);
+    // Debug trace: only open if COSIM_TRACE env var is set and non-empty.
+    // The netlist's own .raw output (via PTSave("default") above) is the
+    // primary analog signal record; this CSV is debug-only.
+    if (const char* tr = std::getenv("COSIM_TRACE"); tr && tr[0]) {
+        vs.trace.open("cosim_trace.csv");
+        vs.trace << std::setprecision(17);
+    }
 
     getcontext(&vacask_ctx);
     vacask_ctx.uc_stack.ss_sp   = vacask_stack;
@@ -491,8 +498,9 @@ bool Core::start(const std::string& netlist, double tstop, double tstep) {
     vacask_ctx.uc_link          = &main_ctx;
     makecontext(&vacask_ctx, vacask_entry, 0);
 
-    say("COSIM: %zu A2D, %zu D2A, tstop=%g tstep=%g, %g ticks/s\n",
-        a2d.size(), d2a.size(), tstop, tstep, g_ticks_per_s);
+    say("COSIM: %zu A2D, %zu D2A, tstop=%g tstep=%g, %g ticks/s%s\n",
+        a2d.size(), d2a.size(), tstop, tstep, g_ticks_per_s,
+        vs.trace.is_open() ? " (trace: cosim_trace.csv)" : " (set COSIM_TRACE=1 for debug CSV)");
     vs.startTime = std::chrono::steady_clock::now();
     pump();
     return true;
