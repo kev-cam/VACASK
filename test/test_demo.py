@@ -209,3 +209,67 @@ def test_demo3():
     fig1.axes[0].plot(dc2["temp"], dc2["2"], "g")
     fig1.axes[0].plot(dc1["temp"], dc1["2"], "r", marker=".", linestyle="none")
     fig1.savefig("d3dc1.jpg")
+
+def test_demo4():
+    sim.setup()
+    s = Status()
+    tab = ParserTables("Variables and parametrized options sweep")
+    p = Parser(tab)
+
+    tab = tab.add(PTLoad("resistor.osdi"))
+    tab = tab.add(PTLoad("diode.osdi"))
+    tab = tab.defaultGround()
+    sub = PTSubcircuitDefinition()
+    sub = sub.add(PTModel("res", "resistor"))
+    sub = sub.add(PTModel("dio", "diode")
+        .add(p.parseParameters("is=1e-12 n=2 rs=1 eg=1.2 xti=2"))
+    )
+    sub = sub.add(PTModel("vsrc", "vsource"))
+    sub = sub.add(PTSubcircuitDefinition("sub1").add(
+        PTInstance("r1", "res", ["1", "2"]).add(PV("r", 10))).add(
+        PTInstance("d1", "dio", ["2", "0"]))
+    )
+    sub = sub.add(PTSubcircuitDefinition("sub2").add(
+        PTInstance("d1", "dio", ["1", "2"])).add(
+        PTInstance("r1", "res", ["2", "0"]).add(PV("r", 10)))
+    )
+    sub = sub.add(PTInstance("v1", "vsrc", ["1", "0"]).add(PV("dc", 10)))
+    tab = tab.setDefaultSubDef(sub)
+
+    assert tab.verify(s)
+
+    # Dump tables for debugging
+    tab.dump(0)
+
+    assert tab.writeEmbedded(1, s)
+
+    comp = OpenvafCompiler()
+    cir  = Circuit(tab, comp, s)
+    assert cir.isValid()
+
+    cir.setVariable("myvar", Value(0))
+    cir.setOption("reltol", Value(1e-4))
+
+    assert cir.elaborate([Id("sub1")], "__topdef__", "__topinst__", status=s)
+    cir.dumpHierarchy(0)
+    
+    dc1Desc = PTAnalysis("dc1", "op")
+    dc1 = Analysis.create(dc1Desc, cir, s)
+    assert dc1
+    ok, canResume = dc1.run(s)
+    print(f"DC1 analysis OK. Can resume: {'true' if canResume else 'false'}\n" if ok else "DC1 analysis failed")
+    
+    assert cir.elaborate([Id("sub2")], "__topdef__", "__topinst__", status=s)
+
+    dc2Desc = PTAnalysis("dc2", "op")
+    dc2 = Analysis.create(dc2Desc, cir, s)
+    assert dc2
+    ok, canResume = dc2.run(s)
+    print(f"DC2 analysis OK. Can resume: {'true' if canResume else 'false'}\n" if ok else "DC2 analysis failed")
+
+    dc1 = rawread('dc1.raw').get()                 
+    dc2 = rawread('dc2.raw').get()
+    print("dc1 v(2)=", dc1["2"])
+    print("dc2 v(2)=", dc2["2"])
+    print("Sum (should be 10):", dc1["2"]+dc2["2"])
+

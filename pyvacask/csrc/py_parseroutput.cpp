@@ -62,7 +62,7 @@ void InitParserOutputModule(py::module &m) {
         )
         .def("dump",
             [](sim::ParserTables& self, int ident) {
-                self.dump(ident, std::out);
+                self.dump(ident, std::cout);
             }
         );
 
@@ -207,6 +207,12 @@ void InitParserOutputModule(py::module &m) {
         // Constructors
         .def(py::init<>())
         .def(py::init<sim::Id, const sim::Loc&>(),
+            py::arg("name"),
+            py::arg("location") = sim::Loc::bad)
+        .def(py::init([](std::string name,
+                         const sim::Loc& loc) {
+            return sim::PTSubcircuitDefinition(sim::Id(name), loc);
+            }),
             py::arg("name"),
             py::arg("location") = sim::Loc::bad)
         .def(py::init([](sim::Id name,
