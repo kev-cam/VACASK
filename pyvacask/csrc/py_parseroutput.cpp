@@ -59,6 +59,11 @@ void InitParserOutputModule(py::module &m) {
                 return self.writeEmbedded(debug, s);
             },
             py::return_value_policy::reference_internal
+        )
+        .def("dump",
+            [](sim::ParserTables& self, int ident) {
+                self.dump(ident, std::out);
+            }
         );
 
         py::class_<sim::PTLoad>(m, "PTLoad")
@@ -412,6 +417,17 @@ void InitParserOutputModule(py::module &m) {
     py::class_<sim::PTParameters>(m, "PTParameters")
         // Constructors
         .def(py::init<>())
+        .def(py::init([](py::list values) {
+            std::vector<sim::PTParameterValue> pv;
+            pv.reserve(values.size());
+        
+            for (py::handle h : values) {
+                auto& value = h.cast<sim::PTParameterValue&>();
+                pv.push_back(std::move(value));
+            }
+        
+            return sim::PTParameters(std::move(pv));
+        }))
         // Getters
         .def("valueCount", &sim::PTParameters::valueCount)
         .def("expressionCount", &sim::PTParameters::expressionCount)

@@ -135,3 +135,77 @@ def test_demo2():
     print("Expected: [2, 8]")
     fig1.savefig("dc1.jpg")
 
+def test_demo3():
+    sim.setup()
+    s = Status()
+    tab = ParserTables("Variables and parametrized options sweep")
+    p = Parser(tab)
+
+    tab = tab.add(PTLoad("resistor.osdi"))
+    tab = tab.add(PTLoad("diode.osdi"))
+    tab = tab.defaultGround()
+    sub = PTSubcircuitDefinition()
+    sub = sub.add(PTModel("res", "resistor"))
+    sub = sub.add(PTModel("dio", "diode")
+        .add(p.parseParameters("is=1e-12 n=2 rs=1 eg=1.2 xti=2"))
+    )
+    sub = sub.add(PTModel("vsrc", "vsource"))
+    sub = sub.add(PTInstance("r1", "res", ["1", "2"])
+        .add(PV("r", 100))
+    )
+    sub = sub.add(PTInstance("d1", "dio", ["2", "0"]))
+    sub = sub.add(PTInstance("v1", "vsrc", ["1", "0"])
+        .add(PV("dc", 2))
+    )
+    tab = tab.setDefaultSubDef(sub)
+
+    assert tab.verify(s)
+
+    # Dump tables for debugging
+    tab.dump(0)
+
+    assert tab.writeEmbedded(1, s)
+
+    comp = OpenvafCompiler()
+    cir  = Circuit(tab, comp, s)
+    assert cir.isValid()
+
+    cir.setVariable("myvar", Value(0))
+    cir.setOption("reltol", Value(1e-4))
+
+    assert cir.elaborate([], "__topdef__", "__topinst__", status=s)
+    cir.dumpHierarchy(0)
+
+    dc1Desc = PTAnalysis("dc1", "op")
+    dc1Desc.add(PTSweep("temp").add(
+        PV("variable", "myvar")).add(
+        PV("from", -50)).add(
+        PV("to", 100)).add(
+        PV("step", 2))
+    )
+    anPar = p.parseParameters("temp=myvar")
+    dc1 = Analysis.create(dc1Desc, cir, s)
+    dc1.add(anPar)
+    assert dc1
+    ok, canResume = dc1.run(s)
+    print(f"DC1 analysis OK. Can resume: {'true' if canResume else 'false'}\n" if ok else "DC1 analysis failed")
+
+    dc2Desc = PTAnalysis("dc2", "op")
+    dc2Desc.add(PTSweep("temp").add(
+        PV("option", "temp")).add(
+        PV("from", -50)).add(
+        PV("to", 100)).add(
+        PV("step", 2))
+    )
+    dc2 = Analysis.create(dc2Desc, cir, s)
+    assert dc2
+    ok, canResume = dc2.run(s)
+    print(f"DC2 analysis OK. Can resume: {'true' if canResume else 'false'}\n" if ok else "DC2 analysis failed")
+
+    dc1 = rawread("dc1.raw").get()
+    dc2 = rawread("dc2.raw").get()
+    print("Vectors:", dc1.names)
+    fig1, _ = plt.subplots(1, 1, figsize=(6,4), dpi=100, constrained_layout=True)
+    fig1.axes[0].plot(dc2["temp"], dc2["2"], "g")
+    fig1.axes[0].plot(dc1["temp"], dc1["2"], "r", marker=".", linestyle="none")
+    fig1.savefig("d3dc1.jpg")
