@@ -91,6 +91,13 @@ def _tokenize(s):
 
 _INCLUDE_RE = re.compile(r'^\s*include\s+["\']([^"\']+)["\']\s*$')
 
+# The demo tree contains a local stub with this basename. Always use the
+# complete PDK library instead, so local files cannot shadow the real model.
+_FORCED_INCLUDE_PATHS = {
+    "sg13g2_vacask_common.lib":
+        "/home/ciel/ihp-sg13g2/libs.tech/vacask/models/sg13g2_vacask_common.lib",
+}
+
 
 def _resolve_includes(path, _depth=0, _visited=None):
     """Recursively resolve `include "filename"` directives, returning a
@@ -109,7 +116,22 @@ def _resolve_includes(path, _depth=0, _visited=None):
         for line in f:
             m = _INCLUDE_RE.match(line)
             if m:
-                inc_path = os.path.join(base, m.group(1))
+                # Match VACASK/Xschem environment-variable paths such as
+                # "$PDK_ROOT/$PDK/libs.tech/vacask/models/foo.lib".
+                # Python opens files directly, so shell expansion does not
+                # happen automatically here.
+                requested_name = os.path.basename(m.group(1))
+                include_name = _FORCED_INCLUDE_PATHS.get(
+                    requested_name,
+                    os.path.expanduser(os.path.expandvars(m.group(1))))
+                unresolved = re.findall(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})", include_name)
+                if unresolved:
+                    missing = ", ".join(sorted(set(unresolved)))
+                    raise FileNotFoundError(
+                        f"unexpanded environment variable(s) {missing} in include "
+                        f"{m.group(1)!r}; set them before running gen_cosim_top.py")
+                inc_path = (include_name if os.path.isabs(include_name)
+                            else os.path.join(base, include_name))
                 lines.extend(_resolve_includes(inc_path, _depth + 1, _visited))
             else:
                 lines.append(line.rstrip())

@@ -1,4 +1,4 @@
-// sch_path: /home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/tb_sar_adc.sch
+// sch_path: /home/alberto/Scripts/VACASK/VACASK_cosim/demo/cosim/vacask_cosim_hier/tb_sar_adc.sch
 //subckt tb_sar_adc ( )
 R2 ( 'D[5]' SUM ) resistor r=2M $mfactor=1 
 R3 ( 'D[4]' SUM ) resistor r=4M $mfactor=1 

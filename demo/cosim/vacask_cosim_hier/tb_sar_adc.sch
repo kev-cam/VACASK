@@ -8,13 +8,13 @@ E {}
 B 2 80 -960 1140 -520 {flags=graph
 y1=0
 y2=3.3
-ypos1=0.165
-ypos2=3.465
+ypos1=-0.67101029
+ypos2=3.7072479
 divy=6
 subdivy=1
 unity=1
-x1=0
-x2=0.00025
+x1=-1.25e-05
+x2=0.0002375
 divx=5
 subdivx=1
 xlabmag=1.0
@@ -38,15 +38,15 @@ logy=0
 digital=1
 linewidth_mult=1}
 B 2 80 -1700 1140 -980 {flags=graph
-y1=-5
-y2=2.6
+y1=-0.75
+y2=1.9
 ypos1=0
 ypos2=2
 divy=5
 subdivy=1
 unity=1
-x1=0
-x2=0.00025
+x1=-1.25e-05
+x2=0.0002375
 divx=5
 subdivx=1
 xlabmag=1.0
@@ -166,7 +166,7 @@ tclcommand="execute 1 sh -c \\"cd $netlist_dir && iverilog -o t.vvp cosim_top.v 
 }
 C {launcher.sym} 1590 -190 0 0 {name=h5
 descr="4. Run cosim (VACASK)"
-tclcommand="execute 1 sh -c \\"export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/ && export VACASK_INCLUDE_PATH=/var/home/alberto/Scripts/pdk_validation/pdks/ihp-sg13g2/models_ihp-sg13g2/vacask/models && export VACASK_MODULE_PATH=/var/home/alberto/Scripts/pdk_validation/pdks/ihp-sg13g2/models_ihp-sg13g2/vacask/osdi && cd $netlist_dir && vvp -M../ -mcosim t.vvp\\""
+tclcommand="execute 1 sh -c \\"export LD_LIBRARY_PATH=/usr/local/vacask-dev/lib64:/usr/local/vacask-dev/lib:/usr/lib/x86_64-linux-gnu && export VACASK_INCLUDE_PATH=/home/ciel/ihp-sg13g2/libs.tech/vacask/models && export VACASK_MODULE_PATH=/usr/local/vacask-dev/lib/vacask/mod:/home/ciel/ihp-sg13g2/libs.tech/vacask/osdi && cd $netlist_dir && vvp -M../ -mcosim t.vvp\\""
 }
 C {launcher.sym} 1590 -160 0 0 {name=h6
 descr="load waves" 
@@ -194,7 +194,14 @@ C {vsource.sym} 50 -240 0 0 {name=V3 value="dc=1.8" savecurrent=false}
 C {vsource.sym} -30 -240 0 1 {name=V2 value="type=\\"pulse\\" val0=0 val1=1.7 delay=0 rise=200u fall=200u width=1u period=402u" savecurrent=false}
 C {vsource.sym} 280 -240 0 0 {name=V1 value="type=\\"pulse\\" val0=0 val1=VCC delay=0.2u rise=10n fall=10n width=1.3u period=10u" savecurrent=false}
 C {vsource.sym} 40 -90 0 0 {name=V4 value="type=\\"pulse\\" val0=0 val1='VCC' delay=500n rise=10n fall=10n width=490n period=1u" savecurrent=false}
-C {simulator_commands_shown.sym} 1160 -450 0 0 {
+C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/sar_adc.sym} 450 -380 0 0 {name=x1}
+C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/dac_bridge.sym} 300 -160 0 0 {name=x2}
+C {res.sym} 1330 -50 0 0 {name=R1
+value=1G
+footprint=1206
+device=resistor
+m=1}
+C {simulator_commands_shown.sym} 1240 -500 0 0 {
 name=Libs_VACASK
 simulator=vacask
 only_toplevel=false
@@ -207,10 +214,3 @@ include \\"cornerRES.lib\\" section=res_typ
 include \\"cornerCAP.lib\\" section=cap_typ
 "
       }
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/sar_adc.sym} 450 -380 0 0 {name=x1}
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/dac_bridge.sym} 300 -160 0 0 {name=x2}
-C {res.sym} 1330 -50 0 0 {name=R1
-value=1G
-footprint=1206
-device=resistor
-m=1}

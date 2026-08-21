@@ -13,6 +13,7 @@ CXXFLAGS   := -std=c++20 -O0 -g -fPIC -DNAMESPACE=sim -DVACASK_MOD_PATH='"$(MOD_
 
 VACASK_LIBS := $(VACASK_LIB) \
                -L$(SS_LIB) -lklu -lbtf -lamd -lcolamd -lcamd -lccolamd -lcholmod -lsuitesparseconfig \
+               -llapack -lblas \
                -L$(BOOST_LIB) -lboost_filesystem -lboost_system -lboost_process \
                -ldl -lpthread -lm
 
