@@ -1,0 +1,19 @@
+`include "constants.vams"
+`include "disciplines.vams"
+
+module comparator(ain1, ain2, dout);
+  input ain1, ain2;
+  output dout;
+  electrical ain1, ain2, dout;
+
+  parameter real vout_low = 0.0;
+  parameter real vout_high = 1.8;
+
+  parameter real vsoft = 1m;
+
+  analog begin
+    V(dout) <+ vout_low
+            + 0.5 * (vout_high - vout_low)
+            * (1.0 + tanh((V(ain2) - V(ain1)) / vsoft));
+  end
+endmodule

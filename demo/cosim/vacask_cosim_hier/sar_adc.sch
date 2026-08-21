@@ -23,8 +23,8 @@ N 270 -730 270 -610 {lab=TEST_V}
 N 270 -840 270 -730 {lab=TEST_V}
 N 270 -840 360 -840 {lab=TEST_V}
 N 270 -960 270 -840 {lab=TEST_V}
-N 850 -250 850 -220 {lab=COMP}
-N 850 -160 850 -140 {lab=0}
+N 600 -180 840 -180 {lab=#net1}
+N 600 -180 600 -140 {lab=#net1}
 C {ipin.sym} 80 -180 0 0 {name=p1 lab=INPUT}
 C {ipin.sym} 80 -160 0 0 {name=p2 lab=VREF}
 C {ipin.sym} 80 -140 0 0 {name=p3 lab=START}
@@ -65,16 +65,8 @@ C {lab_pin.sym} 360 -820 0 0 {name=p17 lab=VREF}
 C {lab_pin.sym} 360 -800 0 0 {name=p18 lab=D[4]}
 C {lab_pin.sym} 360 -940 0 0 {name=p20 lab=VREF}
 C {lab_pin.sym} 360 -920 0 0 {name=p21 lab=D[5]}
-C {lab_pin.sym} 850 -250 0 1 {name=p28 lab=COMP}
-C {dac_bridge.sym} 870 -70 0 0 {name=A1 dac_bridge_model= dac_buff
-device_model=".model dac_buff dac_bridge input_load=1e-15 t_rise=10n t_fall=10n
-+ out_low=0 out_high=3.3"}
 C {lab_pin.sym} 840 -70 0 0 {name=p34 lab=COMP}
 C {lab_pin.sym} 900 -70 0 1 {name=p35 lab=COMP_A}
-C {vcvs.sym} 850 -190 0 0 {name=E1 value=1000}
-C {lab_pin.sym} 810 -170 0 0 {name=p23 lab=VREF}
-C {lab_pin.sym} 810 -210 0 0 {name=p24 lab=TEST_V}
-C {lab_pin.sym} 850 -140 0 0 {name=p25 lab=0}
 C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/tgate.sym} 120 -540 0 0 {name=x1}
 C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/ccap.sym} 420 -360 0 0 {name=x2 C=1p/32}
 C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/ccap.sym} 420 -480 0 0 {name=x3 C=1p/16}
@@ -83,3 +75,9 @@ C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/
 C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/ccap.sym} 420 -820 0 0 {name=x6 C=1p/2}
 C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/ccap.sym} 420 -940 0 0 {name=x7 C=1p}
 C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/sar_adc_vlog.sym} 990 -440 0 0 {name=x8}
+C {lab_pin.sym} 840 -160 0 0 {name=p27 lab=TEST_V}
+C {lab_pin.sym} 900 -180 0 1 {name=p28 lab=COMP}
+C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/dac_bridge.sym} 840 -70 0 0 {name=DAC}
+C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/acomp.sym} 840 -180 0 0 {name=x9}
+C {vsource.sym} 600 -110 0 0 {name=V1 value="dc=0.9" savecurrent=false}
+C {lab_pin.sym} 600 -80 0 0 {name=p23 lab=0}

@@ -42,6 +42,6 @@ module cosim_top;
         $cosim_d2a("D[1]", adc__x1_x8__Result[1], D2A_VDD, D2A_R, D2A_C);
         $cosim_d2a("D[0]", adc__x1_x8__Result[0], D2A_VDD, D2A_R, D2A_C);
 
-        $cosim_run("tb_sar_adc.spectre", 0.00025, 1e-08);
+        $cosim_run("tb_sar_adc.spectre", 0.00025, 1e-07);
     end
 endmodule

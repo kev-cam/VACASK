@@ -5,49 +5,48 @@ V {}
 S {}
 F {}
 E {}
-B 2 80 -880 1140 -510 {flags=graph
+B 2 80 -960 1140 -520 {flags=graph
 y1=0
 y2=3.3
-ypos1=0.27131944
-ypos2=4.2824898
-divy=5
+ypos1=0.165
+ypos2=3.465
+divy=6
 subdivy=1
 unity=1
-x1=-1.9097719e-06
-x2=0.00032713555
+x1=0
+x2=0.00025
 divx=5
 subdivx=1
 xlabmag=1.0
 ylabmag=1.0
-node="d[5..0];d5,d4,d3,d2,d1,d0
-valid
+node="d[5:0];d[5],d[4],d[3],d[2],d[1],d[0]
+
 clk
 start
-d0
-d1
-d2
-d3
-d4
-d5
-x2.sample
-vcc"
-color="8 4 4 8 10 10 10 10 10 10 4 10"
+d[0]
+d[1]
+d[2]
+d[3]
+d[4]
+d[5]
+valid"
+color="12 4 4 8 10 10 10 10 10 8"
 dataset=-1
 unitx=1
 logx=0
 logy=0
 digital=1
 linewidth_mult=1}
-B 2 80 -1640 1140 -920 {flags=graph
-y1=-1.2
-y2=3
+B 2 80 -1700 1140 -980 {flags=graph
+y1=-5
+y2=2.6
 ypos1=0
 ypos2=2
 divy=5
 subdivy=1
 unity=1
-x1=-1.9097719e-06
-x2=0.00032713555
+x1=0
+x2=0.00025
 divx=5
 subdivx=1
 xlabmag=1.0
@@ -57,13 +56,14 @@ unitx=1
 logx=0
 logy=0
 digital=0
-color="4 8 10 9"
+color="4 8 10 12 13"
 node="INPUT
-i(vamm)
-xtest.sample 0.05 *
-x2.test_v"
+x1.test_v
+DAC
+vcc
+x1.comp"
 linewidth_mult=1
-hcursor1_y=1.0550322}
+hcursor1_y=1.5442329}
 T { A simple DAC so that the result may be compared to the input.} 800 -230 0 0 0.4 0.4 {}
 T {Analog conversion for plotting} 220 -140 0 0 0.4 0.4 {}
 T {This is an example of a true mixed mode
@@ -74,6 +74,8 @@ for the analog part and Icarus Verilog
 Instructions
 - You need Icarus verilog installed.
 - Icarus verilog must be built with the --enable-libvvp option.
+- Set the netlist directory as the same where .sch are
+- Set netlist as spectre
 - Follow the launchers in order
 } 1150 -1470 0 0 0.7 0.7 {}
 N 1330 -100 1330 -80 {lab=SUM}
@@ -81,14 +83,13 @@ N 280 -290 280 -270 {lab=START}
 N -30 -290 -30 -270 {lab=INPUT}
 N 50 -290 50 -270 {lab=VCC}
 N 840 -100 1330 -100 {lab=SUM}
-N 840 -190 840 -160 {lab=D5}
-N 920 -190 920 -160 {lab=D4}
-N 1000 -190 1000 -160 {lab=D3}
-N 1080 -190 1080 -160 {lab=D2}
-N 1160 -190 1160 -160 {lab=D1}
-N 1240 -190 1240 -160 {lab=D0}
+N 840 -190 840 -160 {lab=D[5]}
+N 920 -190 920 -160 {lab=D[4]}
+N 1000 -190 1000 -160 {lab=D[3]}
+N 1080 -190 1080 -160 {lab=D[2]}
+N 1160 -190 1160 -160 {lab=D[1]}
+N 1240 -190 1240 -160 {lab=D[0]}
 N 40 -140 40 -120 {lab=CLK}
-C {ammeter.sym} 1330 -50 0 0 {name=VAMM savecurrent=0 spice_ignore=0}
 C {lab_pin.sym} 1330 -20 0 0 {name=p35 lab=0}
 C {lab_pin.sym} 280 -210 0 0 {name=p37 lab=0}
 C {lab_pin.sym} 280 -290 0 0 {name=p38 lab=START}
@@ -97,41 +98,41 @@ C {lab_pin.sym} -30 -290 0 0 {name=p40 lab=INPUT}
 C {lab_pin.sym} 50 -210 0 0 {name=p1 lab=0}
 C {lab_pin.sym} 50 -290 0 0 {name=p41 lab=VCC}
 C {res.sym} 840 -130 0 0 {name=R2
-value=2
+value=2M
 footprint=1206
 device=resistor
 m=1}
-C {lab_pin.sym} 840 -190 0 0 {name=p42 lab=D5}
+C {lab_pin.sym} 840 -190 0 0 {name=p42 lab=D[5]}
 C {res.sym} 920 -130 0 0 {name=R3
-value=4
+value=4M
 footprint=1206
 device=resistor
 m=1}
-C {lab_pin.sym} 920 -190 0 0 {name=p43 lab=D4}
+C {lab_pin.sym} 920 -190 0 0 {name=p43 lab=D[4]}
 C {res.sym} 1000 -130 0 0 {name=R4
-value=8
+value=8M
 footprint=1206
 device=resistor
 m=1}
-C {lab_pin.sym} 1000 -190 0 0 {name=p44 lab=D3}
+C {lab_pin.sym} 1000 -190 0 0 {name=p44 lab=D[3]}
 C {res.sym} 1080 -130 0 0 {name=R5
-value=16
+value=16M
 footprint=1206
 device=resistor
 m=1}
-C {lab_pin.sym} 1080 -190 0 0 {name=p45 lab=D2}
+C {lab_pin.sym} 1080 -190 0 0 {name=p45 lab=D[2]}
 C {res.sym} 1160 -130 0 0 {name=R6
-value=32
+value=32M
 footprint=1206
 device=resistor
 m=1}
-C {lab_pin.sym} 1160 -190 0 0 {name=p46 lab=D1}
+C {lab_pin.sym} 1160 -190 0 0 {name=p46 lab=D[1]}
 C {res.sym} 1240 -130 0 0 {name=R7
-value=64
+value=64M
 footprint=1206
 device=resistor
 m=1}
-C {lab_pin.sym} 1240 -190 0 0 {name=p47 lab=D0}
+C {lab_pin.sym} 1240 -190 0 0 {name=p47 lab=D[0]}
 C {lab_pin.sym} 1330 -100 0 1 {name=p48 lab=SUM}
 C {lab_pin.sym} 300 -410 0 0 {name=p7 lab=INPUT}
 C {lab_pin.sym} 300 -390 0 0 {name=p8 lab=VCC}
@@ -140,11 +141,6 @@ C {lab_pin.sym} 600 -410 0 1 {name=p10 lab=VALID}
 C {lab_pin.sym} 600 -390 0 1 {name=p11 lab=D[5:0]}
 C {lab_pin.sym} 300 -350 0 0 {name=p12 lab=CLK}
 C {title.sym} 160 -10 0 0 {name=l1 author="Stefan Schippers"}
-C {dac_bridge.sym} 330 -160 0 0 {name=A2 dac_bridge_model= dac_buff
-
-device_model=".model dac_buff dac_bridge input_load=1e-15 t_rise=10n t_fall=10n
-+ out_low=0 out_high=3.3"
-}
 C {lab_pin.sym} 300 -160 0 0 {name=p4 lab=VALID}
 C {lab_pin.sym} 360 -160 0 1 {name=p5 lab=VALID_A}
 C {lab_pin.sym} 40 -60 0 0 {name=p6 lab=0}
@@ -185,15 +181,17 @@ ground 0
 
 load \\"resistor.osdi\\"
 load \\"capacitor.osdi\\"
+load \\"dac_bridge.osdi\\"
+load \\"acomp.osdi\\"
 
-parameters VCC=3.3
+parameters VCC=1.8
 
 control
-  tran tran1 tstop=250u tstep=10n
+  tran tran1 tstop=250u tstep=100n
 endc
 "}
-C {vsource.sym} 50 -240 0 0 {name=V3 value="dc=VCC" savecurrent=false}
-C {vsource.sym} -30 -240 0 1 {name=V2 value="type=\\"pulse\\" val0=0 val1=3 delay=0 rise=200u fall=200u width=1u period=402u" savecurrent=false}
+C {vsource.sym} 50 -240 0 0 {name=V3 value="dc=1.8" savecurrent=false}
+C {vsource.sym} -30 -240 0 1 {name=V2 value="type=\\"pulse\\" val0=0 val1=1.7 delay=0 rise=200u fall=200u width=1u period=402u" savecurrent=false}
 C {vsource.sym} 280 -240 0 0 {name=V1 value="type=\\"pulse\\" val0=0 val1=VCC delay=0.2u rise=10n fall=10n width=1.3u period=10u" savecurrent=false}
 C {vsource.sym} 40 -90 0 0 {name=V4 value="type=\\"pulse\\" val0=0 val1='VCC' delay=500n rise=10n fall=10n width=490n period=1u" savecurrent=false}
 C {simulator_commands_shown.sym} 1160 -450 0 0 {
@@ -210,3 +208,9 @@ include \\"cornerCAP.lib\\" section=cap_typ
 "
       }
 C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/sar_adc.sym} 450 -380 0 0 {name=x1}
+C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/dac_bridge.sym} 300 -160 0 0 {name=x2}
+C {res.sym} 1330 -50 0 0 {name=R1
+value=1G
+footprint=1206
+device=resistor
+m=1}

@@ -1,0 +1,18 @@
+`include "constants.vams"
+`include "disciplines.vams"
+
+module dac(ain, dout);
+  input ain;
+  output dout;
+  electrical ain, dout;
+
+  parameter real vth = 0.9;
+  parameter real vsoft = 10m;
+  parameter real vout_low = 0.0;
+  parameter real vout_high = 1.8;
+
+  analog begin
+    V(dout) <+ vout_low + 0.5 * (vout_high - vout_low)
+                  * (1.0 + tanh((V(ain) - vth) / vsoft));
+  end
+endmodule
