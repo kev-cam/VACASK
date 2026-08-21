@@ -63,7 +63,7 @@ def test_demo1():
     fig1.axes[0].plot(tran1["time"], tran1["2"], "r", marker=".")
     fig1.axes[0].plot(tran1["time"], tran1["1"], "b")
     fig1.axes[0].plot(tran1["time"], tran1["r1.i"]*1000, "--")
-    fig1.savefig("tran1.jpg")
+    fig1.savefig("d1tran1.jpg")
 
 def test_demo2():
     sim.setup()
@@ -133,7 +133,7 @@ def test_demo2():
     print("Mode:", dc1["mode"])
     print("Output:", dc1["2"])
     print("Expected: [2, 8]")
-    fig1.savefig("dc1.jpg")
+    fig1.savefig("d2dc1.jpg")
 
 def test_demo3():
     sim.setup()
@@ -273,3 +273,109 @@ def test_demo4():
     print("dc2 v(2)=", dc2["2"])
     print("Sum (should be 10):", dc1["2"]+dc2["2"])
 
+def test_demo5():
+    sim.setup()
+    s = Status()
+    tab = ParserTables("Variables and parametrized options sweep")
+    p = Parser(tab)
+
+    tab = tab.add(PTLoad("resistor.osdi"))
+    tab = tab.add(PTLoad("diode.osdi"))
+    tab = tab.defaultGround()
+    sub = PTSubcircuitDefinition()
+    sub = sub.add(PTModel("res", "resistor"))
+    sub = sub.add(PTModel("dio", "diode")
+        .add(p.parseParameters("is=1e-12 n=2 rs=1 eg=1.2 xti=2"))
+    )
+    sub = sub.add(PTModel("vsrc", "vsource"))
+    sub = sub.add(PTBlockSequence().add(
+        p.parseExpression("fixed!=0"), PTBlock().add(
+            PTInstance("r1", "res", ["1", "2"]).add(PV("r", 100)))
+        ).add(Rpn(), PTBlock().add(
+            PTInstance("r1", "res", ["1", "2"]).add(
+                p.parseParameters("r=10*(1+($temp-tnominal)/100)")
+            ))
+        )
+    )
+    sub = sub.add(PTInstance("d1", "dio", ["2", "0"]))
+    sub = sub.add(PTInstance("v1", "vsrc", ["1", "0"]).add(PV("dc", 10)))
+    tab = tab.setDefaultSubDef(sub)
+    assert tab.verify(s)
+
+    # Dump tables for debugging
+    tab.dump(0)
+
+    assert tab.writeEmbedded(1, s)
+
+    comp = OpenvafCompiler()
+    cir  = Circuit(tab, comp, s)
+    assert cir.isValid()
+    
+    def state():
+        print(f"reltol={cir.simulatorOptions().reltol}")
+        var1 = cir.getVariable("tnominal")
+        print(f"tnominal={var1 if var1 else 'not found'}")
+        var2 = cir.getVariable("fixed")
+        print(f"fixed={var2 if var2 else 'notfound'}")
+        ok1, val1 = cir.instanceParameter("v1", "dc")
+        print(f"v1 dc={str(val1) if ok1 else 'not found'}")
+        ok2, val2 = cir.instanceParameter("r1", "r")
+        print(f"r1 r={str(val2) if ok2 else 'not found'}")
+
+    def partialElaborate():
+        print("\nPartial elaboration")
+        s = Status()
+        ok, topologyChange, bindingNeeded = cir.elaborateChanges(s)
+        assert ok
+        if topologyChange:
+            print("Topology changed.")
+        if bindingNeeded:
+            print("Analysis rebinding needed.")
+
+    cir.setVariable("tnominal", Value(27))
+    cir.setVariable("fixed", Value(1))
+
+    print("\nBefore elaboration")
+    state()
+    assert cir.elaborate([], "__topdef__", "__topinst__", status=s)
+    print("\nAfter elaboration")
+    state()
+    
+    cir.setOption("reltol", Value(1e-6))
+    cir.setVariable("tnominal", Value(40))
+    cir.setInstanceParameter("v1", "dc", Value(20))
+
+    partialElaborate()
+
+    print("After first partial elaboration")
+    state()
+
+    cir.setVariable("fixed", Value(0))
+    partialElaborate()
+
+    print("After second partial elaboration")
+    state()
+
+    cir.setVariable("tnominal", Value(27))
+    partialElaborate()
+
+    print("After third partial elaboration")
+    state()
+
+    dc1Desc = PTAnalysis("dc1", "op")
+    dc1Desc.add(
+        PTSweep("tnom").add(
+            PV("variable", "tnominal")).add(
+            PV("from", 0)).add(
+            PV("to", 100)).add(
+            PV("step", 2))
+    )
+    dc1 = Analysis.create(dc1Desc, cir, s)
+    assert dc1
+    ok, canResume = dc1.run(s)
+    assert ok
+    print(f"DC1 analysis OK. Can resume: {'true' if canResume else 'false'}\n" if ok else "DC1 analysis failed")
+    dc1 = rawread('dc1.raw').get()
+    fig1, ax1 = plt.subplots(1, 1, figsize=(6,4), dpi=100, constrained_layout=True)
+    fig1.axes[0].plot(dc1["tnom"], dc1["2"], "r", marker=".")
+    fig1.savefig("d5dc1.jpg")

@@ -37,6 +37,13 @@ void InitCircuitModule(py::module &m) {
                     return py::cast(*v);
                 return py::none();
             })
+        .def("getVariable",
+            [](const sim::Circuit& c, std::string name) -> py::object {
+                auto* v = c.getVariable(sim::Id(name));
+                if (v)
+                    return py::cast(*v);
+                return py::none();
+            })
         .def("setVariable",
             [](sim::Circuit& c, sim::Id name, const sim::Value& v) {
                 return c.setVariable(name, v);
@@ -88,6 +95,12 @@ void InitCircuitModule(py::module &m) {
             py::arg("dev_req") = nullptr,
             py::arg("status") 
         )
+        .def("elaborateChanges",
+            [](sim::Circuit &self, sim::Status& s) {
+                return self.elaborateChanges(nullptr, s);
+            },
+            py::arg("status")
+        )
         .def("dumpDevices",                                   
             [](const sim::Circuit& self, int indent) {
                 self.dumpDevices(indent, std::cout);
@@ -132,8 +145,20 @@ void InitCircuitModule(py::module &m) {
             [](const sim::Circuit& self, int indent) {
                 self.dumpDeviceCounts(indent, std::cout);
             },
-            py::arg("indent"));
-
+            py::arg("indent"))
+        .def("instanceParameter",
+            [](sim::Circuit& c, std::string name, std::string param) {
+                sim::Status s;
+                return c.instanceParameter(sim::Id(name), sim::Id(param), s);
+            },
+            py::arg("name"), py::arg("param")
+        )
+        .def("setInstanceParameter",
+            [](sim::Circuit& c, std::string name, std::string param, const sim::Value& v) {
+                sim::Status s;
+                return c.setInstanceParameter(sim::Id(name), sim::Id(param), v, s);
+            }
+        );
 
     py::class_<sim::SourceCompiler>(m, "SourceCompiler");
 }
