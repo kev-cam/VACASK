@@ -21,4 +21,4 @@ m=1
 value='C'
 footprint=1206
 device="ceramic capacitor"}
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/ainv.sym} 240 -160 0 0 {name=x1}
+C {ainv.sym} 240 -160 0 0 {name=x1}

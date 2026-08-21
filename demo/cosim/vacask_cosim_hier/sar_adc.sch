@@ -67,17 +67,17 @@ C {lab_pin.sym} 360 -940 0 0 {name=p20 lab=VREF}
 C {lab_pin.sym} 360 -920 0 0 {name=p21 lab=D[5]}
 C {lab_pin.sym} 840 -70 0 0 {name=p34 lab=COMP}
 C {lab_pin.sym} 900 -70 0 1 {name=p35 lab=COMP_A}
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/tgate.sym} 120 -540 0 0 {name=x1}
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/ccap.sym} 420 -360 0 0 {name=x2 C=1p/32}
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/ccap.sym} 420 -480 0 0 {name=x3 C=1p/16}
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/ccap.sym} 420 -590 0 0 {name=x4 C=1p/8}
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/ccap.sym} 420 -710 0 0 {name=x5 C=1p/4}
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/ccap.sym} 420 -820 0 0 {name=x6 C=1p/2}
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/ccap.sym} 420 -940 0 0 {name=x7 C=1p}
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/sar_adc_vlog.sym} 990 -440 0 0 {name=x8}
+C {tgate.sym} 120 -540 0 0 {name=x1}
+C {ccap.sym} 420 -360 0 0 {name=x2 C=1p/32}
+C {ccap.sym} 420 -480 0 0 {name=x3 C=1p/16}
+C {ccap.sym} 420 -590 0 0 {name=x4 C=1p/8}
+C {ccap.sym} 420 -710 0 0 {name=x5 C=1p/4}
+C {ccap.sym} 420 -820 0 0 {name=x6 C=1p/2}
+C {ccap.sym} 420 -940 0 0 {name=x7 C=1p}
+C {sar_adc_vlog.sym} 990 -440 0 0 {name=x8}
 C {lab_pin.sym} 840 -160 0 0 {name=p27 lab=TEST_V}
 C {lab_pin.sym} 900 -180 0 1 {name=p28 lab=COMP}
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/dac_bridge.sym} 840 -70 0 0 {name=DAC}
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/acomp.sym} 840 -180 0 0 {name=x9}
+C {dac_bridge.sym} 840 -70 0 0 {name=DAC}
+C {acomp.sym} 840 -180 0 0 {name=x9}
 C {vsource.sym} 600 -110 0 0 {name=V1 value="dc=0.9" savecurrent=false}
 C {lab_pin.sym} 600 -80 0 0 {name=p23 lab=0}

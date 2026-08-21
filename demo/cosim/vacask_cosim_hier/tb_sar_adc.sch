@@ -194,8 +194,8 @@ C {vsource.sym} 50 -240 0 0 {name=V3 value="dc=1.8" savecurrent=false}
 C {vsource.sym} -30 -240 0 1 {name=V2 value="type=\\"pulse\\" val0=0 val1=1.7 delay=0 rise=200u fall=200u width=1u period=402u" savecurrent=false}
 C {vsource.sym} 280 -240 0 0 {name=V1 value="type=\\"pulse\\" val0=0 val1=VCC delay=0.2u rise=10n fall=10n width=1.3u period=10u" savecurrent=false}
 C {vsource.sym} 40 -90 0 0 {name=V4 value="type=\\"pulse\\" val0=0 val1='VCC' delay=500n rise=10n fall=10n width=490n period=1u" savecurrent=false}
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/sar_adc.sym} 450 -380 0 0 {name=x1}
-C {/home/alberto/Scaricati/ngspice_verilog_cosim/vacask_cosim_hier/final_folder/dac_bridge.sym} 300 -160 0 0 {name=x2}
+C {sar_adc.sym} 450 -380 0 0 {name=x1}
+C {dac_bridge.sym} 300 -160 0 0 {name=x2}
 C {res.sym} 1330 -50 0 0 {name=R1
 value=1G
 footprint=1206
