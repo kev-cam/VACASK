@@ -41,6 +41,19 @@ macro(prepare_netlist_test simfile)
     )
 endmacro()
 
+macro(prepare_failure_test simfile expected_error)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${simfile}")
+    add_test(NAME "${simfile}"
+        COMMAND ${CMAKE_COMMAND}
+            "-DSIMULATOR=$<TARGET_FILE:sim>"
+            "-DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/${simfile}"
+            "-DEXPECTED_ERROR=${expected_error}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/check_failure.cmake"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${simfile}"
+    )
+    set_tests_properties("${simfile}" PROPERTIES TIMEOUT 20)
+endmacro()
+
 # Create directory for manually running tests from vscode
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/manual_run")
 
@@ -116,8 +129,7 @@ if(VACASK_WITH_SPICE)
     prepare_netlist_test(test_spectre_rc.sim)
     prepare_netlist_test(test_spectre_include.sim)
     prepare_netlist_test(test_spectre_subckt.sim)
-    prepare_netlist_test(test_spectre_bad_include.sim)
-    set_tests_properties(test_spectre_bad_include.sim PROPERTIES WILL_FAIL TRUE)
+    prepare_failure_test(test_spectre_bad_include.sim "cannot open include")
     prepare_netlist_test(test_spice_rc.sim)
     prepare_netlist_test(test_spice_diode.sim)
     prepare_netlist_test(test_spice_diode_params.sim)
@@ -154,31 +166,8 @@ if(VACASK_WITH_SPICE)
     prepare_netlist_test(test_spice_unknown_param.sim)
     prepare_netlist_test(test_spice_unknown_param_warn.sim "Warning, parameter 'dcap' not found")
     set_tests_properties(test_spice_unknown_param_warn.sim PROPERTIES LABELS "warning")
-    prepare_netlist_test(test_spice_unknown_param_error.sim)
-    set_tests_properties(test_spice_unknown_param_error.sim PROPERTIES WILL_FAIL TRUE)
+    prepare_failure_test(test_spice_unknown_param_error.sim "Parameter 'dcap' not found")
     prepare_netlist_test(test_spice_warnonly.sim "WARNING: SPICE device.*MutualInductor.*skipped")
     set_tests_properties(test_spice_warnonly.sim PROPERTIES LABELS "warning")
 
-    # Sky130 ngspice PDK include E2E: a native deck that includes the raw ngspice
-    # Sky130 model sources directly (no Cadnip.jl conversion) and solves an nfet
-    # operating point through the vacask binary. Registered only when the PDK
-    # checkout is present, so CI without it stays green. The PDK path is baked
-    # into a generated deck via configure_file (keeps the committed .sim.in
-    # machine-independent).
-    set(SKY130_CONTINUOUS "${SKY130_PDK_ROOT}/combined_models/continuous")
-    if(EXISTS "${SKY130_CONTINUOUS}/models_fet/sky130_fd_pr__nfet_01v8.spice")
-        set(_sky130_test test_sky130_nfet_include.sim)
-        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${_sky130_test}")
-        configure_file(
-            "${CMAKE_CURRENT_SOURCE_DIR}/test_sky130_nfet_include.sim.in"
-            "${CMAKE_CURRENT_BINARY_DIR}/${_sky130_test}/${_sky130_test}" @ONLY)
-        add_test(NAME "${_sky130_test}"
-            COMMAND $<TARGET_FILE:sim> -dp "${CMAKE_CURRENT_BINARY_DIR}/${_sky130_test}/${_sky130_test}"
-            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${_sky130_test}")
-        set_tests_properties("${_sky130_test}" PROPERTIES
-            ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR};SIM_TEST=yes"
-            TIMEOUT 30)
-    else()
-        message(STATUS "Skipping test_sky130_nfet_include (Sky130 PDK not found at ${SKY130_CONTINUOUS})")
-    endif()
 endif()

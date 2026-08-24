@@ -16,69 +16,25 @@ namespace sim {
 
 namespace {
 
-// Convert rust::String to std::string.
-std::string sv(const rust::String& s) { return std::string(s); }
+std::string toString(const rust::String& s) { return std::string(s); }
 
-// SPICE is case-insensitive, but VACASK interns every identifier into a
-// case-sensitive Id (exact strcmp) keyed in unordered_map<Id,…>. To make
-// SPICE-origin names bind, canonicalize them to lowercase here — the netlistrs
-// adapter is the one place that knows the content came from a SPICE block.
-// This matches VACASK's own OSDI loader (which lowercases device/parameter/
-// terminal storage keys) and its lowercase builtin functions (agauss, gauss,
-// sin, …). Spectre-origin names (makeInstance/makeModel/fillSubDef) are left
-// verbatim: Spectre is case-sensitive by contract.
-//
-// Whole-string lowercasing of a param/expression string is safe because SPICE
-// is case-insensitive throughout — no identifier loses meaning, and PDK model/
-// param expressions carry no case-significant string literals. Filesystem
-// include paths are NOT run through this (they stay case-sensitive).
-//
-// Caveat: builtin *constants* (M_PI, P_Q, …) are registered uppercase, so a
-// SPICE expression referencing one by name would not resolve after lowercasing.
-// Not observed in PDK expressions; add lowercase aliases in context.cpp if it
-// ever occurs.
-std::string lc(std::string s) {
+// VACASK identifiers are case-sensitive, so canonicalize SPICE-origin names
+// and expressions here. Spectre names and filesystem paths remain verbatim.
+std::string lowercase(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(),
                    [](unsigned char c) { return std::tolower(c); });
     return s;
 }
 
-// Lowercased Id / node list for SPICE-origin identifiers.
-Id spiceId(const std::string& s) { return Id(lc(s).c_str()); }
+Id spiceId(const std::string& s) { return Id(lowercase(s).c_str()); }
 
-// C2: ngspice keeps `.model` and `.subckt` in separate name scopes, so one name
-// may denote both. VACASK interns them into a single Circuit::modelMap (a model
-// and a subcircuit are both things an instance can name), so such a PDK aborts
-// the load with "A model/subcircuit with name '…' already exists" — Sky130's tt
-// corner trips it nine times (`short` plus eight `sky130_fd_pr__diode_*`).
-//
-// Resolve it in the adapter, which is the only layer that still knows whether a
-// name came from a `.model` card or a `.subckt`: prefix every `.model`-origin
-// name — definition and reference alike — with "m_", the convention the
-// Cadnip.jl converter already established (:model_prefix => "m_",
-// :ckt_prefix => ""). Unconditional rather than collision-driven, so `.model
-// foo` is always `m_foo` and never contingent on what some other file defines.
-//
-// Scope: names originating from a `.model` card only. Subcircuit names and
-// X-call references stay bare, and so do the VACASK master names
-// ensureSpiceModel synthesizes (sp_resistor, vsource, …) — those are master
-// names, not PDK identifiers.
-//
-// Cost: the prefixed name is what `print device(…)` and any save/print written
-// against a model name see — uniformly, and matching what Cadnip users already
-// see today.
-std::string spiceModelName(const std::string& s) { return "m_" + lc(s); }
+// ngspice gives models and subcircuits separate namespaces; VACASK does not.
+// Prefix only `.model` names and references to prevent collisions.
+std::string spiceModelName(const std::string& s) { return "m_" + lowercase(s); }
 Id spiceModelId(const std::string& s) { return Id(spiceModelName(s).c_str()); }
 
-// Strip ngspice expression quoting (`{expr}` braces, `'expr'` quotes) and
-// collapse SPICE continuation markers (`\n+`) from parameter values.
-//
-// Double quotes are stripped only *inside* `{ }` (expression context): some
-// ngspice model cards wrap an expression in both, e.g. Sky130's
-// `dw = {"-sw_activecd-nfom_dw/2"}`, and the inner quotes would otherwise reach
-// VACASK as a string literal for a real-valued OSDI parameter ("cannot convert
-// string into real"). Quotes *outside* braces are kept: they mark genuine
-// string parameters such as `type="pulse"` or a BSIM `version="4.8.3"`.
+// Preserve double-quoted string parameters, but remove double quotes inside
+// expression braces because VACASK would otherwise parse a real as a string.
 std::string stripExprQuoting(const std::string& v) {
     std::string out;
     out.reserve(v.size());
@@ -103,56 +59,9 @@ std::string stripExprQuoting(const std::string& v) {
     return out;
 }
 
-// Rewrite ngspice-only spellings in a SPICE expression into VACASK's expression
-// language. The input has already been unquoted by the caller but may still be
-// mixed-case, so identifiers are matched case-insensitively.
-//
-//   temper → $temp    ngspice's simulation temperature (°C). VACASK's $temp is
-//                     the same quantity in the same units, backed by option
-//                     `temp` and re-evaluated whenever that option changes
-//                     (docs/expr-special.md), and available in every parameter
-//                     expression — including inside a `.subckt`, where an
-//                     enclosing `.param` would not be in scope. Sky130 writes
-//                     `temper` in the 20 V FETs' tempco `.param`s and in
-//                     res_iso_pw's behavioral resistance.
-//
-//   pwr(x,y)          ngspice's power function, which means *two different
-//                     things* depending on where it is written, so it is
-//                     rewritten differently in the two cases:
-//                       .param/.model  pow(fabs(z), x)  (numparam,
-//                                      frontend/numparam/xpressn.c XFU_PWR)
-//                                      → pow(abs(x), y)
-//                       behavioral     x<0 ? -pow(-x,y) : pow(x,y)
-//                                      (PTpwr, spicelib/parser/ptfuncs.c),
-//                                      i.e. signum(x)*|x|**y, with zero
-//                                      counting as positive
-//                                      → sgn(x)*pow(abs(x), y)
-//                     VACASK's sgn() is (x>=0) ? 1 : -1, which is PTpwr's
-//                     convention exactly. Both forms evaluate x twice; it is
-//                     side-effect free, so that is only extra text.
-//                     ngspice has no native `pwrs` — it exists solely as a
-//                     PSPICE-compatibility .func (frontend/inpcompat.c), a
-//                     mode this adapter does not implement — so `pwrs` is left
-//                     alone and fails as an unknown function, as it does in
-//                     ngspice itself.
-//
-// `behavioral` adds the two rewrites that only make sense inside a behavioral
-// source expression:
-//
-//   ^     → **        ngspice B-sources spell exponentiation '^'. In VACASK
-//                     '^' is bitwise XOR, which has no Verilog-A equivalent,
-//                     so leaving it would fail the behavioral translation
-//                     rather than miscompute — but the right answer is known,
-//                     so rewrite it. ngspice's '**' needs no change.
-//   time  → $abstime  ngspice's transient-time variable. VACASK's $abstime is
-//                     available *only* inside behavioral source expressions,
-//                     which is exactly where such an expression ends up.
-//
-// Identifiers inside a v(...)/i(...) argument list name circuit nodes and
-// instances rather than variables, so they are copied verbatim. Whole
-// identifiers are matched, so `temperature`, `mytemper` and `timestep` survive.
-//
-// `hertz` has no VACASK equivalent at all.
+// Rewrite ngspice expression semantics that differ from VACASK. In behavioral
+// expressions pwr(x,y) preserves the sign of x; in parameters and models it
+// uses abs(x). Probe arguments name nodes or instances and remain verbatim.
 std::string spiceExpr(const std::string& in, bool behavioral) {
     auto identChar = [](unsigned char c) {
         return std::isalnum(c) || c == '_' || c == '$';
@@ -181,7 +90,7 @@ std::string spiceExpr(const std::string& in, bool behavioral) {
             size_t j = i;
             while (j < in.size() && identChar(static_cast<unsigned char>(in[j]))) ++j;
             std::string ident = in.substr(i, j - i);
-            std::string lower = lc(ident);
+            std::string lower = lowercase(ident);
             size_t k = j;
             while (k < in.size() && std::isspace(static_cast<unsigned char>(in[k]))) ++k;
             bool isCall = (k < in.size() && in[k] == '(');
@@ -254,28 +163,19 @@ std::string spiceExpr(const std::string& in, bool behavioral) {
     return out;
 }
 
-// A SPICE-origin parameter value: unquoted, then run through the expression
-// rewrite above. Every value the SPICE adapter reads goes through here; native
-// and Spectre-origin values keep using stripExprQuoting() alone.
-//
-// A value destined for a behavioral source must be read with `behavioral` set
-// and read only once: the two rewrites of pwr() differ, and the first one
-// consumes the call, so running the ordinary rewrite first would silently pin
-// the .param meaning onto a behavioral expression.
+// Behavioral pwr() has different semantics, so callers must select that rewrite
+// before the call is consumed.
 std::string spiceValue(const rust::String& v, bool behavioral = false) {
-    return spiceExpr(stripExprQuoting(sv(v)), behavioral);
+    return spiceExpr(stripExprQuoting(toString(v)), behavioral);
 }
 
-// "name=value name2=value2 …" from a list of Param, or "" if none.
-// `spiceValues` runs each value through the SPICE expression rewrite; leave it
-// false for native/Spectre-origin parameters.
 std::string paramString(const rust::Vec<netlist::Param>& params, bool spiceValues = false) {
     std::ostringstream os;
     bool first = true;
     for (const auto& p : params) {
         if (!first) os << " ";
-        os << sv(p.name) << "="
-           << (spiceValues ? spiceValue(p.value) : stripExprQuoting(sv(p.value)));
+        os << toString(p.name) << "="
+           << (spiceValues ? spiceValue(p.value) : stripExprQuoting(toString(p.value)));
         first = false;
     }
     return os.str();
@@ -283,39 +183,37 @@ std::string paramString(const rust::Vec<netlist::Param>& params, bool spiceValue
 
 PTIdentifierList nodeList(const rust::Vec<rust::String>& nodes) {
     PTIdentifierList terms;
-    for (const auto& n : nodes) terms.push_back(PTParsedIdentifier(sv(n).c_str()));
+    for (const auto& n : nodes) terms.push_back(PTParsedIdentifier(toString(n).c_str()));
     return terms;
 }
 
-// SPICE-origin node list: lowercased (see lc above).
 PTIdentifierList spiceNodeList(const rust::Vec<rust::String>& nodes) {
     PTIdentifierList terms;
-    for (const auto& n : nodes) terms.push_back(PTParsedIdentifier(lc(sv(n)).c_str()));
+    for (const auto& n : nodes) terms.push_back(PTParsedIdentifier(lowercase(toString(n)).c_str()));
     return terms;
 }
 
 PTInstance makeInstance(const netlist::Instance& i, Parser& p) {
-    PTInstance inst(Id(sv(i.name).c_str()), Id(sv(i.master).c_str()), nodeList(i.nodes));
+    PTInstance inst(Id(toString(i.name).c_str()), Id(toString(i.master).c_str()), nodeList(i.nodes));
     auto ps = paramString(i.params);
     if (!ps.empty()) inst.add(p.parseParameters(ps));
     return inst;
 }
 
 PTModel makeModel(const netlist::Model& m, Parser& p) {
-    PTModel mod(Id(sv(m.name).c_str()), Id(sv(m.master).c_str()));
+    PTModel mod(Id(toString(m.name).c_str()), Id(toString(m.master).c_str()));
     auto ps = paramString(m.params);
     if (!ps.empty()) mod.add(p.parseParameters(ps));
     return mod;
 }
 
-// if/else-if/else over instances → one PTBlockSequence.
 PTBlockSequence makeConditional(const netlist::Conditional& c, Parser& p) {
     PTBlockSequence seq;
     for (const auto& cl : c.clauses) {
         PTBlock block;
         block.add(makeInstance(cl.instance, p));
-        // Trailing else has empty condition → use trivially-true expression (1).
-        std::string cond = cl.condition.empty() ? std::string("1") : sv(cl.condition);
+        // An empty condition is the trailing else clause.
+        std::string cond = cl.condition.empty() ? std::string("1") : toString(cl.condition);
         seq.add(p.parseExpression(cond), std::move(block));
     }
     return seq;
@@ -326,10 +224,9 @@ using IncludeSet = std::set<IncludeKey>;
 
 static IncludeKey includeKey(const std::filesystem::path& path,
                              const rust::String& section) {
-    return {path, lc(sv(section))};
+    return {path, lowercase(toString(section))};
 }
 
-// Forward declarations for mutual recursion: fillSubDef ↔ spiceBlockToTables ↔ mergeNetlist.
 static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefinition& into,
                                ParserTables& tab, Parser& p,
                                Status& s,
@@ -338,8 +235,6 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
                                bool projectAnalyses = true,
                                const std::string& language = "");
 
-// Fill a PTSubcircuitDefinition from a netlist::Subckt (has conditionals + ports).
-// Returns false (with `st` set) on any error in nested SPICE-block processing.
 static bool fillSubDef(PTSubcircuitDefinition& def, const netlist::Subckt& s, Parser& p,
                        ParserTables& tab, Status& st,
                        const std::filesystem::path& baseDir,
@@ -350,25 +245,22 @@ static bool fillSubDef(PTSubcircuitDefinition& def, const netlist::Subckt& s, Pa
     for (const auto& i : s.instances)    def.add(makeInstance(i, p));
     for (const auto& c : s.conditionals) def.add(makeConditional(c, p));
     for (const auto& sub : s.subckts) {
-        PTSubcircuitDefinition child(Id(sv(sub.name).c_str()), nodeList(sub.ports));
+        PTSubcircuitDefinition child(Id(toString(sub.name).c_str()), nodeList(sub.ports));
         if (!fillSubDef(child, sub, p, tab, st, baseDir, visited)) return false;
         def.add(std::move(child));
     }
-    // Process any SPICE blocks nested inside this Spectre subckt body (Fix 1).
     for (const auto& sb : s.spice_blocks) {
         if (!spiceBlockToTables(sb, def, tab, p, st, baseDir, visited)) return false;
     }
     return true;
 }
 
-// Build a "name=value …" param string excluding a set of keys (case-insensitive).
-// Used to strip dispatch-only keys like "level" before passing params to OSDI.
 static std::string paramStringExcluding(const rust::Vec<netlist::Param>& params,
                                         const std::initializer_list<std::string>& exclude) {
     std::ostringstream os;
     bool first = true;
     for (const auto& p : params) {
-        std::string key = sv(p.name);
+        std::string key = toString(p.name);
         std::string keylower = key;
         std::transform(keylower.begin(), keylower.end(), keylower.begin(), ::tolower);
         bool skip = false;
@@ -381,23 +273,18 @@ static std::string paramStringExcluding(const rust::Vec<netlist::Param>& params,
     return os.str();
 }
 
-// True if any parameter name (case-insensitive) matches one of `keys`.
 static bool spiceParamsHaveAny(const rust::Vec<netlist::Param>& params,
                                const std::initializer_list<std::string>& keys) {
     for (const auto& p : params) {
-        std::string key = sv(p.name);
+        std::string key = toString(p.name);
         std::transform(key.begin(), key.end(), key.begin(), ::tolower);
         for (const auto& k : keys) if (key == k) return true;
     }
     return false;
 }
 
-// spiceExpr()'s `temper` rewrite is unconditional: making it defer to a deck
-// that declares its own `temper` would mean threading the set of names in scope
-// through every param-string builder below. A declaration is therefore inert
-// for the expressions that reference it, which is worth saying out loud rather
-// than silently substituting the simulator temperature. `where` names the scope
-// that declares it.
+// `temper` always means simulation temperature in translated expressions, so a
+// same-named user parameter cannot affect them.
 static void warnIfTemperDeclared(const rust::Vec<netlist::Param>& params,
                                  const std::string& where) {
     if (!spiceParamsHaveAny(params, {"temper"})) return;
@@ -406,68 +293,24 @@ static void warnIfTemperDeclared(const rust::Vec<netlist::Param>& params,
                      << " translated to $temp, so the declaration has no effect\n";
 }
 
-// C3: ngspice's `m` multiplier -> VACASK's `$mfactor`.
-//
-// ngspice implements the subcircuit multiplier as a source-to-source rewrite
-// (inp_fix_subckt_multiplier, inpcom.c:4118): an X-line carrying `m=` makes
-// ngspice append `m=1` to the called `.subckt` and `m={m}` to every device
-// line inside it. This adapter does the same against `$mfactor`, which VACASK
-// documents as the per-instance parallel multiplier and which a subcircuit
-// must declare and forward to its contents by hand (docs/cir-mfactor.md). The
-// adapter writes that forwarding so a SPICE deck does not have to.
-//
-// Two deliberate departures from ngspice:
-//
-//  - Unconditional. ngspice rewrites only a `.subckt` that some X-line
-//    actually multiplies. Sky130 calls its parasitic subcircuits from a
-//    different file than the one defining them and this adapter resolves
-//    includes lazily, so "is this subcircuit ever multiplied?" is not knowable
-//    when the call site is translated. A `$mfactor` that stays 1 costs one
-//    instance parameter and nothing else.
-//  - An X-line's `m=` always becomes the multiplier, even when the called
-//    subcircuit declares a parameter of its own named `m`. ngspice hands the
-//    value down as that parameter instead and does not multiply. Both land on
-//    the same answer for the shape this occurs in — Sky130's 20 V FETs, which
-//    declare `m=1` and forward it by hand to their devices, where our
-//    multiplier reaches the same devices by the other route. They differ only
-//    if a subcircuit uses `m` for something that is not device multiplicity.
+// SPICE subcircuit `m` is forwarded as VACASK's parallel `$mfactor`. Declare it
+// unconditionally because includes are resolved before all call sites are known.
 static constexpr const char* kMfactorParam = "$mfactor";
 
-// Map SPICE model_type + level to a VACASK OSDI master name.
-// Returns "" if there is no known VACASK master for the given type.
-// Emits a warning if the level is unknown for the model type and falls back
-// to the nearest available master.
 static std::string spiceModelMaster(const std::string& model_type_raw,
                                     const std::string& level_str,
                                     const std::string& version) {
     std::string mt = model_type_raw;
     std::transform(mt.begin(), mt.end(), mt.begin(), ::tolower);
 
-    // Diode: d -> the ngspice sp_diode master (spice/diode.osdi), always.
-    // An ngspice `.model … D` card is an ngspice diode, so it gets the master
-    // that implements ngspice's parameter set (84 params: ikf/isr/nr/js/jsw/
-    // cj/cjsw/tlevc/gap/…). The native `diode` master (diode.osdi) declares
-    // only 18 and is reachable from native `.sim` decks; it is not a SPICE
-    // dispatch target. `level` on the card is not a master selector here — it
-    // is a real sp_diode model parameter (junction-cap selector) and is
-    // re-appended as such by addSpiceModelCardNamed.
+    // SPICE diode parameters require sp_diode; `level` remains a model parameter.
     if (mt == "d") return "sp_diode";
 
-    // MOSFET: nmos/pmos by level
     if (mt == "nmos" || mt == "pmos") {
         int level = 0;
         try { level = std::stoi(level_str); } catch (...) {}
 
-        // Dispatch table: level -> OSDI master name
-        // (uses filenames without .osdi suffix; VA module names are the master)
-        // bsim3v3.osdi        -> module bsim3      (bsim3v3 3.3, accepts level 49-53)
-        // bsim4v8.osdi        -> module bsim4      (Cogenda BSIM4 4.8)
-        // spice/bsim4v8.osdi  -> module sp_bsim4v8 (ngspice-flavored BSIM4 4.8.x;
-        //                        explicit version selectors, including Sky130's
-        //                        older selectors, stay on this compatibility path)
-        // bsimbulk106.osdi    -> module bsimbulk   (has thermal port; 5 terminals)
-        // psp103v4.osdi       -> module psp103va   (accepts level 103)
-        // Default (levels 1/2/3/49/53 or unknown) -> bsim3
+        // An explicit BSIM4 version selects the ngspice-compatible master.
         if (level == 54)               return version.empty() ? "bsim4" : "sp_bsim4v8";
         if (level == 70 || level == 72) {
             Simulator::err() << "WARNING: MOSFET level=" << level
@@ -475,7 +318,6 @@ static std::string spiceModelMaster(const std::string& model_type_raw,
             return "bsimbulk";
         }
         if (level == 103)              return "psp103va";
-        // Levels 1,2,3,49,53 -> bsim3 (canonical BSIM3v3 range)
         if (level != 0 && level != 1 && level != 2 && level != 3 &&
             level != 49 && level != 53) {
             Simulator::err() << "WARNING: MOSFET level=" << level
@@ -484,13 +326,7 @@ static std::string spiceModelMaster(const std::string& model_type_raw,
         return "bsim3";
     }
 
-    // BJT: npn/pnp by level, mirroring ngspice's inpdomod.c:46-79.
-    //   0/1/2 -> sp_bjt  (Gummel-Poon, spice/bjt.osdi, module sp_bjt(c,b,e,sub))
-    //   4/9   -> vbic13  (vbic_1p3.osdi, module vbic13(c,b,e); the 4-terminal
-    //            vbic13_4t variant for cards with a substrate node is deferred)
-    //   8     -> HICUM2, which VACASK does not ship
-    // An absent `level=` means level 1 in ngspice, i.e. Gummel-Poon — so an
-    // ordinary unlevelled `.model … NPN` card is an sp_bjt, not a VBIC.
+    // An absent BJT level means Gummel-Poon; levels 4 and 9 select VBIC.
     if (mt == "npn" || mt == "pnp") {
         int level = 0;
         try { level = std::stoi(level_str); } catch (...) {}
@@ -505,18 +341,9 @@ static std::string spiceModelMaster(const std::string& model_type_raw,
         return "sp_bjt";
     }
 
-    // Semiconductor resistor: .model <name> R ... (ngspice). Maps to the
-    // ngspice-flavour sp_resistor master (spice/resistor.osdi), which supports
-    // tc1/tc2/tnom and instance-level r/w/l — unlike the generic 'resistor'
-    // master (r/noisy only). Physical resistor subcircuits (e.g. Sky130
-    // sky130_fd_pr__res_*) reference these model cards from R instances.
+    // SPICE semiconductor models need parameters absent from generic masters.
     if (mt == "r" || mt == "res") return "sp_resistor";
 
-    // Semiconductor capacitor: .model <name> C ... (ngspice). Maps to the
-    // ngspice-flavour sp_capacitor master (spice/capacitor.osdi), which supports
-    // cox/capsw (aliases of cj/cjsw), w/l, tc1/tc2, tnom — unlike the generic
-    // 'capacitor' master (c only). Sky130 MiM/junction cap subcircuits reference
-    // these model cards from C instances.
     if (mt == "c" || mt == "cap") return "sp_capacitor";
 
     Simulator::err() << "WARNING: SPICE model_type '" << model_type_raw
@@ -524,13 +351,12 @@ static std::string spiceModelMaster(const std::string& model_type_raw,
     return "";
 }
 
-// Build a "name=value …" param string excluding a set of keys (case-insensitive).
 static std::string paramStringExcludingSet(const rust::Vec<netlist::Param>& params,
                                            const std::set<std::string>& exclude) {
     std::ostringstream os;
     bool first = true;
     for (const auto& p : params) {
-        std::string key = sv(p.name);
+        std::string key = toString(p.name);
         std::string keylower = key;
         std::transform(keylower.begin(), keylower.end(), keylower.begin(), ::tolower);
         if (exclude.count(keylower)) continue;
@@ -541,21 +367,17 @@ static std::string paramStringExcludingSet(const rust::Vec<netlist::Param>& para
     return os.str();
 }
 
-// Value of the first parameter whose name matches `key` (case-insensitive),
-// brace/quote-stripped; "" if absent.
 static std::string spiceParamValue(const rust::Vec<netlist::Param>& params,
                                    const std::string& key, bool behavioral = false) {
     for (const auto& p : params) {
-        std::string k = sv(p.name);
+        std::string k = toString(p.name);
         std::transform(k.begin(), k.end(), k.begin(), ::tolower);
         if (k == key) return spiceValue(p.value, behavioral);
     }
     return "";
 }
 
-// sp_bsim4v8 implements these string-valued revision selectors. Return a
-// quoted value suitable for its OSDI parameter, or "" for an unsupported
-// selector (Sky130's 4.5/4.62 cards intentionally retain the 4.8.3 default).
+// Quote supported revisions for the string-valued OSDI parameter.
 static std::string spiceBsim4Version(const std::string& value) {
     std::string v = value;
     if (v.size() >= 2 && v.front() == '"' && v.back() == '"')
@@ -574,33 +396,25 @@ static bool isSky130Bsim4Version(const std::string& value) {
     return v == "4.5" || v == "4.62";
 }
 
-// The multiplier that applies to one SPICE device line (see kMfactorParam):
-// whatever the enclosing `.subckt` forwards (empty at the top level, which has
-// nothing to inherit) times the line's own `m=`, if it carries one. "" when
-// there is neither.
+// Combine the enclosing subcircuit multiplier with the device's own `m=`.
 static std::string spiceMfactorExpr(const std::string& inherited,
                                     const rust::Vec<netlist::Param>& params) {
-    std::string own = lc(spiceParamValue(params, "m"));
+    std::string own = lowercase(spiceParamValue(params, "m"));
     if (own.empty())       return inherited;
     if (inherited.empty()) return own;
     return "(" + inherited + ")*(" + own + ")";
 }
 
-// Build a PTModel from a SPICE `.model` card. Returns nullopt if there is no
-// known OSDI master (warning already emitted). `nameOverride` (if non-empty)
-// replaces the card name — used to collapse binned cards to their base name.
-// `extraExclude` names are dropped from the emitted params in addition to the
-// dispatch-only `level` — used to strip binning bounds lmin/lmax/wmin/wmax.
 static std::optional<PTModel> buildSpiceModelCard(const netlist::SpiceModel& m,
                                                   const std::string& nameOverride,
                                                   const std::set<std::string>& extraExclude,
                                                   Parser& p) {
-    std::string mt_raw = sv(m.model_type);
+    std::string mt_raw = toString(m.model_type);
     std::string version = spiceParamValue(m.params, "version");
-    std::string master = spiceModelMaster(mt_raw, sv(m.level), version);
+    std::string master = spiceModelMaster(mt_raw, toString(m.level), version);
     if (master.empty()) return std::nullopt;
 
-    std::string modelName = nameOverride.empty() ? sv(m.name) : nameOverride;
+    std::string modelName = nameOverride.empty() ? toString(m.name) : nameOverride;
     PTModel mod(spiceModelId(modelName), Id(master.c_str()));
 
     std::set<std::string> excl = extraExclude;
@@ -629,14 +443,14 @@ static std::optional<PTModel> buildSpiceModelCard(const netlist::SpiceModel& m,
     auto ps = paramStringExcludingSet(m.params, excl);
     // sp_diode has a real `level` model param (junction-cap selector); re-append.
     if (master == "sp_diode") {
-        std::string lvl = sv(m.level);
+        std::string lvl = toString(m.level);
         if (!lvl.empty()) ps += (ps.empty() ? "" : " ") + std::string("level=") + lvl;
     }
     if (!bsim4Version.empty())
         ps += (ps.empty() ? "" : " ") + std::string("version=") + bsim4Version;
     if (renameTref && !trefVal.empty())
         ps += (ps.empty() ? "" : " ") + std::string("tnom=") + trefVal;
-    if (!ps.empty()) mod.add(p.parseParameters(lc(ps)));
+    if (!ps.empty()) mod.add(p.parseParameters(lowercase(ps)));
 
     std::string mt = mt_raw;
     std::transform(mt.begin(), mt.end(), mt.begin(), ::tolower);
@@ -648,23 +462,13 @@ static std::optional<PTModel> buildSpiceModelCard(const netlist::SpiceModel& m,
     return mod;
 }
 
-// Project one SPICE `.model` card into a PTModel and add it to `into`.
 static void addSpiceModelCard(const netlist::SpiceModel& m,
                               PTSubcircuitDefinition& into, Parser& p) {
     auto mod = buildSpiceModelCard(m, "", {}, p);
     if (mod) into.add(std::move(*mod));
 }
 
-// Strip a trailing ".N" bin suffix; nullopt if the name carries none.
-// "nshort_model.7" -> "nshort_model", "nshortesd_model" -> nullopt.
-//
-// The suffix is what makes a card a bin, exactly as in ngspice: an M-line's
-// model reference is first looked up by exact name (inp2m.c:81), and only a
-// miss falls through to the binning search, which accepts a candidate whose
-// name is the reference plus a `.<digits>` extension (model_name_match,
-// string.c:1015). A card carrying lmin/lmax/wmin/wmax but no suffix is an
-// ordinary model card whose bounds are inert -- the shape all four Sky130 ESD
-// FETs have.
+// ngspice recognizes a bin only when the model name has a numeric suffix.
 static std::optional<std::string> binBaseName(const std::string& name) {
     auto pos = name.find_last_of('.');
     if (pos == std::string::npos || pos + 1 >= name.size()) return std::nullopt;
@@ -673,41 +477,32 @@ static std::optional<std::string> binBaseName(const std::string& name) {
     return name.substr(0, pos);
 }
 
-// True if the card takes part in binning: a ".N" name suffix plus all four
-// numeric bounds (ngspice skips a candidate whose line lacks any of them,
-// inpgmod.c:319).
+// A bin also requires all four geometry bounds.
 static bool isBinnedModel(const netlist::SpiceModel& m) {
-    return binBaseName(sv(m.name)).has_value()
+    return binBaseName(toString(m.name)).has_value()
         && !spiceParamValue(m.params, "lmin").empty()
         && !spiceParamValue(m.params, "lmax").empty()
         && !spiceParamValue(m.params, "wmin").empty()
         && !spiceParamValue(m.params, "wmax").empty();
 }
 
-// The l/w a bin guard has to be written against: the expressions the M-line
-// itself passes, defaulted to bare `l`/`w`.
 struct BinGeometry {
     std::string l = "l";
     std::string w = "w";
 };
 
-// Collect, per referenced model base name, the geometry of the first M-line
-// naming it. ngspice bins on the l/w of the *instance* (inpgmod.c:288-291), and
-// those need not be plain subcircuit parameters: Sky130's 20 V FETs pass
-// `l=hvnel_sky130_fd_pr__nfet_20v0`, a local .param, and never declare `l` at
-// all. Only the first M-line per model counts -- a second one with a different
-// geometry would need a distinct model per instance, which the @if-guarded
-// single definition cannot express.
+// Bin against instance L/W expressions. The projected conditional model can
+// represent only the first geometry used for each model name.
 static std::map<std::string, BinGeometry> collectBinGeometry(
         const rust::Vec<netlist::SpiceDevice>& devices) {
     std::map<std::string, BinGeometry> geom;
     for (const auto& dev : devices) {
         if (dev.kind != netlist::SpiceDeviceKind::Mosfet) continue;
-        std::string mdl = lc(sv(dev.model));
+        std::string mdl = lowercase(toString(dev.model));
         if (mdl.empty() || geom.count(mdl)) continue;
         BinGeometry g;
-        std::string l = lc(spiceParamValue(dev.params, "l"));
-        std::string w = lc(spiceParamValue(dev.params, "w"));
+        std::string l = lowercase(spiceParamValue(dev.params, "l"));
+        std::string w = lowercase(spiceParamValue(dev.params, "w"));
         if (!l.empty()) g.l = "(" + l + ")";
         if (!w.empty()) g.w = "(" + w + ")";
         geom[mdl] = g;
@@ -715,9 +510,7 @@ static std::map<std::string, BinGeometry> collectBinGeometry(
     return geom;
 }
 
-// Emit one bin group as an @if/@elseif PTBlockSequence. Each branch defines a
-// model under `baseName`, guarded by that bin's scaled L/W range. Bins are
-// sorted by (lmin, wmin); first matching branch wins. No @else fallback.
+// Sort bins because the first matching L/W range wins.
 static void emitBinnedModelGroup(std::vector<const netlist::SpiceModel*>& bins,
                                  const std::string& baseName,
                                  const BinGeometry& geom,
@@ -750,16 +543,13 @@ static void emitBinnedModelGroup(std::vector<const netlist::SpiceModel*>& bins,
     if (any) into.add(std::move(seq));
 }
 
-// Emit all `.model` cards for a block. Non-binned cards emit unchanged; binned
-// cards are grouped by base name (first-seen order) into @if chains, emitted
-// after the non-binned cards but before any instances (caller ordering).
 static void emitSpiceModels(const rust::Vec<netlist::SpiceModel>& models,
                             const rust::Vec<netlist::SpiceDevice>& devices,
                             PTSubcircuitDefinition& into, Parser& p) {
     std::vector<std::string> order;
     std::map<std::string, std::vector<const netlist::SpiceModel*>> groups;
     for (const auto& m : models) {
-        auto base = binBaseName(sv(m.name));
+        auto base = binBaseName(toString(m.name));
         if (isBinnedModel(m)) {
             if (!groups.count(*base)) order.push_back(*base);
             groups[*base].push_back(&m);
@@ -770,17 +560,13 @@ static void emitSpiceModels(const rust::Vec<netlist::SpiceModel>& models,
     if (order.empty()) return;
     auto geom = collectBinGeometry(devices);
     for (const auto& base : order) {
-        auto it = geom.find(lc(base));
+        auto it = geom.find(lowercase(base));
         emitBinnedModelGroup(groups[base], base,
                              it == geom.end() ? BinGeometry{} : it->second, into, p);
     }
 }
 
-// --- OSDI auto-load ---------------------------------------------------------
-// SPICE-flavored master name -> OSDI module file. Builtins (vsource/isource and
-// the controlled-source masters vcvs/vccs/cccs/ccvs) are intentionally absent:
-// they are built into VACASK and need no `load`. Subcircuit-call masters are
-// also absent (they resolve to subckt definitions, not OSDI modules).
+// Builtins and subcircuit masters require no OSDI load entry.
 static const std::map<std::string, std::string>& osdiFileForMaster() {
     static const std::map<std::string, std::string> t = {
         {"resistor",   "resistor.osdi"},       {"sp_resistor", "spice/resistor.osdi"},
@@ -795,8 +581,6 @@ static const std::map<std::string, std::string>& osdiFileForMaster() {
     return t;
 }
 
-// Collect every model/instance master referenced in a block, recursing into
-// @if/@elseif block sequences (where binned models live).
 static void collectMasters(const PTBlock& b, std::set<std::string>& out) {
     for (const auto& m : b.models())    out.insert(std::string(m.device()));
     for (const auto& i : b.instances()) out.insert(std::string(i.masterName()));
@@ -807,16 +591,12 @@ static void collectMasters(const PTBlock& b, std::set<std::string>& out) {
     }
 }
 
-// Collect masters across a subcircuit definition and all nested definitions.
 static void collectMastersDef(const PTSubcircuitDefinition& d, std::set<std::string>& out) {
     collectMasters(d.root(), out);
     for (const auto& sd : d.subDefs()) collectMastersDef(*sd, out);
 }
 
-// Emit a toplevel `load "<file>.osdi"` for each OSDI master referenced by `def`,
-// de-duplicated against loads already present in `tab`. Replaces callers'
-// previously hardcoded PTLoad lists: including a PDK auto-pulls exactly the OSDI
-// modules its devices need.
+// Load each referenced OSDI master once.
 static void emitOsdiLoads(ParserTables& tab, const PTSubcircuitDefinition& def) {
     std::set<std::string> masters;
     collectMastersDef(def, masters);
@@ -829,8 +609,6 @@ static void emitOsdiLoads(ParserTables& tab, const PTSubcircuitDefinition& def) 
     }
 }
 
-// Map SPICE source function args to VACASK named vsource/isource params.
-// Returns a param string such as: dc=5 type="pulse" val0=0 val1=5 delay=1m rise=1u ...
 static std::string spiceSourceParams(const netlist::SpiceSource& src) {
     std::ostringstream os;
     bool first = true;
@@ -846,24 +624,19 @@ static std::string spiceSourceParams(const netlist::SpiceSource& src) {
         return spiceValue(value);
     };
 
-    // DC value
-    if (!sv(src.dc).empty())        add("dc=" + expr(src.dc));
-    // AC small-signal
-    if (!sv(src.ac_mag).empty())    add("mag=" + expr(src.ac_mag));
-    if (!sv(src.ac_phase).empty())  add("phase=" + expr(src.ac_phase));
+    if (!toString(src.dc).empty())        add("dc=" + expr(src.dc));
+    if (!toString(src.ac_mag).empty())    add("mag=" + expr(src.ac_mag));
+    if (!toString(src.ac_phase).empty())  add("phase=" + expr(src.ac_phase));
 
-    // Transient function
-    std::string tk = sv(src.tran_kind);
+    std::string tk = toString(src.tran_kind);
     if (!tk.empty()) {
         std::string tklower = tk;
         std::transform(tklower.begin(), tklower.end(), tklower.begin(), ::tolower);
-        // SPICE "SIN" → VACASK "sine"
         std::string vaKind = (tklower == "sin") ? "sine" : tklower;
         add("type=\"" + vaKind + "\"");
 
         const auto& args = src.tran_args;
         if (vaKind == "pulse") {
-            // SPICE PULSE(v0 v1 td tr tf pw per) → val0 val1 delay rise fall width period
             static const char* names[] = {
                 "val0", "val1", "delay", "rise", "fall", "width", "period"
             };
@@ -872,7 +645,6 @@ static std::string spiceSourceParams(const netlist::SpiceSource& src) {
                 if (!v.empty()) add(std::string(names[i]) + "=" + v);
             }
         } else if (vaKind == "sine") {
-            // SPICE SIN(vo va freq td theta) → sinedc ampl freq delay theta
             static const char* names[] = {
                 "sinedc", "ampl", "freq", "delay", "theta"
             };
@@ -881,7 +653,6 @@ static std::string spiceSourceParams(const netlist::SpiceSource& src) {
                 if (!v.empty()) add(std::string(names[i]) + "=" + v);
             }
         } else if (vaKind == "pwl") {
-            // SPICE PWL(t0 v0 t1 v1 ...) → wave=[t0 v0 t1 v1 ...]
             if (!args.empty()) {
                 if (!first) os << " ";
                 os << "wave=[";
@@ -893,7 +664,6 @@ static std::string spiceSourceParams(const netlist::SpiceSource& src) {
                 first = false;
             }
         } else if (vaKind == "exp") {
-            // SPICE EXP(v1 v2 td1 tau1 td2 tau2) → val0 val1 delay tau1 td2 tau2
             static const char* names[] = {
                 "val0", "val1", "delay", "tau1", "td2", "tau2"
             };
@@ -902,15 +672,11 @@ static std::string spiceSourceParams(const netlist::SpiceSource& src) {
                 if (!v.empty()) add(std::string(names[i]) + "=" + v);
             }
         }
-        // Unknown tran types: no positional arg mapping; type= was already emitted.
     }
     return os.str();
 }
 
-// True if `expr` contains a v(...) or i(...) probe, i.e. it reads the solution
-// and can only be evaluated per iteration, not once at elaboration time. Used
-// to tell an ordinary resistance apart from a behavioral one (issue A3).
-// Identifiers are scanned whole, so `vth`, `iref` or `div(...)` do not match.
+// Probes require per-iteration evaluation rather than elaboration-time parsing.
 static bool spiceExprHasProbe(const std::string& expr) {
     auto identChar = [](unsigned char c) {
         return std::isalnum(c) || c == '_' || c == '$';
@@ -921,7 +687,6 @@ static bool spiceExprHasProbe(const std::string& expr) {
         if (!identChar(c)) { ++i; continue; }
         size_t j = i;
         while (j < expr.size() && identChar(static_cast<unsigned char>(expr[j]))) ++j;
-        // A leading digit means this run is a numeric literal (1e-12), not a name.
         if (!std::isdigit(c)) {
             std::string ident = expr.substr(i, j - i);
             size_t k = j;
@@ -933,8 +698,6 @@ static bool spiceExprHasProbe(const std::string& expr) {
     return false;
 }
 
-// Translate an ngspice expression and add it to `into` as a VACASK behavioral
-// source across `terms`. `what` names the device kind for the error message.
 static bool addSpiceBehavioral(const std::string& name, PTIdentifierList&& terms,
                                const std::string& ngspiceExpr, bool currentSource,
                                const char* what, PTSubcircuitDefinition& into,
@@ -951,12 +714,9 @@ static bool addSpiceBehavioral(const std::string& name, PTIdentifierList&& terms
     return true;
 }
 
-// Fill a PTSubcircuitDefinition from one SpiceSubckt body (recursive).
 static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSubckt& s,
                             Parser& p, Status& st);
 
-// Ensure a self-alias model card is emitted once in its destination definition.
-// These mirror `model resistor resistor` / `model vsource vsource` in .sim files.
 static void ensureSpiceModel(PTSubcircuitDefinition& into, const std::string& master) {
     for (const auto& model : into.root().models()) {
         if (std::string(model.name()) == master) return;
@@ -971,23 +731,18 @@ static bool hasSpiceModel(const PTSubcircuitDefinition& into, const std::string&
     return false;
 }
 
-// Process a single SpiceDevice into the given subcircuit definition.
-// `mfactorIn` is the multiplier the enclosing block forwards to its contents:
-// kMfactorParam inside a SPICE `.subckt`, "" at the top level (see kMfactorParam).
 static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefinition& into,
                            Parser& p, Status& s, const std::string& mfactorIn) {
-    // SPICE-origin identifiers/expressions → lowercase (see lc/spiceId above).
-    std::string name = lc(sv(dev.name));
-    std::string val  = lc(spiceValue(dev.value));
-    std::string mdl  = lc(sv(dev.model));
+    std::string name = lowercase(toString(dev.name));
+    std::string val  = lowercase(spiceValue(dev.value));
+    std::string mdl  = lowercase(toString(dev.model));
 
-    // The multiplier this line ends up carrying, "" if none (C3).
     std::string mfac = spiceMfactorExpr(mfactorIn, dev.params);
 
-    // Instance parameters with ngspice's `m` removed — it is not a parameter of
-    // any VACASK master — and $mfactor appended in its place.
+    // Remove ngspice's `m`, which is not a VACASK master parameter, and append
+    // $mfactor in its place.
     auto paramsWithMfactor = [&]() {
-        std::string ps = lc(paramStringExcluding(dev.params, {"m"}));
+        std::string ps = lowercase(paramStringExcluding(dev.params, {"m"}));
         if (!mfac.empty()) {
             if (!ps.empty()) ps += " ";
             ps += std::string(kMfactorParam) + "=" + mfac;
@@ -995,60 +750,39 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
         return ps;
     };
 
-    // Same, for the device kinds ngspice excludes from the multiplier
-    // (inp_fix_subckt_multiplier skips lines starting with v/e/h among others):
-    // these impose a potential, so replicating them in parallel changes neither
-    // the imposed voltage nor any node current, only the per-instance branch
-    // current that gets reported. An `m=` written on such a line has nowhere to
-    // go and is dropped, as it is in ngspice.
+    // Potential-imposing devices do not scale when replicated in parallel.
     auto paramsWithoutMfactor = [&](const char* what) {
         if (!spiceParamValue(dev.params, "m").empty()) {
             Simulator::err() << "WARNING: " << what << " '" << name
                              << "' does not take a multiplier; m= ignored\n";
         }
-        return lc(paramStringExcluding(dev.params, {"m"}));
+        return lowercase(paramStringExcluding(dev.params, {"m"}));
     };
 
     switch (dev.kind) {
         case netlist::SpiceDeviceKind::Resistor: {
-            // Disambiguate the positional token (value-vs-model), mirroring
-            // Cadnip's sema.jl: a trailing bare token is a MODEL name (not a
-            // resistance) when the instance also carries an explicit r=/l=
-            // param — e.g. `rend1 r0 t1 reshead r={rhead}`. Without this the
-            // token would be emitted as r=<token> and collide with the
-            // explicit r= param ("Parameter 'r' redefinition"). The Rust
-            // projection always leaves `model` empty for R (no model slot in
-            // the AST), so the decision is made here from value + params.
+            // A positional token alongside r=/l= names a model, not resistance.
             bool valIsModel = mdl.empty() && !val.empty() &&
                               spiceParamsHaveAny(dev.params, {"r", "l"});
             std::string rval = valIsModel ? "" : val;
 
-            // A3: a resistance that probes the solution (Sky130's 20 V FETs use
-            // r='...v(g,s)...') has no sp_resistor equivalent — R is no longer a
-            // constant of the elaborated circuit. Emit it as a behavioral flow
-            // source instead: i = v(p,n)/max(r, RMIN), an explicit conductance
-            // stamp adding no unknowns, and per-iteration re-evaluation just as
-            // ngspice does it. max() floors the division at the same 1e-12 as
-            // sp_resistor's own too-small-resistance clamp (spice/resistor.va).
+            // A resistance containing a probe must be evaluated per iteration.
+            // Use a behavioral conductance with sp_resistor's 1e-12 floor.
             bool rFromParam = rval.empty();
-            std::string rexpr = rFromParam ? lc(spiceParamValue(dev.params, "r")) : rval;
+            std::string rexpr = rFromParam ? lowercase(spiceParamValue(dev.params, "r")) : rval;
             if (spiceExprHasProbe(rexpr)) {
-                // Re-read the resistance with the behavioral spelling of the
-                // rewrite (pwr() differs between the two); `rexpr` above is the
-                // ordinary one, which only ever served the probe test.
-                rexpr = rFromParam ? lc(spiceParamValue(dev.params, "r", /*behavioral=*/true))
-                                   : lc(spiceValue(dev.value, /*behavioral=*/true));
+                // Re-read because behavioral pwr() has different semantics.
+                rexpr = rFromParam ? lowercase(spiceParamValue(dev.params, "r", /*behavioral=*/true))
+                                   : lowercase(spiceValue(dev.value, /*behavioral=*/true));
                 if (dev.nodes.size() != 2) {
                     Simulator::err() << "WARNING: behavioral resistor '" << name
                                      << "' needs exactly 2 nodes (skipped)\n";
                     break;
                 }
-                // A behavioral source carries the expression and nothing else:
-                // a model card and modifiers like tc1/tc2/w/l have nowhere to go.
                 std::string dropped;
                 if (valIsModel || !mdl.empty()) dropped = "model " + (mdl.empty() ? val : mdl);
                 for (const auto& prm : dev.params) {
-                    std::string key = lc(sv(prm.name));
+                    std::string key = lowercase(toString(prm.name));
                     if (key == "r" || key == "m") continue;   // m is honored below
                     if (!dropped.empty()) dropped += ", ";
                     dropped += key;
@@ -1057,12 +791,8 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                     Simulator::err() << "WARNING: behavioral resistor '" << name
                                      << "' has no place for " << dropped << "; ignored\n";
                 }
-                // A behavioral source takes no $mfactor instance parameter, but
-                // its contribution is a flow, which scales linearly: m parallel
-                // conductances pass m times the current. Fold the multiplier
-                // into the expression, where it resolves against the enclosing
-                // subcircuit's $mfactor parameter like any other identifier.
-                std::string src = "v(" + lc(sv(dev.nodes[0])) + "," + lc(sv(dev.nodes[1])) +
+                // Scale the behavioral flow directly because it has no instance parameters.
+                std::string src = "v(" + lowercase(toString(dev.nodes[0])) + "," + lowercase(toString(dev.nodes[1])) +
                                   ")/max(" + rexpr + ", 1e-12)";
                 if (!mfac.empty()) src = "(" + src + ")*(" + mfac + ")";
                 if (!addSpiceBehavioral(name, spiceNodeList(dev.nodes), src, true,
@@ -1074,13 +804,11 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
 
             std::string master;
             if (!mdl.empty()) {
-                master = spiceModelName(mdl);   // explicit model reference (future-proofing)
+                master = spiceModelName(mdl);
             } else if (valIsModel) {
-                master = spiceModelName(val);   // value is a model card name
+                master = spiceModelName(val);
             } else {
-                // Plain resistor: value (if any) is the resistance. Default to
-                // the ngspice sp_resistor master so instance params like
-                // tc1/tc2/w/l are accepted (the generic 'resistor' has r only).
+                // The SPICE master accepts instance parameters absent from `resistor`.
                 master = "sp_resistor";
                 ensureSpiceModel(into, "sp_resistor");
             }
@@ -1130,7 +858,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             auto ps = paramsWithoutMfactor("voltage source");
             if (!srcParams.empty() && !ps.empty()) srcParams += " ";
             srcParams += ps;
-            if (!srcParams.empty()) inst.add(p.parseParameters(lc(srcParams)));
+            if (!srcParams.empty()) inst.add(p.parseParameters(lowercase(srcParams)));
             into.add(std::move(inst));
             break;
         }
@@ -1141,30 +869,23 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             auto ps = paramsWithMfactor();
             if (!srcParams.empty() && !ps.empty()) srcParams += " ";
             srcParams += ps;
-            if (!srcParams.empty()) inst.add(p.parseParameters(lc(srcParams)));
+            if (!srcParams.empty()) inst.add(p.parseParameters(lowercase(srcParams)));
             into.add(std::move(inst));
             break;
         }
         case netlist::SpiceDeviceKind::Diode: {
-            // D<name> <pos> <neg> <model> [area=…] [<params>]
-            // Instance master = model card name; nodes = [anode, cathode]
-            // (diode.osdi module diode(A,C) — positional terminals)
             if (mdl.empty()) {
                 Simulator::err() << "WARNING: Diode '" << name
                                  << "' has no model reference (skipped)\n";
                 break;
             }
             PTInstance inst(Id(name.c_str()), spiceModelId(mdl), spiceNodeList(dev.nodes));
-            // Note: Rust Diode projects value="" (area not a named OSDI param in diode.va).
             auto ps = paramsWithMfactor();
             if (!ps.empty()) inst.add(p.parseParameters(ps));
             into.add(std::move(inst));
             break;
         }
         case netlist::SpiceDeviceKind::Mosfet: {
-            // M<name> <drain> <gate> <source> <bulk> <model> [W=… L=… …]
-            // Instance master = model card name; nodes = [d,g,s,b]
-            // (bsim3 module bsim3(d,g,s,b) — positional terminals)
             if (mdl.empty()) {
                 Simulator::err() << "WARNING: MOSFET '" << name
                                  << "' has no model reference (skipped)\n";
@@ -1177,21 +898,8 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             break;
         }
         case netlist::SpiceDeviceKind::Bjt: {
-            // Q<name> <c> <b> <e> [<s>] <model> [params]
-            // Instance master = model card name; nodes = [c,b,e,(s)]
-            //
-            // sp_bjt is sp_bjt(c,b,e,sub) — 4 terminals — so a 3-node Q card
-            // leaves the substrate terminal unconnected. That needs no fix-up
-            // here: an unconnected trailing OSDI terminal already resolves to
-            // ground, which is exactly what ngspice does with a short Q card
-            // (inp2q.c:80-82 ties the missing ports to gnode). Verified against
-            // sp_bjt with a substrate junction large enough to dominate the bias
-            // point — `Q c b e` and `Q c b e 0` give bit-identical operating
-            // points, both differing from a substrate tied elsewhere.
-            //
-            // A level=4/9 card dispatches to vbic13, which is vbic13(c,b,e) — a
-            // Q card carrying a substrate node is rejected for too many
-            // terminals until the 4-terminal vbic13_4t variant is wired up.
+            // An omitted sp_bjt substrate resolves to ground, matching ngspice.
+            // VBIC accepts only three terminals in the available master.
             if (mdl.empty()) {
                 Simulator::err() << "WARNING: BJT '" << name
                                  << "' has no model reference (skipped)\n";
@@ -1204,8 +912,6 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             break;
         }
         case netlist::SpiceDeviceKind::SubcktCall: {
-            // X<name> <node1> ... <subckt_master> [param=val ...]
-            // dev.model holds the subckt master name; dev.nodes are the connections.
             if (mdl.empty()) {
                 Simulator::err() << "WARNING: SubcktCall '" << name
                                  << "' has no master subcircuit name (skipped)\n";
@@ -1218,10 +924,6 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             break;
         }
         case netlist::SpiceDeviceKind::Vcvs: {
-            // E<name> pos neg ctrl_pos ctrl_neg gain
-            // VACASK vcvs: terminals [p, n, cp, cn] (4 connection + 1 internal flow),
-            // instance param: gain (Real).
-            // ctrl_nodes = [cp, cn], ctrl_value = gain (string).
             if (dev.nodes.size() < 2 || dev.ctrl_nodes.size() < 2) {
                 Simulator::err() << "WARNING: Vcvs '" << name
                                  << "' has too few nodes/ctrl_nodes (skipped)\n";
@@ -1229,10 +931,10 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             }
             ensureSpiceModel(into, "vcvs");
             PTIdentifierList allNodes;
-            for (const auto& n : dev.nodes)       allNodes.push_back(PTParsedIdentifier(lc(sv(n)).c_str()));
-            for (const auto& cn : dev.ctrl_nodes) allNodes.push_back(PTParsedIdentifier(lc(sv(cn)).c_str()));
+            for (const auto& n : dev.nodes)       allNodes.push_back(PTParsedIdentifier(lowercase(toString(n)).c_str()));
+            for (const auto& cn : dev.ctrl_nodes) allNodes.push_back(PTParsedIdentifier(lowercase(toString(cn)).c_str()));
             PTInstance inst(Id(name.c_str()), Id("vcvs"), std::move(allNodes));
-            std::string gainVal = lc(sv(dev.ctrl_value));
+            std::string gainVal = lowercase(toString(dev.ctrl_value));
             if (!gainVal.empty()) inst.add(p.parseParameters("gain=" + gainVal));
             auto ps = paramsWithoutMfactor("VCVS");
             if (!ps.empty()) inst.add(p.parseParameters(ps));
@@ -1240,8 +942,6 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             break;
         }
         case netlist::SpiceDeviceKind::Vccs: {
-            // G<name> pos neg ctrl_pos ctrl_neg transconductance
-            // VACASK vccs: terminals [p, n, cp, cn] (4 connection), param: gain (Real).
             if (dev.nodes.size() < 2 || dev.ctrl_nodes.size() < 2) {
                 Simulator::err() << "WARNING: Vccs '" << name
                                  << "' has too few nodes/ctrl_nodes (skipped)\n";
@@ -1249,10 +949,10 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             }
             ensureSpiceModel(into, "vccs");
             PTIdentifierList allNodes;
-            for (const auto& n : dev.nodes)       allNodes.push_back(PTParsedIdentifier(lc(sv(n)).c_str()));
-            for (const auto& cn : dev.ctrl_nodes) allNodes.push_back(PTParsedIdentifier(lc(sv(cn)).c_str()));
+            for (const auto& n : dev.nodes)       allNodes.push_back(PTParsedIdentifier(lowercase(toString(n)).c_str()));
+            for (const auto& cn : dev.ctrl_nodes) allNodes.push_back(PTParsedIdentifier(lowercase(toString(cn)).c_str()));
             PTInstance inst(Id(name.c_str()), Id("vccs"), std::move(allNodes));
-            std::string gainVal = lc(sv(dev.ctrl_value));
+            std::string gainVal = lowercase(toString(dev.ctrl_value));
             if (!gainVal.empty()) inst.add(p.parseParameters("gain=" + gainVal));
             auto ps = paramsWithMfactor();
             if (!ps.empty()) inst.add(p.parseParameters(ps));
@@ -1260,10 +960,6 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             break;
         }
         case netlist::SpiceDeviceKind::Cccs: {
-            // F<name> pos neg <ctrl_vsource_name> gain
-            // VACASK cccs: terminals [p, n] (2 connection), params: gain, ctlinst, ctlnode.
-            // ctrl_nodes[0] = controlling vsource instance name; ctrl_value = gain.
-            // ctlnode defaults to "flow(br)" in VACASK (matches vsource's internal flow node).
             if (dev.nodes.size() < 2) {
                 Simulator::err() << "WARNING: Cccs '" << name
                                  << "' has too few connection nodes (skipped)\n";
@@ -1276,10 +972,9 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             }
             ensureSpiceModel(into, "cccs");
             PTInstance inst(Id(name.c_str()), Id("cccs"), spiceNodeList(dev.nodes));
-            std::string ctlsrc  = lc(sv(dev.ctrl_nodes[0]));
-            std::string gainVal = lc(sv(dev.ctrl_value));
-            // ctlinst is an Id param — must be quoted as a string literal in the expression.
-            // ctlnode defaults to "flow(br)" in VACASK; no need to set it explicitly.
+            std::string ctlsrc  = lowercase(toString(dev.ctrl_nodes[0]));
+            std::string gainVal = lowercase(toString(dev.ctrl_value));
+            // Id parameters require string literals; ctlnode defaults to flow(br).
             std::string prms = "ctlinst=\"" + ctlsrc + "\"";
             if (!gainVal.empty()) prms += " gain=" + gainVal;
             inst.add(p.parseParameters(prms));
@@ -1289,10 +984,6 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             break;
         }
         case netlist::SpiceDeviceKind::Ccvs: {
-            // H<name> pos neg <ctrl_vsource_name> transresistance
-            // VACASK ccvs: terminals [p, n] (2 connection + 1 internal flow), params: gain, ctlinst, ctlnode.
-            // ctrl_nodes[0] = controlling vsource instance name; ctrl_value = transresistance.
-            // ctlnode defaults to "flow(br)" in VACASK (matches vsource's internal flow node).
             if (dev.nodes.size() < 2) {
                 Simulator::err() << "WARNING: Ccvs '" << name
                                  << "' has too few connection nodes (skipped)\n";
@@ -1305,9 +996,8 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             }
             ensureSpiceModel(into, "ccvs");
             PTInstance inst(Id(name.c_str()), Id("ccvs"), spiceNodeList(dev.nodes));
-            std::string ctlsrc  = lc(sv(dev.ctrl_nodes[0]));
-            std::string gainVal = lc(sv(dev.ctrl_value));
-            // ctlinst is an Id param — must be quoted as a string literal in the expression.
+            std::string ctlsrc  = lowercase(toString(dev.ctrl_nodes[0]));
+            std::string gainVal = lowercase(toString(dev.ctrl_value));
             std::string prms = "ctlinst=\"" + ctlsrc + "\"";
             if (!gainVal.empty()) prms += " gain=" + gainVal;
             inst.add(p.parseParameters(prms));
@@ -1325,12 +1015,6 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                              << "' (MutualInductor) has no VACASK equivalent; skipped\n";
             break;
         case netlist::SpiceDeviceKind::Behavioral: {
-            // B<name> <p> <n> v=<expr> | i=<expr>
-            // → VACASK behavioral source. ParserTables::processBehaviorals()
-            //   compiles the expression into a synthesized Verilog-A module
-            //   and instantiates it; v(node)/v(a,b)/i(inst) inside the
-            //   expression are wired up as extra terminals there.
-            //   See docs/dev-builtin-behavioral.md.
             if (dev.nodes.size() != 2) {
                 Simulator::err() << "WARNING: B-source '" << name
                                  << "' needs exactly 2 nodes (skipped)\n";
@@ -1339,9 +1023,9 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
             std::string vexpr, iexpr, dropped;
             bool haveV = false, haveI = false;
             for (const auto& prm : dev.params) {
-                std::string key = lc(sv(prm.name));
+                std::string key = lowercase(toString(prm.name));
                 bool isExpr = (key == "v" || key == "i");
-                std::string val = lc(spiceValue(prm.value, /*behavioral=*/isExpr));
+                std::string val = lowercase(spiceValue(prm.value, /*behavioral=*/isExpr));
                 if (key == "v")      { vexpr = val; haveV = true; }
                 else if (key == "i") { iexpr = val; haveI = true; }
                 else if (key == "m") { /* decided below, once v=/i= is known */ }
@@ -1355,11 +1039,7 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                                  << "' needs exactly one of v= or i= (skipped)\n";
                 break;
             }
-            // ngspice multiplies a current-defining B-source and skips a
-            // voltage-defining one (inp_fix_subckt_multiplier), for the same
-            // reason V/E/H are skipped: replicating an imposed potential in
-            // parallel changes nothing observable. A flow scales linearly, so
-            // fold the multiplier into the expression.
+            // Parallel current sources scale; parallel voltage sources do not.
             if (haveI) {
                 if (!mfac.empty()) iexpr = "(" + iexpr + ")*(" + mfac + ")";
             } else if (!spiceParamValue(dev.params, "m").empty()) {
@@ -1367,8 +1047,6 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                                  << "' does not take a multiplier; m= ignored\n";
             }
             if (!dropped.empty()) {
-                // tc1/tc2/noisy/dtemp/reciproctc and friends: ngspice B-source
-                // modifiers with no behavioral-source counterpart in VACASK.
                 Simulator::err() << "WARNING: B-source '" << name
                                  << "' parameter(s) " << dropped << " ignored\n";
             }
@@ -1396,31 +1074,26 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
 
 static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSubckt& s,
                             Parser& p, Status& st) {
-    // C3: every SPICE .subckt accepts a multiplier and hands it to its contents,
-    // so that an X-line's m= has somewhere to land no matter which file defines
-    // the subcircuit. A subcircuit nobody multiplies keeps the default 1.
-    warnIfTemperDeclared(s.params, "SPICE .subckt '" + lc(sv(s.name)) + "'");
-    auto sp = lc(paramString(s.params, /*spiceValues=*/true));
+    // Every subcircuit accepts a multiplier so X-line m= can cross file boundaries.
+    warnIfTemperDeclared(s.params, "SPICE .subckt '" + lowercase(toString(s.name)) + "'");
+    auto sp = lowercase(paramString(s.params, /*spiceValues=*/true));
     if (!sp.empty()) sp += " ";
     sp += std::string(kMfactorParam) + "=1";
     def.add(p.parseParameters(sp));
-    // .model cards inside the .subckt body (e.g. Sky130 res subckts define
-    // reshead/resbody locally). Emit BEFORE devices so instances resolve them.
+    // Models must precede the devices that reference them.
     emitSpiceModels(s.models, s.devices, def, p);
     for (const auto& dev : s.devices) {
         if (!addSpiceDevice(dev, def, p, st, kMfactorParam)) return false;
     }
     for (const auto& sub : s.subckts) {
-        PTSubcircuitDefinition child(spiceId(sv(sub.name)), spiceNodeList(sub.ports));
+        PTSubcircuitDefinition child(spiceId(toString(sub.name)), spiceNodeList(sub.ports));
         if (!fillSpiceSubDef(child, sub, p, st)) return false;
         def.add(std::move(child));
     }
     return true;
 }
 
-// Forward declaration of mergeNetlist for spiceBlockToTables to call (Fix 2).
-// `projectAnalyses` = false suppresses (and warns about) analysis/command
-// projection — used for foreign-format includes, whose commands are ignored.
+// Foreign-format includes suppress their analysis and command projection.
 bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
                   ParserTables& tab, Parser& p,
                   const std::filesystem::path& baseDir,
@@ -1428,8 +1101,6 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
                   Status& s, bool projectAnalyses = true,
                   const std::string& language = "");
 
-// Map one SpiceBlock into a PTSubcircuitDefinition. `baseDir` and `visited`
-// thread through for .include resolution.
 static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefinition& into,
                                ParserTables& tab, Parser& p,
                                Status& s,
@@ -1437,34 +1108,25 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
                                IncludeSet& visited,
                                bool projectAnalyses,
                                const std::string& language) {
-    // Top-level .param declarations from the SPICE block.
     warnIfTemperDeclared(sb.params, "SPICE block");
     auto sp = paramString(sb.params, /*spiceValues=*/true);
-    if (!sp.empty()) into.add(p.parseParameters(lc(sp)));
+    if (!sp.empty()) into.add(p.parseParameters(lowercase(sp)));
 
-    // .model cards: emit PTModel BEFORE instances (VACASK resolves by name).
     emitSpiceModels(sb.models, sb.devices, into, p);
 
-    // Devices (R/C/L/V/I + D/M/Q now handled; others warn+skip).
-    // Top level: no enclosing subcircuit, so nothing to inherit a multiplier from.
+    // The top level has no multiplier to inherit.
     for (const auto& dev : sb.devices) {
         if (!addSpiceDevice(dev, into, p, s, "")) return false;
     }
 
-    // SPICE .tran / .dc / .ac cards in an included file are intentionally not
-    // projected. The native VACASK deck owns analysis and control configuration,
-    // consistent with the Spectre path at the top-level merge.
-
-    // Nested .subckt definitions.
     for (const auto& sub : sb.subckts) {
-        PTSubcircuitDefinition child(spiceId(sv(sub.name)), spiceNodeList(sub.ports));
+        PTSubcircuitDefinition child(spiceId(toString(sub.name)), spiceNodeList(sub.ports));
         if (!fillSpiceSubDef(child, sub, p, s)) return false;
         into.add(std::move(child));
     }
 
-    // .include / .lib inside a SPICE block.
     for (const auto& inc : sb.includes) {
-        std::filesystem::path incPath = baseDir / sv(inc.path);
+        std::filesystem::path incPath = baseDir / toString(inc.path);
         std::filesystem::path absPath;
         try {
             absPath = std::filesystem::canonical(incPath);
@@ -1483,12 +1145,11 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
         std::stringstream incss; incss << ifs.rdbuf();
         std::string contents = incss.str();
 
-        // This include originated inside `simulator lang=spice`, regardless of
-        // the dialect used for the surrounding file.
+        // A nested include inherits the SPICE-block dialect, not the outer file's.
         static constexpr const char* kSpiceBlockDialect = "ngspice";
         netlist::Netlist sub;
         if (!inc.section.empty()) {
-            sub = netlist::parse_netlist_lib(rust::Str(contents), rust::Str(sv(inc.section)),
+            sub = netlist::parse_netlist_lib(rust::Str(contents), rust::Str(toString(inc.section)),
                                              rust::Str(kSpiceBlockDialect));
         } else {
             sub = netlist::parse_netlist(rust::Str(contents),
@@ -1511,41 +1172,31 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
     return true;
 }
 
-// (private) Accumulate one parsed Netlist's toplevel members into `top`,
-// its analyses/globals into `tab`, then recurse into its top-level includes
-// and SPICE block includes.
-// Section-qualified includes (section != "") are skipped (deferred: flat Netlist
-// projection does not carry library sections).
-// Returns true on success; false with `s` set on any error (open failure, parse
-// error, or error in a nested include).
 bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
                   ParserTables& tab, Parser& p,
                   const std::filesystem::path& baseDir,
                   IncludeSet& visited,
                   Status& s, bool projectAnalyses,
                   const std::string& language) {
-    // Accumulate toplevel params/models/instances/subckts.
     auto sp = paramString(nl.params);
     if (!sp.empty()) top.add(p.parseParameters(sp));
     for (const auto& m : nl.models)    top.add(makeModel(m, p));
     for (const auto& i : nl.instances) top.add(makeInstance(i, p));
     for (const auto& sub : nl.subckts) {
-        PTSubcircuitDefinition child(Id(sv(sub.name).c_str()), nodeList(sub.ports));
+        PTSubcircuitDefinition child(Id(toString(sub.name).c_str()), nodeList(sub.ports));
         if (!fillSubDef(child, sub, p, tab, s, baseDir, visited)) return false;
         top.add(std::move(child));
     }
 
-    // SPICE blocks (R/C/L/V/I adapter + nested .subckt/.model + .include resolution).
     for (const auto& sb : nl.spice_blocks) {
         if (!spiceBlockToTables(sb, top, tab, p, s, baseDir, visited, projectAnalyses, language))
             return false;
     }
 
-    // Globals and analyses into tab.
-    for (const auto& g : nl.globals) tab.addGlobal(PTParsedIdentifier(sv(g).c_str()));
+    for (const auto& g : nl.globals) tab.addGlobal(PTParsedIdentifier(toString(g).c_str()));
     if (projectAnalyses) {
         for (const auto& a : nl.analyses) {
-            PTAnalysis desc(Id(sv(a.name).c_str()), Id(sv(a.analysis_type).c_str()));
+            PTAnalysis desc(Id(toString(a.name).c_str()), Id(toString(a.analysis_type).c_str()));
             auto ps = paramString(a.params);
             if (!ps.empty()) desc.add(p.parseParameters(ps));
             tab.addCommand(std::move(desc));
@@ -1556,9 +1207,7 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
                          << " (write analyses in the native VACASK deck)\n";
     }
 
-    // Warn about fields that are parsed but not yet transcribed.
-    // One-time warnings per category: ics silently change transient results if
-    // dropped without notice; saves and ahdl_includes are also deferred.
+    // Warn because silently dropping initial conditions changes simulation results.
     if (!nl.saves.empty()) {
         Simulator::err() << "WARNING: netlistrs adapter does not yet transcribe "
                          << nl.saves.size() << " 'save' directive(s); save requests ignored\n";
@@ -1572,9 +1221,8 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
                          << nl.ahdl_includes.size() << " ahdl_include (VA) directive(s); AHDL includes ignored\n";
     }
 
-    // Recurse into top-level includes.
     for (const auto& inc : nl.includes) {
-        std::filesystem::path incPath = baseDir / sv(inc.path);
+        std::filesystem::path incPath = baseDir / toString(inc.path);
         std::filesystem::path absPath;
         try {
             absPath = std::filesystem::canonical(incPath);
@@ -1595,7 +1243,7 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
 
         netlist::Netlist sub;
         if (!inc.section.empty()) {
-            sub = netlist::parse_netlist_lib(rust::Str(contents), rust::Str(sv(inc.section)),
+            sub = netlist::parse_netlist_lib(rust::Str(contents), rust::Str(toString(inc.section)),
                                              rust::Str(language));
         } else {
             sub = netlist::parse_netlist(rust::Str(contents), rust::Str(language));
@@ -1619,14 +1267,6 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
 
 } // namespace
 
-// Parse a foreign-format netlist FILE and merge its models/subckts/devices into
-// the caller-provided `top` subcircuit definition (the native parser's in-progress
-// toplevel def). Analysis/command directives are ignored (with a warning); OSDI
-// loads for referenced masters are auto-emitted into `tab`. `section` (non-empty)
-// selects a `.lib` section. `language` MUST be a recognised dialect
-// (ngspice|hspice|pspice|xyce|spectre); callers MUST supply it via `lang=`. Does
-// NOT touch defaultGround()/setDefaultSubDef() — that stays the grammar's
-// responsibility.
 bool mergeForeignFile(const std::string& path, const std::string& section,
                       const std::string& language,
                       PTSubcircuitDefinition& top, ParserTables& tab,
@@ -1651,26 +1291,31 @@ bool mergeForeignFile(const std::string& path, const std::string& section,
     std::stringstream ss; ss << in.rdbuf();
     std::string source = ss.str();
 
-    netlist::Netlist nl = section.empty()
-        ? netlist::parse_netlist(rust::Str(source), rust::Str(language))
-        : netlist::parse_netlist_lib(rust::Str(source), rust::Str(section), rust::Str(language));
-    if (!nl.errors.empty()) {
-        std::ostringstream os;
-        os << "netlist parse error(s) in '" << path << "': " << nl.errors.size()
-           << " (first at bytes [" << nl.errors[0].start << ", " << nl.errors[0].end << "))";
-        s.set(Status::Syntax, os.str());
+    try {
+        netlist::Netlist nl = section.empty()
+            ? netlist::parse_netlist(rust::Str(source), rust::Str(language))
+            : netlist::parse_netlist_lib(rust::Str(source), rust::Str(section), rust::Str(language));
+        if (!nl.errors.empty()) {
+            std::ostringstream os;
+            os << "netlist parse error(s) in '" << path << "': " << nl.errors.size()
+               << " (first at bytes [" << nl.errors[0].start << ", " << nl.errors[0].end << "))";
+            s.set(Status::Syntax, os.str());
+            return false;
+        }
+
+        fs::path fp(path);
+        fs::path absPath;
+        try { absPath = fs::canonical(fp); } catch (...) { absPath = fs::absolute(fp); }
+        IncludeSet visited{{absPath, lowercase(section)}};
+        if (!mergeNetlist(nl, top, tab, p, absPath.parent_path(), visited, s,
+                          /*projectAnalyses=*/false, language))
+            return false;
+        emitOsdiLoads(tab, top);
+        return true;
+    } catch (const std::exception& e) {
+        s.set(Status::Syntax, "failed to translate foreign include '" + path + "': " + e.what());
         return false;
     }
-
-    fs::path fp(path);
-    fs::path absPath;
-    try { absPath = fs::canonical(fp); } catch (...) { absPath = fs::absolute(fp); }
-    IncludeSet visited{{absPath, lc(section)}};
-    if (!mergeNetlist(nl, top, tab, p, absPath.parent_path(), visited, s,
-                      /*projectAnalyses=*/false, language))
-        return false;
-    emitOsdiLoads(tab, top);
-    return true;
 }
 
 }

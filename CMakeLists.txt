@@ -36,9 +36,8 @@ if(VACASK_WITH_SPICE)
     )
     FetchContent_MakeAvailable(Corrosion)
 
-    # Where the netlist parser workspace lives. By default it is fetched at a
-    # development branch; pass -DNETLIST_RS_DIR=/path/to/NetlistParse.rs to
-    # build against a local checkout instead (parser development loop).
+    # By default the parser is fetched at a known-compatible revision. Pass
+    # -DNETLIST_RS_DIR=/path/to/NetlistParse.rs to use a local checkout.
     if(NETLIST_RS_DIR)
         set(_netlistrs_src "${NETLIST_RS_DIR}")
         message(STATUS "netlist parser: using local checkout ${_netlistrs_src}")
@@ -46,8 +45,7 @@ if(VACASK_WITH_SPICE)
         FetchContent_Declare(
             NetlistParseRs
             GIT_REPOSITORY https://github.com/NyanCAD/NetlistParse.rs.git
-            # TODO: Pin the next compatible release before this work leaves WIP.
-            GIT_TAG main
+            GIT_TAG 78c1737a7f4a9239ab445ed491aedc622c0fab53
         )
         FetchContent_MakeAvailable(NetlistParseRs)
         set(_netlistrs_src "${netlistparsers_SOURCE_DIR}")
@@ -66,12 +64,6 @@ if(VACASK_WITH_SPICE)
 else()
     message(STATUS "VACASK_WITH_SPICE=OFF: building without SPICE/Spectre support (no Rust toolchain needed)")
 endif()
-
-# Sky130 ngspice PDK checkout, used by the optional PDK-guarded E2E test.
-# Defaults to a sibling checkout next to this repo; no
-# absolute machine path is committed. Override with -DSKY130_PDK_ROOT=/path.
-set(SKY130_PDK_ROOT "${CMAKE_SOURCE_DIR}/../skywater-pdk-libs-sky130_fd_pr"
-    CACHE PATH "Sky130 ngspice PDK checkout root (for optional PDK-guarded tests)")
 
 message(STATUS "CMake version ${CMAKE_VERSION}")
 set(PROGRAM_NAME "vacask")

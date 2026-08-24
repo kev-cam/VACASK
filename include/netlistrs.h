@@ -10,7 +10,7 @@
 namespace sim {
 
 // Parse a foreign-format netlist FILE and merge its models/subckts/devices into
-// the caller-provided `top` subcircuit definition — used by the native parser's
+// the caller-provided `top` subcircuit definition, used by the native parser's
 // `include` handler to dispatch a foreign-format include into the in-progress
 // toplevel definition. The dialect is determined solely by the explicit
 // `language` argument (one of ngspice|hspice|pspice|xyce|spectre); an

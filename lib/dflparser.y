@@ -277,13 +277,14 @@ output
     // setDefaultSubDef/verify so the merged content is committed and checked.
     {
         sim::Parser foreignParser(tables);
-        for (auto& fi : tables.pendingForeign()) {
+        auto pendingForeign = std::move(tables.pendingForeign());
+        tables.pendingForeign().clear();
+        for (auto& fi : pendingForeign) {
             if (!sim::mergeForeignFile(fi.path, fi.section, fi.language, $2.def, tables,
                                        foreignParser, status)) {
                 YYERROR;
             }
         }
-        tables.pendingForeign().clear();
     }
 #endif
     tables.setDefaultSubDef(std::move($2.def));

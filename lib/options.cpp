@@ -364,12 +364,10 @@ bool SimulatorOptions::staticInitialize() {
     }
 
     // Options that affect parameterized expressions
-    // temp and scale are mapped to $temp and $scale, unknownparam decides
-    // whether an undeclared parameter name is applied at all
+    // temp and scale are mapped to $temp and $scale
     for(auto it : std::initializer_list<Id>{
         Id::createStatic("temp"),
         Id::createStatic("scale"),
-        Id::createStatic("unknownparam"),
     } ) {
         auto [ndx, found] = Introspection<SimulatorOptions>::index(it);
         parametrizationAffectingOptions.insert({it, static_cast<ParameterIndex>(ndx)});

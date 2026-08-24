@@ -38,6 +38,3 @@ endc
 Relaxing the check is a compatibility measure, not a correctness one. A dropped
 parameter that does matter produces wrong results instead of a stop, so prefer
 `"warn"` over `"ignore"` and read what it reports.
-
-Changing `unknownparam` re-applies parameter expressions throughout the instance
-hierarchy; see [Options with Special Behavior](cmd-options-special.md).

@@ -1,7 +1,6 @@
 * SPICE .include resolution
 * The diode model 'dmod' is defined in spice_models.spice (a separate included file).
-* Without Fix 2, the .include is only warned and dmod is unresolved → elaboration fails.
-* With Fix 2, spiceBlockToTables resolves the include via mergeNetlist → dmod found.
+* The nested include must resolve dmod before elaboration.
 .include "spice_models.spice"
 D1 out 0 dmod
 Vin vin 0 DC 5

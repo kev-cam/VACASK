@@ -120,7 +120,7 @@ Five behaviours are specific to foreign includes:
   not the testbench*.
 
 - **OSDI models are auto-loaded.** You do not need to `load` the `.osdi` module
-  for a device a foreign file uses — VACASK emits the required `load` directives
+  for a device a foreign file uses. VACASK emits the required `load` directives
   automatically for the masters it references (built-in devices such as voltage
   and current sources need no load).
 
@@ -160,18 +160,18 @@ Five behaviours are specific to foreign includes:
   x1 out 0 rblk m=4                     x1 (out 0) rblk $mfactor=4
   ```
 
-  Devices that impose a potential — `V`, `E`, `H`, and a `B` source written
-  `v=` — take no multiplier, matching ngspice: replicating them in parallel
+  Devices that impose a potential (`V`, `E`, `H`, and a `B` source written
+  `v=`) take no multiplier, matching ngspice: replicating them in parallel
   changes neither the imposed voltage nor any node current. A behavioral source
   has no `$mfactor` parameter, so for a current-defining one the multiplier is
   folded into its expression instead, which is exact because a flow scales
   linearly.
 
 - **SPICE `temper` becomes `$temp`.** ngspice names the simulation temperature
-  (in °C) `temper`; VACASK spells the same quantity in the same units
+  (in degrees Celsius) `temper`; VACASK spells the same quantity in the same units
   [`$temp`](expr-special.md). The identifier is rewritten wherever it appears in
-  an included SPICE expression — `.param` cards, model and instance parameters,
-  and behavioral source expressions alike — and then tracks option
+  an included SPICE expression: `.param` cards, model and instance parameters,
+  and behavioral source expressions alike. It then tracks option
   [`temp`](cmd-options-temp.md), re-evaluating when it changes:
 
   ```text
