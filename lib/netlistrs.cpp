@@ -439,7 +439,7 @@ static constexpr const char* kMfactorParam = "$mfactor";
 // to the nearest available master.
 static std::string spiceModelMaster(const std::string& model_type_raw,
                                     const std::string& level_str,
-                                    const std::string& /*version*/) {
+                                    const std::string& version) {
     std::string mt = model_type_raw;
     std::transform(mt.begin(), mt.end(), mt.begin(), ::tolower);
 
@@ -461,13 +461,14 @@ static std::string spiceModelMaster(const std::string& model_type_raw,
         // Dispatch table: level -> OSDI master name
         // (uses filenames without .osdi suffix; VA module names are the master)
         // bsim3v3.osdi        -> module bsim3      (bsim3v3 3.3, accepts level 49-53)
-        // spice/bsim4v8.osdi  -> module sp_bsim4v8 (arpad ngspice-flavored BSIM4 4.8,
-        //                        level 54 — same spice/ family as sp_resistor/sp_diode;
-        //                        this is the variant the Sky130 VACASK port uses)
+        // bsim4v8.osdi        -> module bsim4      (Cogenda BSIM4 4.8)
+        // spice/bsim4v8.osdi  -> module sp_bsim4v8 (ngspice-flavored BSIM4 4.8.x;
+        //                        explicit version selectors, including Sky130's
+        //                        older selectors, stay on this compatibility path)
         // bsimbulk106.osdi    -> module bsimbulk   (has thermal port; 5 terminals)
         // psp103v4.osdi       -> module psp103va   (accepts level 103)
         // Default (levels 1/2/3/49/53 or unknown) -> bsim3
-        if (level == 54)               return "sp_bsim4v8";
+        if (level == 54)               return version.empty() ? "bsim4" : "sp_bsim4v8";
         if (level == 70 || level == 72) {
             Simulator::err() << "WARNING: MOSFET level=" << level
                              << " (bsimbulk): has thermal port; connect substrate to 0 or add explicit bulk node\n";
@@ -552,6 +553,27 @@ static std::string spiceParamValue(const rust::Vec<netlist::Param>& params,
     return "";
 }
 
+// sp_bsim4v8 implements these string-valued revision selectors. Return a
+// quoted value suitable for its OSDI parameter, or "" for an unsupported
+// selector (Sky130's 4.5/4.62 cards intentionally retain the 4.8.3 default).
+static std::string spiceBsim4Version(const std::string& value) {
+    std::string v = value;
+    if (v.size() >= 2 && v.front() == '"' && v.back() == '"')
+        v = v.substr(1, v.size() - 2);
+    if (v == "4.8" || v == "4.80" || v == "4.8.0" ||
+        v == "4.81" || v == "4.8.1" || v == "4.82" ||
+        v == "4.8.2" || v == "4.83" || v == "4.8.3")
+        return "\"" + v + "\"";
+    return "";
+}
+
+static bool isSky130Bsim4Version(const std::string& value) {
+    std::string v = value;
+    if (v.size() >= 2 && v.front() == '"' && v.back() == '"')
+        v = v.substr(1, v.size() - 2);
+    return v == "4.5" || v == "4.62";
+}
+
 // The multiplier that applies to one SPICE device line (see kMfactorParam):
 // whatever the enclosing `.subckt` forwards (empty at the top level, which has
 // nothing to inherit) times the line's own `m=`, if it carries one. "" when
@@ -574,7 +596,8 @@ static std::optional<PTModel> buildSpiceModelCard(const netlist::SpiceModel& m,
                                                   const std::set<std::string>& extraExclude,
                                                   Parser& p) {
     std::string mt_raw = sv(m.model_type);
-    std::string master = spiceModelMaster(mt_raw, sv(m.level), "");
+    std::string version = spiceParamValue(m.params, "version");
+    std::string master = spiceModelMaster(mt_raw, sv(m.level), version);
     if (master.empty()) return std::nullopt;
 
     std::string modelName = nameOverride.empty() ? sv(m.name) : nameOverride;
@@ -582,11 +605,18 @@ static std::optional<PTModel> buildSpiceModelCard(const netlist::SpiceModel& m,
 
     std::set<std::string> excl = extraExclude;
     excl.insert("level");
-    // sp_bsim4v8 declares `version` as a string parameter (e.g. "4.8.3").
-    // Sky130 model cards write `version=4.5` (unquoted real), which would cause
-    // a type-mismatch error at elaboration.  Strip it so the OSDI default ("4.8.3")
-    // is used; the version selector affects only minor equation variants.
-    if (master == "sp_bsim4v8") excl.insert("version");
+    // sp_bsim4v8's version parameter is a string although ngspice cards usually
+    // leave the selector unquoted. Re-append supported revisions with the right
+    // type; unsupported Sky130 revisions retain the existing 4.8.3 default.
+    std::string bsim4Version;
+    if (master == "sp_bsim4v8") {
+        excl.insert("version");
+        bsim4Version = spiceBsim4Version(version);
+        if (bsim4Version.empty() && !isSky130Bsim4Version(version)) {
+            Simulator::err() << "WARNING: BSIM4 version '" << version
+                             << "' is not supported by sp_bsim4v8; falling back to 4.8.3\n";
+        }
+    }
     // ngspice R/C model cards name the parameter-measurement temperature `tref`;
     // the distilled sp_resistor/sp_capacitor masters expose it as `tnom`. Drop
     // `tref` from the verbatim params and re-append it under the master's name.
@@ -602,6 +632,8 @@ static std::optional<PTModel> buildSpiceModelCard(const netlist::SpiceModel& m,
         std::string lvl = sv(m.level);
         if (!lvl.empty()) ps += (ps.empty() ? "" : " ") + std::string("level=") + lvl;
     }
+    if (!bsim4Version.empty())
+        ps += (ps.empty() ? "" : " ") + std::string("version=") + bsim4Version;
     if (renameTref && !trefVal.empty())
         ps += (ps.empty() ? "" : " ") + std::string("tnom=") + trefVal;
     if (!ps.empty()) mod.add(p.parseParameters(lc(ps)));

@@ -128,6 +128,18 @@ if(VACASK_WITH_SPICE)
     prepare_netlist_test(test_spice_res_model.sim)
     prepare_netlist_test(test_spice_regressions.sim)
     prepare_netlist_test(test_spice_mos.sim)
+    prepare_netlist_test(test_spice_bsim4_version.sim "version = \"4.80\"")
+    add_test(NAME test_spice_bsim4_unknown_version_warning.sim
+        COMMAND ${CMAKE_COMMAND}
+            "-DSIMULATOR=$<TARGET_FILE:sim>"
+            "-DNETLIST=${CMAKE_CURRENT_SOURCE_DIR}/test_spice_bsim4_version.sim"
+            "-DEXPECTED_WARNING=BSIM4 version '9.9' is not supported.*falling back to 4.8.3"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/check_warning.cmake"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_spice_bsim4_version.sim")
+    set_tests_properties(test_spice_bsim4_unknown_version_warning.sim PROPERTIES
+        ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR};SIM_TEST=yes" TIMEOUT 20 LABELS "warning")
+    set_tests_properties(test_spice_bsim4_version.sim test_spice_bsim4_unknown_version_warning.sim
+        PROPERTIES RESOURCE_LOCK spice_bsim4_version)
     prepare_netlist_test(test_spice_binned_mos.sim)
     prepare_netlist_test(test_spice_binned_mos_indirect.sim)
     prepare_netlist_test(test_spice_bsource.sim)
