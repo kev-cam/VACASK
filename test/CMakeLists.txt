@@ -201,6 +201,7 @@ if(VACASK_WITH_SPICE)
     set_tests_properties(test_spice_bsim4_version.sim test_spice_bsim4_unknown_version_warning.sim
         PROPERTIES RESOURCE_LOCK spice_bsim4_version)
     prepare_netlist_test(test_spice_binned_mos.sim)
+    prepare_netlist_test(test_spice_binned_mos_section.sim)
     prepare_netlist_test(test_spice_binned_mos_indirect.sim)
     prepare_netlist_test(test_spice_bsource.sim)
     prepare_netlist_test(test_spice_behavioral_res.sim)
