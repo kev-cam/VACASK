@@ -222,6 +222,15 @@ PTBlockSequence makeConditional(const netlist::Conditional& c, Parser& p) {
 using IncludeKey = std::pair<std::filesystem::path, std::string>;
 using IncludeSet = std::set<IncludeKey>;
 
+struct SpiceBin {
+    std::string modelName;
+    std::string lmin;
+    std::string lmax;
+    std::string wmin;
+    std::string wmax;
+};
+using BinnedModels = std::map<std::string, std::vector<SpiceBin>>;
+
 static IncludeKey includeKey(const std::filesystem::path& path,
                              const rust::String& section) {
     return {path, lowercase(toString(section))};
@@ -232,13 +241,16 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
                                Status& s,
                                const std::filesystem::path& baseDir,
                                IncludeSet& visited,
+                               BinnedModels& visibleBins,
                                bool projectAnalyses = true,
                                const std::string& language = "");
 
 static bool fillSubDef(PTSubcircuitDefinition& def, const netlist::Subckt& s, Parser& p,
                        ParserTables& tab, Status& st,
                        const std::filesystem::path& baseDir,
-                       IncludeSet& visited) {
+                       IncludeSet& visited,
+                       const BinnedModels& inheritedBins) {
+    BinnedModels visibleBins = inheritedBins;
     auto sp = paramString(s.params);
     if (!sp.empty()) def.add(p.parseParameters(sp));
     for (const auto& m : s.models)       def.add(makeModel(m, p));
@@ -246,11 +258,11 @@ static bool fillSubDef(PTSubcircuitDefinition& def, const netlist::Subckt& s, Pa
     for (const auto& c : s.conditionals) def.add(makeConditional(c, p));
     for (const auto& sub : s.subckts) {
         PTSubcircuitDefinition child(Id(toString(sub.name).c_str()), nodeList(sub.ports));
-        if (!fillSubDef(child, sub, p, tab, st, baseDir, visited)) return false;
+        if (!fillSubDef(child, sub, p, tab, st, baseDir, visited, visibleBins)) return false;
         def.add(std::move(child));
     }
     for (const auto& sb : s.spice_blocks) {
-        if (!spiceBlockToTables(sb, def, tab, p, st, baseDir, visited)) return false;
+        if (!spiceBlockToTables(sb, def, tab, p, st, baseDir, visited, visibleBins)) return false;
     }
     return true;
 }
@@ -423,9 +435,14 @@ static std::optional<PTModel> buildSpiceModelCard(const netlist::SpiceModel& m,
     // leave the selector unquoted. Re-append supported revisions with the right
     // type; unsupported Sky130 revisions retain the existing 4.8.3 default.
     std::string bsim4Version;
+    std::string bsim4Rgeomod;
     if (master == "sp_bsim4v8") {
         excl.insert("version");
         bsim4Version = spiceBsim4Version(version);
+        // ngspice permits this instance selector as a model-card default. The
+        // distilled OSDI module disambiguates it from model parameters.
+        bsim4Rgeomod = spiceParamValue(m.params, "rgeomod");
+        excl.insert("rgeomod");
         if (bsim4Version.empty() && !isSky130Bsim4Version(version)) {
             Simulator::err() << "WARNING: BSIM4 version '" << version
                              << "' is not supported by sp_bsim4v8; falling back to 4.8.3\n";
@@ -448,6 +465,8 @@ static std::optional<PTModel> buildSpiceModelCard(const netlist::SpiceModel& m,
     }
     if (!bsim4Version.empty())
         ps += (ps.empty() ? "" : " ") + std::string("version=") + bsim4Version;
+    if (!bsim4Rgeomod.empty())
+        ps += (ps.empty() ? "" : " ") + std::string("instance_rgeomod=") + bsim4Rgeomod;
     if (renameTref && !trefVal.empty())
         ps += (ps.empty() ? "" : " ") + std::string("tnom=") + trefVal;
     if (!ps.empty()) mod.add(p.parseParameters(lowercase(ps)));
@@ -486,35 +505,10 @@ static bool isBinnedModel(const netlist::SpiceModel& m) {
         && !spiceParamValue(m.params, "wmax").empty();
 }
 
-struct BinGeometry {
-    std::string l = "l";
-    std::string w = "w";
-};
-
-// Bin against instance L/W expressions. The projected conditional model can
-// represent only the first geometry used for each model name.
-static std::map<std::string, BinGeometry> collectBinGeometry(
-        const rust::Vec<netlist::SpiceDevice>& devices) {
-    std::map<std::string, BinGeometry> geom;
-    for (const auto& dev : devices) {
-        if (dev.kind != netlist::SpiceDeviceKind::Mosfet) continue;
-        std::string mdl = lowercase(toString(dev.model));
-        if (mdl.empty() || geom.count(mdl)) continue;
-        BinGeometry g;
-        std::string l = lowercase(spiceParamValue(dev.params, "l"));
-        std::string w = lowercase(spiceParamValue(dev.params, "w"));
-        if (!l.empty()) g.l = "(" + l + ")";
-        if (!w.empty()) g.w = "(" + w + ")";
-        geom[mdl] = g;
-    }
-    return geom;
-}
-
-// Sort bins because the first matching L/W range wins.
 static void emitBinnedModelGroup(std::vector<const netlist::SpiceModel*>& bins,
                                  const std::string& baseName,
-                                 const BinGeometry& geom,
-                                 PTSubcircuitDefinition& into, Parser& p) {
+                                 PTSubcircuitDefinition& into, Parser& p,
+                                 BinnedModels& visibleBins) {
     std::sort(bins.begin(), bins.end(),
               [](const netlist::SpiceModel* a, const netlist::SpiceModel* b) {
         double la = std::atof(spiceParamValue(a->params, "lmin").c_str());
@@ -525,44 +519,40 @@ static void emitBinnedModelGroup(std::vector<const netlist::SpiceModel*>& bins,
         return wa < wb;
     });
 
-    PTBlockSequence seq;
-    bool any = false;
+    std::vector<SpiceBin> emitted;
     for (const auto* m : bins) {
-        auto mod = buildSpiceModelCard(*m, baseName, {"lmin", "lmax", "wmin", "wmax"}, p);
+        std::string internalName = lowercase(toString(m->name));
+        auto mod = buildSpiceModelCard(*m, internalName,
+                                       {"lmin", "lmax", "wmin", "wmax"}, p);
         if (!mod) continue; // no master; warning already emitted
-        std::string guard =
-            geom.l + "*$scale >= "  + spiceParamValue(m->params, "lmin") +
-            " && " + geom.l + "*$scale < " + spiceParamValue(m->params, "lmax") +
-            " && " + geom.w + "*$scale >= " + spiceParamValue(m->params, "wmin") +
-            " && " + geom.w + "*$scale < " + spiceParamValue(m->params, "wmax");
-        PTBlock block;
-        block.add(std::move(*mod));
-        seq.add(p.parseExpression(guard), std::move(block));
-        any = true;
+        into.add(std::move(*mod));
+        emitted.push_back({internalName,
+                           spiceParamValue(m->params, "lmin"),
+                           spiceParamValue(m->params, "lmax"),
+                           spiceParamValue(m->params, "wmin"),
+                           spiceParamValue(m->params, "wmax")});
     }
-    if (any) into.add(std::move(seq));
+    if (!emitted.empty()) visibleBins[lowercase(baseName)] = std::move(emitted);
 }
 
 static void emitSpiceModels(const rust::Vec<netlist::SpiceModel>& models,
-                            const rust::Vec<netlist::SpiceDevice>& devices,
-                            PTSubcircuitDefinition& into, Parser& p) {
+                            PTSubcircuitDefinition& into, Parser& p,
+                            BinnedModels& visibleBins) {
     std::vector<std::string> order;
     std::map<std::string, std::vector<const netlist::SpiceModel*>> groups;
     for (const auto& m : models) {
         auto base = binBaseName(toString(m.name));
         if (isBinnedModel(m)) {
-            if (!groups.count(*base)) order.push_back(*base);
-            groups[*base].push_back(&m);
+            std::string key = lowercase(*base);
+            if (!groups.count(key)) order.push_back(key);
+            groups[key].push_back(&m);
         } else {
+            visibleBins.erase(lowercase(toString(m.name)));
             addSpiceModelCard(m, into, p);
         }
     }
-    if (order.empty()) return;
-    auto geom = collectBinGeometry(devices);
     for (const auto& base : order) {
-        auto it = geom.find(lowercase(base));
-        emitBinnedModelGroup(groups[base], base,
-                             it == geom.end() ? BinGeometry{} : it->second, into, p);
+        emitBinnedModelGroup(groups[base], base, into, p, visibleBins);
     }
 }
 
@@ -715,7 +705,7 @@ static bool addSpiceBehavioral(const std::string& name, PTIdentifierList&& terms
 }
 
 static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSubckt& s,
-                            Parser& p, Status& st);
+                            Parser& p, Status& st, const BinnedModels& inheritedBins);
 
 static void ensureSpiceModel(PTSubcircuitDefinition& into, const std::string& master) {
     for (const auto& model : into.root().models()) {
@@ -732,7 +722,8 @@ static bool hasSpiceModel(const PTSubcircuitDefinition& into, const std::string&
 }
 
 static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefinition& into,
-                           Parser& p, Status& s, const std::string& mfactorIn) {
+                           Parser& p, Status& s, const std::string& mfactorIn,
+                           const BinnedModels& visibleBins) {
     std::string name = lowercase(toString(dev.name));
     std::string val  = lowercase(spiceValue(dev.value));
     std::string mdl  = lowercase(toString(dev.model));
@@ -891,10 +882,50 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                                  << "' has no model reference (skipped)\n";
                 break;
             }
-            PTInstance inst(Id(name.c_str()), spiceModelId(mdl), spiceNodeList(dev.nodes));
             auto ps = paramsWithMfactor();
-            if (!ps.empty()) inst.add(p.parseParameters(ps));
-            into.add(std::move(inst));
+            auto bins = visibleBins.find(mdl);
+            if (bins == visibleBins.end()) {
+                PTInstance inst(Id(name.c_str()), spiceModelId(mdl), spiceNodeList(dev.nodes));
+                if (!ps.empty()) inst.add(p.parseParameters(ps));
+                into.add(std::move(inst));
+                break;
+            }
+
+            std::string l = lowercase(spiceParamValue(dev.params, "l"));
+            std::string w = lowercase(spiceParamValue(dev.params, "w"));
+            if (l.empty() || w.empty()) {
+                PTInstance inst(Id(name.c_str()), spiceModelId(mdl), spiceNodeList(dev.nodes));
+                if (!ps.empty()) inst.add(p.parseParameters(ps));
+                into.add(std::move(inst));
+                break;
+            }
+            std::string nf = lowercase(spiceParamValue(dev.params, "nf"));
+            l = "(" + l + ")";
+            w = "(" + w + ")";
+            nf = nf.empty() ? "1" : "(" + nf + ")";
+
+            PTBlockSequence seq;
+            for (const auto& bin : bins->second) {
+                std::string guard =
+                    l + "*$scale >= "  + bin.lmin +
+                    " && " + l + "*$scale < " + bin.lmax +
+                    " && " + w + "*$scale/" + nf + " >= " + bin.wmin +
+                    " && " + w + "*$scale/" + nf + " < " + bin.wmax;
+                PTInstance inst(Id(name.c_str()), spiceModelId(bin.modelName),
+                                spiceNodeList(dev.nodes));
+                if (!ps.empty()) inst.add(p.parseParameters(ps));
+                PTBlock block;
+                block.add(std::move(inst));
+                seq.add(p.parseExpression(guard), std::move(block));
+            }
+            // Preserve the ordinary missing-model error when no bin contains
+            // the instance geometry instead of silently dropping the MOSFET.
+            PTInstance fallback(Id(name.c_str()), spiceModelId(mdl), spiceNodeList(dev.nodes));
+            if (!ps.empty()) fallback.add(p.parseParameters(ps));
+            PTBlock fallbackBlock;
+            fallbackBlock.add(std::move(fallback));
+            seq.add(p.parseExpression("1"), std::move(fallbackBlock));
+            into.add(std::move(seq));
             break;
         }
         case netlist::SpiceDeviceKind::Bjt: {
@@ -1073,7 +1104,8 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
 }
 
 static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSubckt& s,
-                            Parser& p, Status& st) {
+                            Parser& p, Status& st, const BinnedModels& inheritedBins) {
+    BinnedModels visibleBins = inheritedBins;
     // Every subcircuit accepts a multiplier so X-line m= can cross file boundaries.
     warnIfTemperDeclared(s.params, "SPICE .subckt '" + lowercase(toString(s.name)) + "'");
     auto sp = lowercase(paramString(s.params, /*spiceValues=*/true));
@@ -1081,13 +1113,13 @@ static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSub
     sp += std::string(kMfactorParam) + "=1";
     def.add(p.parseParameters(sp));
     // Models must precede the devices that reference them.
-    emitSpiceModels(s.models, s.devices, def, p);
+    emitSpiceModels(s.models, def, p, visibleBins);
     for (const auto& dev : s.devices) {
-        if (!addSpiceDevice(dev, def, p, st, kMfactorParam)) return false;
+        if (!addSpiceDevice(dev, def, p, st, kMfactorParam, visibleBins)) return false;
     }
     for (const auto& sub : s.subckts) {
         PTSubcircuitDefinition child(spiceId(toString(sub.name)), spiceNodeList(sub.ports));
-        if (!fillSpiceSubDef(child, sub, p, st)) return false;
+        if (!fillSpiceSubDef(child, sub, p, st, visibleBins)) return false;
         def.add(std::move(child));
     }
     return true;
@@ -1098,6 +1130,7 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
                   ParserTables& tab, Parser& p,
                   const std::filesystem::path& baseDir,
                   IncludeSet& visited,
+                  BinnedModels& visibleBins,
                   Status& s, bool projectAnalyses = true,
                   const std::string& language = "");
 
@@ -1106,25 +1139,11 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
                                Status& s,
                                const std::filesystem::path& baseDir,
                                IncludeSet& visited,
+                               BinnedModels& visibleBins,
                                bool projectAnalyses,
                                const std::string& language) {
-    warnIfTemperDeclared(sb.params, "SPICE block");
-    auto sp = paramString(sb.params, /*spiceValues=*/true);
-    if (!sp.empty()) into.add(p.parseParameters(lowercase(sp)));
-
-    emitSpiceModels(sb.models, sb.devices, into, p);
-
-    // The top level has no multiplier to inherit.
-    for (const auto& dev : sb.devices) {
-        if (!addSpiceDevice(dev, into, p, s, "")) return false;
-    }
-
-    for (const auto& sub : sb.subckts) {
-        PTSubcircuitDefinition child(spiceId(toString(sub.name)), spiceNodeList(sub.ports));
-        if (!fillSpiceSubDef(child, sub, p, s)) return false;
-        into.add(std::move(child));
-    }
-
+    // Includes define models and parameters visible to this block. The bridge
+    // groups AST nodes by kind, so resolve includes before projecting devices.
     for (const auto& inc : sb.includes) {
         std::filesystem::path incPath = baseDir / toString(inc.path);
         std::filesystem::path absPath;
@@ -1145,7 +1164,6 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
         std::stringstream incss; incss << ifs.rdbuf();
         std::string contents = incss.str();
 
-        // A nested include inherits the SPICE-block dialect, not the outer file's.
         static constexpr const char* kSpiceBlockDialect = "ngspice";
         netlist::Netlist sub;
         if (!inc.section.empty()) {
@@ -1165,10 +1183,28 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
             return false;
         }
 
-        if (!mergeNetlist(sub, into, tab, p, absPath.parent_path(), visited, s,
+        if (!mergeNetlist(sub, into, tab, p, absPath.parent_path(), visited, visibleBins, s,
                           projectAnalyses, kSpiceBlockDialect))
             return false;
     }
+
+    warnIfTemperDeclared(sb.params, "SPICE block");
+    auto sp = paramString(sb.params, /*spiceValues=*/true);
+    if (!sp.empty()) into.add(p.parseParameters(lowercase(sp)));
+
+    emitSpiceModels(sb.models, into, p, visibleBins);
+
+    // The top level has no multiplier to inherit.
+    for (const auto& dev : sb.devices) {
+        if (!addSpiceDevice(dev, into, p, s, "", visibleBins)) return false;
+    }
+
+    for (const auto& sub : sb.subckts) {
+        PTSubcircuitDefinition child(spiceId(toString(sub.name)), spiceNodeList(sub.ports));
+        if (!fillSpiceSubDef(child, sub, p, s, visibleBins)) return false;
+        into.add(std::move(child));
+    }
+
     return true;
 }
 
@@ -1176,6 +1212,7 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
                   ParserTables& tab, Parser& p,
                   const std::filesystem::path& baseDir,
                   IncludeSet& visited,
+                  BinnedModels& visibleBins,
                   Status& s, bool projectAnalyses,
                   const std::string& language) {
     auto sp = paramString(nl.params);
@@ -1184,12 +1221,13 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
     for (const auto& i : nl.instances) top.add(makeInstance(i, p));
     for (const auto& sub : nl.subckts) {
         PTSubcircuitDefinition child(Id(toString(sub.name).c_str()), nodeList(sub.ports));
-        if (!fillSubDef(child, sub, p, tab, s, baseDir, visited)) return false;
+        if (!fillSubDef(child, sub, p, tab, s, baseDir, visited, visibleBins)) return false;
         top.add(std::move(child));
     }
 
     for (const auto& sb : nl.spice_blocks) {
-        if (!spiceBlockToTables(sb, top, tab, p, s, baseDir, visited, projectAnalyses, language))
+        if (!spiceBlockToTables(sb, top, tab, p, s, baseDir, visited, visibleBins,
+                                projectAnalyses, language))
             return false;
     }
 
@@ -1258,7 +1296,7 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
             return false;
         }
 
-        if (!mergeNetlist(sub, top, tab, p, absPath.parent_path(), visited, s,
+        if (!mergeNetlist(sub, top, tab, p, absPath.parent_path(), visited, visibleBins, s,
                           projectAnalyses, language))
             return false;
     }
@@ -1307,7 +1345,8 @@ bool mergeForeignFile(const std::string& path, const std::string& section,
         fs::path absPath;
         try { absPath = fs::canonical(fp); } catch (...) { absPath = fs::absolute(fp); }
         IncludeSet visited{{absPath, lowercase(section)}};
-        if (!mergeNetlist(nl, top, tab, p, absPath.parent_path(), visited, s,
+        BinnedModels visibleBins;
+        if (!mergeNetlist(nl, top, tab, p, absPath.parent_path(), visited, visibleBins, s,
                           /*projectAnalyses=*/false, language))
             return false;
         emitOsdiLoads(tab, top);

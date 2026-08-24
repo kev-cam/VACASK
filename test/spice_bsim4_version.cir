@@ -14,7 +14,7 @@ M4 d4 g 0 0 sky130_462 w=1u l=0.15u
 * No selector uses the native BSIM4 master; verbose is native-only.
 .model native nmos level=54 verbose=0
 * Explicit 4.8.x selectors use sp_bsim4v8; mult_i is SPICE-master-only.
-.model revision nmos level=54 version=4.80 mult_i=1
+.model revision nmos level=54 version=4.80 mult_i=1 rgeomod=1
 * Sky130's unsupported selector keeps the existing sp_bsim4v8 default path.
 .model sky130_shape nmos level=54 version=4.5 mult_i=1
 .model sky130_462 nmos level=54 version=4.62 mult_i=1
