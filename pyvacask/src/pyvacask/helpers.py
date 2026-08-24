@@ -1,10 +1,11 @@
+import os
 from ._pyvacask.parser_output import PTParameterValue
 from ._pyvacask.parser_output import PTParameterExpression
 from ._pyvacask.parser_output import PTParsedIdentifier
 from ._pyvacask.id import Id
 from ._pyvacask.value import Value
 from ._pyvacask.rpnexpr import Rpn
-
+from ._pyvacask.compiler import OpenvafCompiler
 
 def PV(ident:str, value) -> PTParameterValue:
     """
@@ -44,3 +45,16 @@ def PTIds(ids: list[str]) -> list[PTParsedIdentifier]:
     """
     return [PTParsedIdentifier(Id(i)) for i in ids]
 
+def OpenvafCompilerBuiltin() -> OpenvafCompiler:
+    """
+    Returns the pre-build in-packagen openvaf compililer object.
+    
+    Args: /
+
+    Returns:
+        OpenvafCompiler: object
+    """
+    this_file = os.path.abspath(__file__)
+    this_dir  = os.path.dirname(this_file)
+    _def_openvaf_path = os.path.normpath(os.path.join(this_dir, "..", "bin", "openvaf-r"))
+    return OpenvafCompiler(_def_openvaf_path)

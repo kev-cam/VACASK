@@ -379,3 +379,221 @@ def test_demo5():
     fig1, ax1 = plt.subplots(1, 1, figsize=(6,4), dpi=100, constrained_layout=True)
     fig1.axes[0].plot(dc1["tnom"], dc1["2"], "r", marker=".")
     fig1.savefig("d5dc1.jpg")
+
+def test_demo6(): 
+    sim.setup()
+    s   = Status()
+    tab = ParserTables("Self-heating lightbulb")
+    p   = Parser(tab)
+
+    tab = tab.defaultGround()
+    sub = PTSubcircuitDefinition()
+    sub = sub.add(PTModel("vsrc", "vsource"))
+    # ----------------------------------------------------------------
+    # v1 (a 0) vsource dc=0 type="sine"
+    #      sinedc=0 ampl=325 freq=50
+    # ----------------------------------------------------------------
+    sub = sub.add(PTInstance("v1", "vsrc", ["a", "0"]).add(
+        p.parseParameters(
+            "dc=0 type=\"sine\" "
+            "sinedc=0 ampl=325 freq=50"
+        ))
+    )
+    # ----------------------------------------------------------------
+    # bi (a 0)
+    #
+    # i(a,0) =
+    #     V(a,0) /
+    #     (r0*(p0+p1*T+p2*T^2))
+    # ----------------------------------------------------------------
+    sub = sub.add(PTBehavioral("bi", 
+                               ["a", "0"],
+                               p.parseExpression(
+                                   "v(a,0)/(r0*(p0+p1*v(t)+p2*v(t)**2))"
+                               ),
+                               True
+        )
+    )
+    # ----------------------------------------------------------------
+    # ct (t 0)
+    #
+    # flow = ddt(cth * Temp(t))
+    # discipline = thermal
+    # ----------------------------------------------------------------
+    sub = sub.add(PTBehavioral("ct", 
+                               ["t", "0"],
+                               p.parseExpression(
+                                   "ddt(cth*v(t))"
+                               ),
+                               False,
+                               "thermal",
+                               "Temp",
+                               "Pwr"
+        )
+    )
+    # ----------------------------------------------------------------
+    # rt (t 0)
+    #
+    # flow = (Temp(t)-ta)/rth
+    # ----------------------------------------------------------------
+    sub = sub.add(PTBehavioral("rt", 
+                               ["t", "0"],
+                               p.parseExpression(
+                                   "(v(t)-ta)/rth"
+                               ),
+                               False,
+                               "thermal",
+                               "Temp",
+                               "Pwr"
+        )
+    )
+    # ----------------------------------------------------------------
+    # pwr (t 0)
+    #
+    # flow =
+    #   -V(a,0)^2 /
+    #    (r0*(p0+p1*T+p2*T^2))
+    # ----------------------------------------------------------------
+    sub = sub.add(PTBehavioral("pwr", 
+                               ["t", "0"],
+                               p.parseExpression(
+                                   "-(v(a,0)**2/(r0*(p0+p1*v(t)+p2*v(t)**2)))"
+                               ),
+                               False,
+                               "thermal",
+                               "Temp",
+                               "Pwr"    
+        )
+    )
+    tab = tab.setDefaultSubDef(sub)
+    assert tab.verify(s)
+    tab.dump(0)
+    tab.processBehaviorals(0, s)
+    assert tab.writeEmbedded(1, s)
+
+    comp = OpenvafCompilerBuiltin()
+    cir  = Circuit(tab, comp, s)
+    assert cir.isValid()
+
+    cir.setVariable("rth", Value((3000.0 - 25.0) / 60.0))
+    cir.setVariable("cth", Value(10e-3))
+    cir.setVariable("ta", Value(25.0))
+    cir.setVariable("r0", Value(8.612))
+    cir.setVariable("p0", Value(8.612))
+    cir.setVariable("p1", Value(0.0269))
+    cir.setVariable("p2", Value(1.914e-6))
+
+    assert cir.elaborate([], "__topdef__", "__topinst__", status=s)
+
+    # ------------------------------------------------------------------------
+    # DC sweep
+    #
+    # Original:
+    #
+    # alter instance("v1") type="dc"
+    # sweep v1 instance="v1" parameter="dc"
+    #       from=0 to=230 mode=lin points=50
+    #     analysis dc1 op
+    #
+    # ------------------------------------------------------------------------
+
+    cir.setInstanceParameter("v1", "type", Value("dc"))
+    dc1Desc = PTAnalysis("dc1", "op")
+    dc1Desc.add(PTSweep("v1").add(
+        PV("instance", "v1")).add(
+        PV("parameter", "dc")).add(
+        PV("from", 0)).add(
+        PV("to", 230)).add(
+        PV("mode", "lin")).add(
+        PV("points", 50))
+    )
+
+    dc1 = Analysis.create(dc1Desc, cir, s)
+    assert dc1
+    ok, _ = dc1.run(s)
+    assert ok
+    print("DC analysis OK")
+
+    # ------------------------------------------------------------------------
+    # Transient analysis
+    #
+    # Original:
+    #
+    # alter instance("v1") type="sine"
+    # analysis tran1 tran stop=2 step=0.01m maxstep=0.05m
+    #
+    # ------------------------------------------------------------------------
+    cir.setInstanceParameter("v1", "type", Value("sine"))
+    tran1Desc = PTAnalysis("tran1", "tran")
+    tran1Desc.add(PV("stop", 2.0)
+            ).add(PV("step", 0.01e-3)
+            ).add(PV("maxstep", 0.05e-3))
+    tran1 = Analysis.create(tran1Desc, cir, s)
+    assert tran1
+    ok, _ = tran1.run(s)
+    assert ok
+    print("Transient analysis OK")
+
+    # ------------------------------------------------------------------------
+    # Harmonic balance
+    #
+    # Original:
+    #
+    # analysis hb1 hb freq=[50] nharm=10
+    #
+    # ------------------------------------------------------------------------
+    hb1Desc = PTAnalysis("hb1", "hb")
+    hb1Desc.add(PV("freq", [50])
+            ).add(PV("nharm", 10))
+    hb1 = Analysis.create(hb1Desc, cir, s)
+    assert hb1
+    ok, _ = hb1.run(s)
+    assert ok
+    print("HB analysis OK")
+
+    dc1 = rawread('dc1.raw').get()
+    v = dc1['a'] 
+    T = dc1['t']
+
+    tran1 = rawread('tran1.raw').get()
+    time = tran1['time']
+    Tt = tran1['t']
+
+    hb1 = rawread('hb1.raw').get()
+    f = np.real(hb1['frequency'])
+    Ts = hb1['t']
+    Tmag = np.abs(Ts)
+
+    t = np.linspace(0, 1.0/50, 1000)
+    y = np.zeros(t.size)
+    for f1, Ts1 in zip(f, Ts):
+        y += np.real(Ts1)*np.cos(2*np.pi*f1*t)
+        y += -np.imag(Ts1)*np.sin(2*np.pi*f1*t)
+
+    ytran = np.interp(time[-1]-1.0/50+t, time, Tt)
+
+    fig1, ax1 = plt.subplots(4, 1, figsize=(5,8), dpi=100, constrained_layout=True)
+    fig1.suptitle('HB analysis of self-heating lightbulb (behavioral sources)')
+    fig1.axes[0].set_title('DC response')
+    fig1.axes[0].set_ylabel('T [deg C]')
+    fig1.axes[0].set_xlabel('V [V]')
+    fig1.axes[0].plot(v, T)
+
+    fig1.axes[1].set_title('Transient response')
+    fig1.axes[1].set_ylabel('T [deg C]')
+    fig1.axes[1].set_xlabel('time [s]')
+    fig1.axes[1].plot(time, Tt)
+
+    fig1.axes[2].set_title('Steady-state magnitude spectrum')
+    fig1.axes[2].set_ylabel('T magnitude [deg C]')
+    fig1.axes[2].set_xlabel('frequency [Hz]')
+    fig1.axes[2].set_yscale("log")
+    fig1.axes[2].stem(f, Tmag, markerfmt='.')
+
+    fig1.axes[3].set_title('Steady-state response')
+    fig1.axes[3].set_ylabel('T [deg C]')
+    fig1.axes[3].set_xlabel('time [ms]')
+    fig1.axes[3].plot(t*1e3, y, color="blue", label="HB")
+    fig1.axes[3].plot(t*1e3, ytran, color="red", label="tran")
+    fig1.axes[3].legend(loc="upper left")
+

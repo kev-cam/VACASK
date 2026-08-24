@@ -93,6 +93,11 @@ PYBIND11_MODULE(_pyvacask, m, py::mod_gil_not_used()) {
                         return self.parseExpression(input);
                     },
                     py::arg("input"))
+            .def("parseExpression",
+                    [](sim::Parser &self, const std::string &input, sim::Status& s) {
+                        return self.parseExpression(input, s);
+                    },
+                    py::arg("input"), py::arg("s"))
             .def("parseParameters",
                     [](sim::Parser &self, const std::string &input) {
                         return self.parseParameters(input);

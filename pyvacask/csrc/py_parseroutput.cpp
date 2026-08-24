@@ -54,6 +54,12 @@ void InitParserOutputModule(py::module &m) {
             [](sim::ParserTables& self, sim::Status& s) -> bool { return self.verify(s); },
             py::return_value_policy::reference_internal
         )
+        .def("processBehaviorals",
+            [](sim::ParserTables& self, int debug, sim::Status& s) -> bool {
+                return self.processBehaviorals(debug, s);
+            },
+            py::return_value_policy::reference_internal
+        )
         .def("writeEmbedded",
             [](sim::ParserTables& self, int debug, sim::Status& s) -> bool { 
                 return self.writeEmbedded(debug, s);
@@ -305,6 +311,12 @@ void InitParserOutputModule(py::module &m) {
             [](sim::PTSubcircuitDefinition& self,
             sim::PTParameterExpression& expr)
                 -> sim::PTSubcircuitDefinition& {
+                return self.add(std::move(expr));
+            },
+            py::return_value_policy::reference_internal)
+        .def("add",
+            [](sim::PTSubcircuitDefinition& self,
+               sim::PTBehavioral& expr) -> sim::PTSubcircuitDefinition& {
                 return self.add(std::move(expr));
             },
             py::return_value_policy::reference_internal)
@@ -857,5 +869,84 @@ void InitParserOutputModule(py::module &m) {
             },
             py::arg("level"),
             py::arg("status"));
+
+    py::class_<sim::PTBehavioral>(m, "PTBehavioral")
+        .def(py::init<>())
+        .def(py::init([](std::string name, 
+                         std::list<std::string> terms,
+                         sim::Rpn& expr,
+                         bool currentSource) {
+            const sim::Loc& loc = sim::Loc::bad;
+        	sim::PTIdentifierList identifiers;
+        	for (const auto& term : terms)
+            	identifiers.emplace_back(term);
+            
+            return sim::PTBehavioral(
+                sim::Id(name),
+                std::move(identifiers),
+                std::move(expr),
+                currentSource,
+                loc
+            );
+        }),
+        py::arg("name"),
+        py::arg("terms"),
+        py::arg("expr"),
+        py::arg("currentSource"))
+        .def(py::init([](std::string name, 
+                         std::list<std::string> terms,
+                         sim::Rpn& expr,
+                         bool currentSource,
+                         std::string& discipline,
+                         std::string& potentialAccessor,
+                         std::string& flowAccessor) {
+            const sim::Loc& loc = sim::Loc::bad;
+        	sim::PTIdentifierList identifiers;
+        	for (const auto& term : terms)
+            	identifiers.emplace_back(term);
+            
+            return sim::PTBehavioral(
+                sim::Id(name),
+                std::move(identifiers),
+                std::move(expr),
+                currentSource,
+                std::move(discipline),
+                std::move(potentialAccessor),
+                std::move(flowAccessor),
+                loc
+            );
+        }),
+        py::arg("name"),
+        py::arg("terms"),
+        py::arg("expr"),
+        py::arg("currentSource"),
+        py::arg("discipline"),
+        py::arg("potentialAccessor"),
+        py::arg("flowAccessor"))
+        .def_property_readonly("name", &sim::PTBehavioral::name)
+        .def_property_readonly("connections", &sim::PTBehavioral::connections)
+        .def_property_readonly("expr", &sim::PTBehavioral::expr)
+        .def_property_readonly("current_source", &sim::PTBehavioral::currentSource)
+        .def_property_readonly("discipline", &sim::PTBehavioral::discipline)
+        .def_property_readonly("potential_accessor", &sim::PTBehavioral::potentialAccessor)
+        .def_property_readonly("flow_accessor", &sim::PTBehavioral::flowAccessor)
+        .def(
+            "dump",
+            [](const sim::PTBehavioral& self, int indent) {
+                self.dump(indent, sim::Simulator::out());
+            },
+            py::arg("indent") = 0
+        )
+        .def(
+            "verify",
+            [](const sim::PTBehavioral& self) {
+                sim::Status s;
+                bool ok = self.verify(0, s);
+                if (!ok) {
+                    throw std::runtime_error(s.message());
+                }
+                return true;
+            }
+        );
 }
         
