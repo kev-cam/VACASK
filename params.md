@@ -3,8 +3,12 @@
 Branch `rust-parser-integration`. Last revised **2026-08-24**, after rebasing onto
 upstream `origin/main` (`03671b60`).
 
-Baseline probe: all 33 device types in the Sky130 `tt` corner (`sky130.lib.spice`).
-**33 pass, 0 fail.** No PDK edits kept — all fixes belong in VACASK.
+Baseline probe: all 33 device types in the original ngspice Sky130 `tt` corner
+(`skywater-pdk-libs-sky130_fd_pr/combined_models/sky130.lib.spice`).
+Freshly reverified 2026-08-24: **33 pass, 0 fail** in one operating point. No PDK
+edits kept — all fixes belong in VACASK. Do not use the similarly named
+`vacask/combined_models/sky130.lib.spice`; that is a converted native library,
+not the ngspice adapter input.
 
 | | PASS (33) | FAIL (0) |
 |---|---|---|
@@ -38,10 +42,11 @@ commit passes.
 
 ## Test baseline
 
-Clean build of this branch: **87/88 pass**, or 88/89 with the Sky130 PDK present.
-The single failure, `test_pssosc2.sim`, also fails on a pristine `origin/main`
-build — it is upstream's, not ours. All 32 SPICE/parser tests pass, plus the
-Sky130 nfet E2E when the PDK is checked out.
+Clean-first build of this branch: **89/90 pass**, or **90/91** with the Sky130
+PDK present. The single failure, `test_pssosc2.sim`, also fails on a pristine
+`origin/main` build — it is upstream's, not ours (the local run lacks its
+external `sg13g2_vacask_common.lib` fixture). All SPICE/parser tests pass, plus
+the Sky130 nfet E2E when the PDK is checked out.
 
 ---
 
@@ -63,6 +68,8 @@ Ordered by leverage. IDs are stable — reference them from commits and future s
 | ~~**A8**~~ | ~~`pwr()` has no Verilog-A translation~~ | **DONE** — context-dependent rewrite + `sgn` translator | — |
 | ~~**A6**~~ | ~~`version` ignored in BSIM4 dispatch~~ | **DONE** — selects and configures the BSIM4 master | — |
 | ~~**P1**~~ | ~~`lang=` must precede `section=`~~ | **DONE** — include options are order-independent | — |
+
+**No open items remain.**
 
 `A*` = adapter (`lib/netlistrs.cpp`), `C*` = core simulator, `P*` = parser/lexer.
 
@@ -1026,7 +1033,7 @@ was intended — a botched search-and-replace in the combined-models generator.
 ## Reproduction
 
 ```
-include ".../combined_models/sky130.lib.spice" lang=ngspice section=tt
+include ".../skywater-pdk-libs-sky130_fd_pr/combined_models/sky130.lib.spice" section=tt lang=ngspice
 ```
 
-Note the `lang=` before `section=` ordering (P1).
+The section-before-language ordering also exercises the P1 fix.
