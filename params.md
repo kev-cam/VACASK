@@ -62,7 +62,7 @@ Ordered by leverage. IDs are stable — reference them from commits and future s
 | ~~**A7**~~ | ~~`temper` not rewritten to `$temp`~~ | **DONE** — rewritten in every SPICE value | — |
 | ~~**A8**~~ | ~~`pwr()` has no Verilog-A translation~~ | **DONE** — context-dependent rewrite + `sgn` translator | — |
 | ~~**A6**~~ | ~~`version` ignored in BSIM4 dispatch~~ | **DONE** — selects and configures the BSIM4 master | — |
-| **P1** | `lang=` must precede `section=` | `lib/dfllexer.l:405` | usability wart |
+| ~~**P1**~~ | ~~`lang=` must precede `section=`~~ | **DONE** — include options are order-independent | — |
 
 `A*` = adapter (`lib/netlistrs.cpp`), `C*` = core simulator, `P*` = parser/lexer.
 
@@ -896,16 +896,19 @@ function table either. Doing `pwr` alone unblocks the 20 V FETs.
 Deliberately *not* done as part of A3: A2 recorded failing loudly on these as
 the intended behaviour, so reversing that is a separate decision.
 
-### P1 — `lang=` must precede `section=`
+### P1 — `lang=` must precede `section=`  *(FIXED)*
+
+Fixed: `lang=` now pushes its value state from either `INCEND` or `LIBEND`, and
+the value rule returns to the state that requested it. Therefore both option
+orders below preserve the selected language and library section. Regression
+coverage in `test/test_spice_include_section.sim` loads sections using each order
+and checks their combined result. Existing behavior is unchanged for repeats:
+the last `lang=` wins, while a repeated `section=` is rejected.
 
 ```
-include "x.lib" section=tt lang=ngspice   → Syntax error, unexpected string in library directive.
-include "x.lib" lang=ngspice section=tt   → OK
+include "x.lib" section=tt lang=ngspice
+include "x.lib" lang=ngspice section=tt
 ```
-
-The `INCEND` state has rules for both `lang=` (`dfllexer.l:296`) and `section=`
-(`:300`), but `section=` transitions to `LIBSECTION`→`LIBEND`, and `LIBEND`
-(`:405`) has no `lang=` rule. Add one, or document the ordering.
 
 ---
 

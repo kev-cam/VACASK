@@ -2,12 +2,12 @@ SPICE library section include OP analysis
 
 ground 0
 
-// Both sections of the same library must be loaded. Path-only visitation used
-// to skip the second include, leaving rff unresolved.
+// Both option orders and both sections of the same library must be loaded.
+// Path-only visitation used to skip the second include, leaving rff unresolved.
 model vsource vsource
 
 include "spice_include_corners.lib" lang=ngspice section=tt
-include "spice_include_corners.lib" lang=ngspice section=ff
+include "spice_include_corners.lib" section=ff lang=ngspice
 
 // m_ prefix on a SPICE `.model` name -- see test_lang_include.sim.
 r1 (1 2) m_rtt r=1k

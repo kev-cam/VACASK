@@ -293,9 +293,9 @@ after INCEND we have
                 return(token::YYerror);
             }
 <INCEND>[ \t]* {} // Skip spaces after quoted string
-<INCEND>lang[ \t]*\= {  // Found lang=
+<INCEND,LIBEND>lang[ \t]*\= { // Found lang=
                 language.clear();
-                BEGIN(LANGVALUE);
+                yy_push_state(LANGVALUE);
             }
 <INCEND>section[ \t]*\= {  // Found section=
                 // Go to LIBSECTION state
@@ -392,7 +392,7 @@ after INCEND we have
 <LANGVALUE>[a-zA-Z_$][0-9a-zA-Z_$]* { // dialect identifier
                 language = yytext;
                 std::transform(language.begin(), language.end(), language.begin(), ::tolower);
-                BEGIN(INCEND);
+                yy_pop_state();
             }
 <LANGVALUE>\n {
                 error(*loc, "Syntax error, expected dialect name after lang=.");
