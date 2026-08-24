@@ -6,6 +6,7 @@
 #include "tdnsdewhite.h"
 #include "tdnsdeflicker.h"
 #include "common.h"
+#include "densematrix.h"
 #include <filesystem>
 #include <algorithm>
 
@@ -1254,9 +1255,12 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious) {
             // Compute noiseless solution
             auto& negNoise = nrSolver.noiseSolutionContribution();
             auto& solutionVector = solution.vector();
-            for(decltype(n) i=1; i<=n; i++) {
-                noiselessSolution[i] = solutionVector[i] + negNoise[i];
-            }
+            
+            VectorView solutionView(solutionVector, 1, n, 1);
+            VectorView negNoiseView(const_cast<double*>(negNoise.data()), 1, n, 1);
+            VectorView noiselessView(noiselessSolution, 1, n, 1);
+            noiselessView.vectorPlusScaledVector(solutionView, negNoiseView, 1.0);
+            
             noiselessSolution[0] = 0;
         }
         
@@ -1455,16 +1459,6 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious) {
             // sigglobal    global              global          local                   moderate
             // alllocal     local               local           local                   conservative
             // pointlocal   pointlocal          pointlocal      pointlocal
-
-            // Compute global reference values across past
-            // Compute maximum across all unknowns at this point 
-            double pointMax = 0;
-            for(decltype(n) i=1; i<=n; i++) {
-                double c = std::fabs(solution.vector()[i]);
-                if (c>pointMax) {
-                    pointMax = c;
-                }
-            }
 
             // Go through all unknowns, except for the ground
             bool haveRatio = false;

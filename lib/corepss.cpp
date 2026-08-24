@@ -78,7 +78,11 @@ bool PssCore::rebuild(Status& s) {
     auto n = circuit.unknownCount();
     Fp.resize(n+1);
     alpha.resize(n);
-    Jp.resize(n+1, n+1);
+    // We are going to solve a linear system with this matrix. 
+    // Make it column major. 
+    Jp.resize(n+1, n+1, DenseMatrix<double>::Major::Column);
+    rowPerm_.resize(n+1);
+    ones_.assign(n, 1.0);
     x0.resize(n+1);
     xT.resize(n+1);
 
@@ -367,19 +371,19 @@ void PssCore::computePhaseConstraint(
     auto n = circuit.unknownCount();
     alpha.assign(n, 0.0);
 
-    double norm = 0.0;
-    for (decltype(n) i = 0; i < n; i++) {
-        double d = (x1[i + 1] - x0[i + 1]) / h0;
-        alpha[i] = d;
-        norm += d * d;
-    }
-    norm = std::sqrt(norm);
+    VectorView alphaView(alpha);
+    alphaView.vectorPlusScaledVector(
+        VectorView(const_cast<Vector<double>&>(x1), 1, n, 1), 
+        VectorView(const_cast<Vector<double>&>(x0), 1, n, 1), -1.0
+    );
+    // alpha currently holds (x1-x0), unscaled by h0; correct the norm
+    // algebraically instead of scaling the vector before measuring it.
+    double norm = alphaView.norm() / h0;
 
     if (norm > 0.0) {
-        for (decltype(n) i = 0; i < n; i++) {
-            alpha[i] /= norm;
-        }
+        alphaView.scale(1.0/(h0*norm));
     } else {
+        alphaView.scale(1.0/h0);
         if (circuit.simulatorOptions().core().pss_debug) {
             Simulator::dbg() << "x1-x0 is zero, cannot estimate phase velocity\n";
         }
@@ -507,18 +511,18 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious) {
             Simulator::dbg() << ss.str();
         }
 
-        // Compute the residual
-        for (decltype(n) i = 0; i < n; i++) {
-            // skip the bucket at x[0]
-            Fp[i] = x0[i + 1] - xT[i + 1];
-        }
+        // Compute the residual (skip the bucket at x[0])
+        VectorView(Fp, n).vectorPlusScaledVector(
+            VectorView(x0, 1, n, 1), 
+            VectorView(xT, 1, n, 1), -1.0
+        );
 
-        // Jacobian: I - PhiT
-        for (decltype(n) i = 0; i < n; i++) {
-            for (decltype(n) j = 0; j < n; j++) {
-                Jp.at(i, j) = (i == j ? 1.0 : 0.0) - tmpPhiT.at(i, j);
-            }
-        }
+        // Jacobian: I - PhiT (n x n block of the (n+1) x (n+1) augmented Jp)
+        // Both Jp and tmpPhiT are column-major, so the block view below is
+        // stride-1 within a column (colStride_=n+1, padded past row n).
+        DenseMatrixView<double> jpBlock(Jp.data().data(), n, n, 1, n+1);
+        jpBlock.scaledMatrix(tmpPhiT, -1.0);
+        jpBlock.diagonal().addScaled(VectorView(ones_), 1.0);
 
         // Compute phase constraint for autonomous circuits
         if (!params.driven){
@@ -537,21 +541,24 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious) {
             // we are forcing orthogonality of the solver step. 
             // Augment the Jacobian
             // Right column: PsiT
-            for (decltype(n) i = 0; i < n; i++) Jp.at(i, n) = -tmpPsiT[i];
+            Jp.column(n).subVector(0, n).scaledVector(VectorView(tmpPsiT), -1.0);
             // Bottom row: alpha^T
-            for (decltype(n) j = 0; j < n; j++) Jp.at(n, j) = alpha[j];
+            Jp.row(n).subVector(0, n) = VectorView(alpha);
         }
         // If the circuit is driven, make sure Jp is not singular by setting the corner to 1
         Jp.at(n, n) = params.driven ? 1.0 : 0.0;
 
         // Solve the Newton step
-        VectorView<double> rhsView(Fp);
-        if (!Jp.destructiveSolve(rhsView)) {
+        VectorView rhsView(Fp);
+        VectorView rowPermView(rowPerm_);
+        if (!Jp.factorAndLuSolve(rhsView, &rowPermView)) {
              setError(PssError::SingularJacobian);
              co_yield CoreState::Aborted;
         }
         // Update x0 and T0
-        for (decltype(n) i = 0; i < n; i++) x0[i + 1] -= rhsView[i];
+        VectorView(x0, 1, n, 1).addScaled(
+            VectorView(Fp, n), -1.0
+        );
         T0 -= params.driven ? 0.0 : rhsView[n];
 
         // Get new xT

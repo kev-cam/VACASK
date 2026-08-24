@@ -40,7 +40,7 @@ bool HBCore::buildTransformMatrix(DenseMatrix<double>& XF, Status& s) {
     auto m = spurs_.spectrum().size();
     auto ncoef = 2*m-1;
     
-    XF.resize(n, ncoef);
+    XF.resize(n, ncoef, DenseMatrix<double>::Major::Column);
     
     // Storage of (2 pi f t) factors for base frequencies
     auto nBase = spurs_.fundamentals().size();
@@ -106,11 +106,18 @@ bool HBCore::buildAPFT(Status& s) {
     }
 
     // Make a copy that will be destroyed during matrix inversion
-    DenseMatrix<double> coeffs = IAPFT;
+    // First size it and make it column-major
+    DenseMatrix<double> coeffs(ncoef, ncoef, DenseMatrix<double>::Major::Column);
+    // coeffs = IAPFT would use DenseMatrix's own copy-assign, which also
+    // copies major_ - use view() to reach the element-only copy instead.
+    coeffs.view() = IAPFT;
     
     // Invert to obtain APFT
-    APFT.resize(n, n);
-    if (!coeffs.destructiveInvert(APFT)) {
+    // Destination matdix must be column-major so LAPACK is used
+    APFT.resize(n, n, DenseMatrix<double>::Major::Column);
+    rowPerm_.resize(ncoef);
+    VectorView rowPermView(rowPerm_);
+    if (!coeffs.factorAndInvert(APFT, &rowPermView)) {
         s.set(Status::Analysis, "Failed to compute forward transform matrix.");
         return false;
     }
@@ -136,10 +143,7 @@ bool HBCore::buildAPFT(Status& s) {
     // -sin row x -omega -> cos row
     OmegaGamma.resize(n, n);
     // DC row
-    auto destRow = OmegaGamma.row(0);
-    for(decltype(n) i=0; i<n; i++) {
-        destRow[i] = 0;
-    }
+    OmegaGamma.row(0) = 0.0;
     // cos and -sin row
     for(decltype(n) i=1; i<m; i++) {
         auto omega = 2*std::numbers::pi*spurs_.spectrum()[i];
@@ -150,8 +154,8 @@ bool HBCore::buildAPFT(Status& s) {
         auto destCosRow = OmegaGamma.row(baseNdx);
         auto destNegSinRow = OmegaGamma.row(baseNdx+1);
 
-        destCosRow.writeScaled(negSinRow, -omega);
-        destNegSinRow.writeScaled(cosRow, omega);
+        destCosRow.scaledVector(negSinRow, -omega);
+        destNegSinRow.scaledVector(cosRow, omega);
     }
 
     // Form GammaInv as column-major matrix

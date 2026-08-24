@@ -325,6 +325,16 @@ add_compile_definitions("$<$<CONFIG:AsanDebug>:SIMDEBUG>")
 # Location of include files
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include")
 
+# BLAS/LAPACK for VectorView/DenseMatrix (Fortran routines called directly, no C wrapper)
+# Linux currently uses whatever the system update-alternatives points libblas.so.3/
+# liblapack.so.3 at (reference Netlib by default). To be switched to OpenBLAS (OpenMP
+# build) later; Windows already gets both via the bundled libopenblas.a below.
+# macOS gets Homebrew BLAS/LAPACK the same way it already gets Homebrew SuiteSparse.
+if (${SIM_PLATFORM} STREQUAL "Linux" OR ${SIM_PLATFORM} STREQUAL "Darwin")
+    find_package(BLAS REQUIRED)
+    find_package(LAPACK REQUIRED)
+endif()
+
 # What to link with the object files to produce an executable
 if (${SIM_PLATFORM} STREQUAL "Windows")
     link_directories(${SuiteSparse_DIR}/lib)
@@ -353,12 +363,14 @@ elseif (${SIM_PLATFORM} STREQUAL "Darwin")
             Boost::filesystem
             Boost::process
             klu amd camd colamd ccolamd btf cholmod suitesparseconfig
+            ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES}
         CACHE STRING "External libraries for creating an executable."
         FORCE
     )
 else()
     set(SIM_EXE_LIBRARIES
             dl m klu amd camd colamd ccolamd btf cholmod suitesparseconfig
+            ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES}
             ${Boost_LIBRARIES}
         CACHE STRING "External libraries for creating an executable."
         FORCE

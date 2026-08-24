@@ -112,7 +112,7 @@ bool IntegratorCoeffs::compute(CircularBuffer<double>& pastSteps, double newStep
     // Unknowns order: a_0, ..., a_{numx-1}
     //                 b_{-1}
     //                 b_0, ..., b_{numxdot-1}
-    matrix.resize(n_, n_);
+    matrix.resize(n_, n_, DenseMatrix<double>::Major::Column);
     rhs.resize(n_);
 
     // Prepare space for coeffs
@@ -505,7 +505,7 @@ bool IntegratorCoeffs::computeSensitivities(double newStep) {
 
 bool IntegratorCoeffs::solve(Int n) {
     rowPerm_.resize(n);
-    VectorView<size_t> rowPermView(rowPerm_);
+    VectorView rowPermView(rowPerm_);
     if (!matrix.factor(rowPermView)) {
         return false;
     }
@@ -514,7 +514,7 @@ bool IntegratorCoeffs::solve(Int n) {
 }
 
 bool IntegratorCoeffs::solveSensitivity() {
-    VectorView<size_t> rowPermView(rowPerm_);
+    VectorView rowPermView(rowPerm_);
     auto vv = VectorView(rhs.data(), n_, 1);
     return matrix.luSolve(vv, rowPermView);
 }
@@ -726,10 +726,12 @@ bool IntegratorCoeffs::test() {
             ok = false;
             return;
         }
-        cP.compute(steps, hk+eps);
-        cP.scaleDifferentiator(hk+eps);
-        cM.compute(steps, hk-eps);
-        cM.scaleDifferentiator(hk-eps);
+        if (!cP.compute(steps, hk+eps) || !cP.scaleDifferentiator(hk+eps) ||
+            !cM.compute(steps, hk-eps) || !cM.scaleDifferentiator(hk-eps)) {
+            std::cout << label << " sensitivity test: finite-difference compute FAILED\n";
+            ok = false;
+            return;
+        }
 
         double maxDiff = 0;
         for(Int i=0; i<c.aScaledSens().size(); i++) {
