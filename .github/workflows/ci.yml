@@ -14,7 +14,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            name: Ubuntu 24.04
+            container: quay.io/pypa/manylinux_2_34_x86_64
+            name: Linux x86_64
+          - os: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_34_aarch64
+            name: Linux aarch64
           - os: macos-14
             name: macOS
           - os: windows-latest
@@ -22,6 +26,9 @@ jobs:
 
     name: Build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    # Linux builds run inside manylinux_2_34 (AlmaLinux 9, glibc 2.34) to produce
+    # portable binaries; macOS/Windows leave this empty and run on the host.
+    container: ${{ matrix.container }}
 
     steps:
       - name: Checkout
@@ -46,29 +53,29 @@ jobs:
             tomlplusplus:p llvm:p clang:p lld:p rust:p python:p
             python-numpy:p python-scipy:p
 
-      - name: Cache OpenVAF build
+      - name: Cache OpenVAF-Reloaded build
         id: cache-openvaf
         uses: actions/cache@v5
         with:
           path: openvaf-cache
-          key: openvaf-${{ matrix.os }}-${{ runner.arch }}-v5
+          key: openvaf-${{ matrix.os }}-${{ runner.arch }}-v6
 
-      - name: Build OpenVAF-reloaded (Unix)
+      - name: Build OpenVAF-Reloaded (Unix)
         if: steps.cache-openvaf.outputs.cache-hit != 'true' && runner.os != 'Windows'
         run: ci/build-openvaf.sh "$GITHUB_WORKSPACE/openvaf-cache"
 
-      - name: Build OpenVAF-reloaded (Windows)
+      - name: Build OpenVAF-Reloaded (Windows)
         if: steps.cache-openvaf.outputs.cache-hit != 'true' && runner.os == 'Windows'
         shell: msys2 {0}
         run: ci/build-openvaf.sh "$(cygpath -u "$GITHUB_WORKSPACE")/openvaf-cache"
 
-      - name: Setup OpenVAF path (Unix)
+      - name: Setup OpenVAF-Reloaded path (Unix)
         if: runner.os != 'Windows'
         run: |
           chmod +x "$GITHUB_WORKSPACE/openvaf-cache/openvaf-r"
           echo "OPENVAF_DIR=$GITHUB_WORKSPACE/openvaf-cache" >> "$GITHUB_ENV"
 
-      - name: Setup OpenVAF path (Windows)
+      - name: Setup OpenVAF-Reloaded path (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
@@ -93,12 +100,16 @@ jobs:
         run: ci/bundle.sh --openvaf-dir "$OPENVAF_DIR"
 
       - name: Upload build artifacts
+        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: vacask-${{ matrix.os }}
           path: |
             build/simulator/
-            build/lib/vacask/
+            !build/simulator/CMakeFiles/
+            !build/simulator/cmake_install.cmake
+            !build/simulator/CTestTestfile.cmake
+            build/lib/
           if-no-files-found: warn
 
   release:
@@ -121,8 +132,9 @@ jobs:
 
           cd artifacts
 
-          # Linux tar.gz
+          # Linux tar.gz (manylinux_2_34, glibc 2.34)
           tar czf "../vacask_${VERSION}_linux-x86_64.tar.gz" -C vacask-ubuntu-24.04 .
+          tar czf "../vacask_${VERSION}_linux-aarch64.tar.gz" -C vacask-ubuntu-24.04-arm .
 
           # macOS tar.gz
           tar czf "../vacask_${VERSION}_darwin-arm64.tar.gz" -C vacask-macos-14 .

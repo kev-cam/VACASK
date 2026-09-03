@@ -4,6 +4,7 @@ set(device_sources
     "inductor.va"        "inductor.osdi"         ""
     "resistor.va"        "resistor.osdi"         ""
     "diode.va"           "diode.osdi"            ""
+    "tline_ideal.va"     "tline_ideal.osdi"            ""
     "bsim3v3.va"         "bsim3v3.osdi"          ""
     "bsim4v8.va"         "bsim4v8.osdi"          ""
     "bsimbulk106.va"     "bsimbulk106.osdi"      ""
@@ -54,7 +55,7 @@ set(device_sources
 )
 
 # Extra options for OpenVAF
-message(STATUS "Extra OpenVAF options: ${OPENVAF_OPTIONS}")
+message(STATUS "Extra OpenVAF-Reloaded options: ${OPENVAF_OPTIONS}")
 string(REPLACE " " ";" extra_options_list "${OPENVAF_OPTIONS}")
     
 # Prepare directory for staging the osdi library

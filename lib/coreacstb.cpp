@@ -3,7 +3,7 @@
 #include <filesystem>
 #include "coreacstb.h"
 #include "simulator.h"
-#include "answeep.h"
+#include "coresweep.h"
 #include "context.h"
 #include "common.h"
 #include <numbers>
@@ -35,19 +35,23 @@ instantiateIntrospection(ACStbParameters);
 
 
 ACStbCore::ACStbCore(
-    OutputDescriptorResolver& parentResolver, ACStbParameters& params, OperatingPointCore& opCore, Circuit& circuit, 
-    CommonData& commons, 
-    KluRealMatrix& dcJacobian, VectorRepository<double>& dcSolution, VectorRepository<double>& dcStates, 
-    KluComplexMatrix& acMatrix, Vector<Complex>& acSolution, Vector<Complex>& resultsVector
-) : AnalysisCore(parentResolver, circuit, commons), params(params), outfile(nullptr), opCore_(opCore), 
-    dcSolution(dcSolution), dcStates(dcStates), dcJacobian(dcJacobian), 
-    acMatrix(acMatrix), acSolution(acSolution), resultsVector(resultsVector) {
-    
+    OutputDescriptorResolver& parentResolver, ACStbParameters& params, OperatingPointCore& opCore, Circuit& circuit,
+    CommonData& commons,
+    KluRealMatrix& dcJacobian, VectorRepository<double>& dcSolution, VectorRepository<double>& dcStates,
+    KluComplexMatrix& acMatrix, Vector<Complex>& acSolution, Vector<Complex>& resultsVector,
+    DelayLines& delayLines, DelayMatrixBindings<Complex*>& delayBindings
+) : AnalysisCore(parentResolver, circuit, commons), params(params), outfile(nullptr), opCore_(opCore),
+    dcSolution(dcSolution), dcStates(dcStates), dcJacobian(dcJacobian),
+    acMatrix(acMatrix), acSolution(acSolution), resultsVector(resultsVector),
+    delayLines_(delayLines), delayBindings_(delayBindings), resolver_(circuit) {
+
     // Set analysis type for the initial operating point analysis
     auto& elsSystem = opCore_.solver().evalSetup();
     elsSystem.staticAnalysis = true;
     elsSystem.dcAnalysis = false;
     elsSystem.acAnalysis = true;
+
+    acMatrix.setResolver(&resolver_);
 }
 
 ACStbCore::~ACStbCore() {
@@ -56,7 +60,7 @@ ACStbCore::~ACStbCore() {
 
 // Converts an OutputDescriptor into an OutputSource. 
 // The former can be used to recreate the latter if the set of unknowns changes. 
-bool ACStbCore::resolveOutputDescriptors(bool strict, Status& s) {
+bool ACStbCore::resolveOutputDescriptors(bool strict, ErrorConsumer& errors) {
     // Clear output sources
     outputSources.clear();
     // Resolve output descriptors
@@ -74,7 +78,7 @@ bool ACStbCore::resolveOutputDescriptors(bool strict, Status& s) {
             break;
         default:
             // Delegate to parent
-            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, s);
+            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, errors);
             break;
         }
         if (!ok) {
@@ -85,49 +89,49 @@ bool ACStbCore::resolveOutputDescriptors(bool strict, Status& s) {
 }
 
 // These OutputDescriptors are always added
-bool ACStbCore::addCoreOutputDescriptors(Status& s) {
+bool ACStbCore::addCoreOutputDescriptors(ErrorConsumer& errors) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdFrequency, "frequency"))) {
-        s.set(Status::Analysis, std::string("Failed to add output descriptor for frequency."));
+        errors.push(CoreAddOutputDescriptor{"frequency"});
         return false;
     }
     // Forward/reverse/total open loop gain
     if (!addOutputDescriptor(OutputDescriptor(OutdGain, "wf", to_int(StbResult::Wf)))) {
-        s.set(Status::Analysis, std::string("Failed to add output descriptor for forward open-loop gain."));
+        errors.push(CoreAddOutputDescriptor{"forward open-loop gain"});
         return false;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdGain, "wr", to_int(StbResult::Wr)))) {
-        s.set(Status::Analysis, std::string("Failed to add output descriptor for reverse open-loop gain."));
+        errors.push(CoreAddOutputDescriptor{"reverse open-loop gain"});
         return false;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdGain, "w", to_int(StbResult::W)))) {
-        s.set(Status::Analysis, std::string("Failed to add output descriptor for open-loop gain."));
+        errors.push(CoreAddOutputDescriptor{"open-loop gain"});
         return false;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdY, "y(1,1)", to_int(StbResult::y11)))) {
-        s.set(Status::Analysis, std::string("Failed to add output descriptor for y11."));
+        errors.push(CoreAddOutputDescriptor{"y11"});
         return false;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdY, "y(1,2)", to_int(StbResult::y12)))) {
-        s.set(Status::Analysis, std::string("Failed to add output descriptor for y12."));
+        errors.push(CoreAddOutputDescriptor{"y12"});
         return false;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdY, "y(2,1)", to_int(StbResult::y21)))) {
-        s.set(Status::Analysis, std::string("Failed to add output descriptor for y21."));
+        errors.push(CoreAddOutputDescriptor{"y21"});
         return false;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdY, "y(2,2)", to_int(StbResult::y22)))) {
-        s.set(Status::Analysis, std::string("Failed to add output descriptor for y22."));
+        errors.push(CoreAddOutputDescriptor{"y22"});
         return false;
     }
     return true;
 }
 
 // These OutputDescriptors are added if no save directives are given
-bool ACStbCore::addDefaultOutputDescriptors(Status& s) {
+bool ACStbCore::addDefaultOutputDescriptors(ErrorConsumer& errors) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
@@ -137,7 +141,7 @@ bool ACStbCore::addDefaultOutputDescriptors(Status& s) {
     return true;
 }
 
-bool ACStbCore::initializeOutputs(const std::string& name, Status& s) {
+bool ACStbCore::initializeOutputs(const std::string& name, ErrorConsumer& errors) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
@@ -156,7 +160,7 @@ bool ACStbCore::initializeOutputs(const std::string& name, Status& s) {
     return true;
 }
 
-bool ACStbCore::finalizeOutputs(Status& s) {
+bool ACStbCore::finalizeOutputs(ErrorConsumer& errors) {
     if (outfile) {
         outfile->epilogue();
         delete outfile;
@@ -165,7 +169,7 @@ bool ACStbCore::finalizeOutputs(Status& s) {
     return true;
 }
 
-bool ACStbCore::deleteOutputs(Id name, Status& s) {
+bool ACStbCore::deleteOutputs(Id name, ErrorConsumer& errors) {
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
@@ -178,17 +182,25 @@ bool ACStbCore::deleteOutputs(Id name, Status& s) {
     return true;
 }
 
-bool ACStbCore::rebuild(Status& s) {
-    clearError();
+bool ACStbCore::rebuild(ErrorConsumer& errors) {
     // AC analysis matrix
-    if (!acMatrix.rebuild(circuit.sparsityMap(), circuit.unknownCount())) {
-        setError(StbError::MatrixError);
+    if (!acMatrix.rebuild(circuit.sparsityMap(), circuit.unknownCount(), errors)) {
         return false;
     }
-    
-    // Resistive Jacobian entries remain bound to OP Jacobian, 
+
+    // Delay lines: bind this core's complex bindings into acMatrix.
+    // The shared DelayLines object is already sized here - it is scaled by
+    // OperatingPointCore::rebuild(), which SmallSignal::rebuildCores() always
+    // runs before this core's rebuild(). Do not call delayLines_.scale() again.
+    if (!delayLines_.bindToMatrix(acMatrix, std::nullopt, delayBindings_, errors)) {
+        errors.push(StbDelayBindFailed{});
+        return false;
+    }
+
+    // Resistive Jacobian entries remain bound to OP Jacobian,
     // reactive parts will be bound to imaginary entries of acMatrix
-    if (!circuit.bind(nullptr, Component::Real, std::nullopt, &acMatrix, Component::Imaginary, std::nullopt, s)) {
+    if (!circuit.bind(nullptr, Component::Real, std::nullopt, &acMatrix, Component::Imaginary, std::nullopt, nullptr, errors)) {
+        errors.push(StbBindFailed{});
         return false;
     }
     
@@ -197,17 +209,16 @@ bool ACStbCore::rebuild(Status& s) {
 
 // System of equations is 
 //   (G(x) + i C(x)) dx = dJ
-CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
+CoreCoroutine ACStbCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
     acMatrix.setAccounting(circuit.tables().accounting());
     
-    clearError();
     
     auto n = circuit.unknownCount(); 
     // Make sure structures are large enough
     acSolution.resize(n+1);
 
     // Get probe voltage source
-    auto [probeOk, probeSource] = getExcitation(params.probe);
+    auto [probeOk, probeSource] = getExcitation(params.probe, errors);
     if (!probeOk) {
         co_yield CoreState::Aborted;
     }
@@ -215,7 +226,7 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
     // Is probe source a voltage source? 
     auto sdev = probeSource->model()->device();
     if (!(sdev->isSource() && sdev->isVoltageSource())) {
-        setError(StbError::BadProbe);
+        errors.push(StbBadProbe{});
         co_yield CoreState::Aborted;
     }
 
@@ -238,7 +249,7 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
     if (params.localgnd && *params.localgnd.c_str()!=0) {
         auto node = circuit.findNode(params.localgnd);
         if (!node) {
-            setError(StbError::BadLocalGnd);
+            errors.push(StbBadLocalGnd{});
             co_yield CoreState::Aborted;
         }
         refGnd = node->unknownIndex();
@@ -248,10 +259,9 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
     resultsVector.resize(to_int(StbResult::COUNT));
     
     // Compute operating point
-    errorFreq = 0;
-    auto opOk = opCore_.run(continuePrevious);
+    auto opOk = opCore_.run(continuePrevious, errors);
     if (!opOk) {
-        setError(StbError::OperatingPointError);
+        errors.push(StbOperatingPointFailed{});
         co_yield CoreState::Aborted;
     }
 
@@ -287,8 +297,8 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
 
     // Copy OP Jacobian to real part of acMatrix, zero out imaginary part
     auto nnz = dcJacobian.nnz();
-    auto Jr = dcJacobian.data();
-    auto M = acMatrix.data();
+    auto Jr = dcJacobian.axData();
+    auto M = acMatrix.axData();
     for(decltype(nnz) i=0; i<nnz; i++) {
         M[i] = Jr[i];
     }
@@ -296,10 +306,10 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
     // Evaluate Jacobians 
     // Actually we only need to evaluate the reactive Jacobian 
     // because the resistive part was evaluated by OP analysis
-    // We do both here in case OpenVAF has bugs with this corner case :)
-    if (!circuit.evalAndLoad(commons, &esReactive, nullptr, nullptr)) {
+    // We do both here in case OpenVAF-Reloaded has bugs with this corner case :)
+    if (!circuit.evalAndLoad(commons, &esReactive, nullptr, nullptr, errors)) {
         // Load error
-        setError(StbError::EvalAndLoad);
+        errors.push(StbEvalAndLoadFailed{});
         if (debug>0) {
             Simulator::dbg() << "Error in AC Jacobian evaluation.\n";
         }
@@ -328,8 +338,8 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
 
     // Create sweeper
     ScalarSweep sweeper;
-    if (!sweeper.setup(params, errorStatus)) {
-        setError(StbError::Sweeper);
+    if (!sweeper.setup(params, errors)) {
+        errors.push(StbSweepSetupFailed{});
         co_yield CoreState::Aborted;
     }
     if (progressReporter) {
@@ -348,15 +358,15 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
     do {
         // Compute should always succeed
         Value v;
-        if (!sweeper.compute(v, errorStatus)) {
-            setError(StbError::SweepCompute);
+        if (!sweeper.compute(v, errors)) {
+            errors.push(StbSweepComputeFailed{});
             error = true;
             break;
         }
 
         // The value, however, must be convertible to real
-        if (!v.convertInPlace(Value::Type::Real, errorStatus)) {
-            setError(StbError::BadFrequency);
+        if (!v.convertInPlace(Value::Type::Real)) {
+            errors.push(StbBadFrequency{});
             if (debug>0) {
                 Simulator::dbg() << "Frequency value cannot be converted to real.\n";
             }
@@ -378,16 +388,30 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
         acMatrix.zero(Component::Imaginary);
         zero(acSolution);
         lsReactive.reactiveJacobianFactor = omega;
-        if (!circuit.evalAndLoad(commons, nullptr, &lsReactive, nullptr)) {
+        if (!circuit.evalAndLoad(commons, nullptr, &lsReactive, nullptr, errors)) {
             // Load error
-            setError(StbError::EvalAndLoad);
+            errors.push(StbEvalAndLoadFailed{});
             if (debug>0) {
                 Simulator::dbg() << "Error in AC Jacobian load.\n";
             }
             error = true;
             break;
         }
-        
+
+        // Load delay line contributions
+        auto nDelay = circuit.delayHistoryCount();
+        if (nDelay>0) {
+            for(decltype(nDelay) i=0; i<nDelay; i++) {
+                // Equation -out + exp(-j w delay) in = 0
+                // Get Jacobian Pointers
+                auto [outIn, outOut] = delayBindings_[i];
+                // Load Jacobian, set values, not add because we are the sole contributor to this equation
+                // Also op Jacobian left a real value in outIn which should be overwritten
+                *outIn = std::exp(Complex(0, - omega * delayLines_.delay(i)));
+                // outOut is kept as loaded by op
+            }
+        }
+
         if (debug>=101) {
             Simulator::dbg() << "Linear system matrix\n";
             acMatrix.dump(Simulator::dbg()); 
@@ -396,8 +420,8 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
 
         // Check if matrix entries are finite, no need to check RHS 
         // since we loaded it without any computation (i.e. we only used mag and phase)
-        if (options.matrixcheck && !acMatrix.isFinite(true, true)) {
-            setError(StbError::MatrixError);
+        if (options.matrixcheck && !acMatrix.isFinite(true, true, errors)) {
+            errors.push(StbMatrixError{});
             if (debug>0) {
                 Simulator::dbg() << "A matrix entry is not finite.\n";
             }
@@ -408,29 +432,33 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
         // Factor
         bool forceFullFactorization = false;        
         if (acMatrix.isFactored()) {
-            // Refactor (if possible)
-            if (!acMatrix.refactor()) {
+            // Refactor (if possible). A refactor failure is not fatal here.
+            if (!acMatrix.refactor(errors)) {
                 // Failed, try again by fully factoring
                 forceFullFactorization = true;
             } 
         }
         if (forceFullFactorization || !acMatrix.isFactored()) {
             // Full factorization
-            if (!acMatrix.factor()) {
+            if (!acMatrix.factor(errors)) {
                 // Failed, give up
-                setError(StbError::MatrixError);
+                errors.push(StbMatrixError{});
                 if (debug>0) {
                     Simulator::dbg() << "LU factorization failed.\n";
                 }
                 error = true;
                 break;
             }
+            // Full factorization recovered, drop the non-fatal refactor error
+            if (forceFullFactorization) {
+                errors.clear();
+            }
         }
         // Check if matrix is singular
         if (options.rcondcheck>0) { 
             double rcond;
-            if (!acMatrix.rcond(rcond)) {
-                setError(StbError::MatrixError);
+            if (!acMatrix.rcond(rcond, errors)) {
+                errors.push(StbMatrixError{});
                 if (debug>0) {
                     Simulator::dbg() << "Condition number estimation failed.\n";
                 }
@@ -441,7 +469,7 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
                 if (debug>0) {
                     Simulator::dbg() << "Matrix is close to singular.\n";
                 }
-                setError(StbError::SingularMatrix);
+                errors.push(StbSingularMatrix{});
                 error = true;
                 break;
             }
@@ -454,8 +482,8 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
         acSolution[refGnd]       -= 1;
 
         // Solve, set bucket to 0.0
-        if (!acMatrix.solve(dataWithoutBucket(acSolution, bucketSize))) {
-            setError(StbError::MatrixError);
+        if (!acMatrix.solve(dataWithoutBucket(acSolution, bucketSize), errors)) {
+            errors.push(StbMatrixError{});
             if (debug>2) {
                 Simulator::dbg() << "Failed to solve factored system for injected current.\n";
             }
@@ -464,8 +492,8 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
         }
         acSolution[0] = 0.0;
 
-        if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution, bucketSize), true, true)) {
-            setError(StbError::SolutionError);
+        if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution, bucketSize), true, true, errors)) {
+            errors.push(StbSolutionNotFinite{});
             if (options.smsig_debug) {
                 Simulator::dbg() << "A solution entry for injected current is not finite. Solver failed.\n";
             }
@@ -485,8 +513,8 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
         acSolution[e2] -= 1;
 
         // Solve, set bucket to 0.0
-        if (!acMatrix.solve(dataWithoutBucket(acSolution, bucketSize))) {
-            setError(StbError::MatrixError);
+        if (!acMatrix.solve(dataWithoutBucket(acSolution, bucketSize), errors)) {
+            errors.push(StbMatrixError{});
             if (debug>2) {
                 Simulator::dbg() << "Failed to solve factored system for injected voltage.\n";
             }
@@ -495,8 +523,8 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
         }
         acSolution[0] = 0.0;
 
-        if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution, bucketSize), true, true)) {
-            setError(StbError::SolutionError);
+        if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution, bucketSize), true, true, errors)) {
+            errors.push(StbSolutionNotFinite{});
             if (options.smsig_debug) {
                 Simulator::dbg() << "A solution entry for injected voltage is not finite. Solver failed.\n";
             }
@@ -538,23 +566,20 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious) {
         Simulator::dbg() << "AC stability frequency sweep " << (finished ? "completed" : "exited prematurely") << ".\n";
     }
 
-    if (!finished) {
-        errorFreq = frequency;
-    }
+    // No need to bind resistive Jacobian enatries.
+    // OP analysis will still work fine, even in sweep.
+    // We only changed the bindings of the reactive Jacobian entries.
 
-    // No need to bind resistive Jacobian enatries. 
-    // OP analysis will still work fine, even in sweep. 
-    // We only changed the bindings of the reactive Jacobian entries. 
-    
     if (finished) {
         co_yield CoreState::Finished;
     } else {
+        errors.push(StbSweepAborted{frequency});
         co_yield CoreState::Aborted;
     }
 }
 
-bool ACStbCore::run(bool continuePrevious) {
-    auto c = coroutine(continuePrevious);
+bool ACStbCore::run(bool continuePrevious, ErrorConsumer& errors) {
+    auto c = coroutine(continuePrevious, errors);
     bool ok = true;
     while (!c.done()) {
         if (c.resume()==CoreState::Aborted) {
@@ -563,60 +588,6 @@ bool ACStbCore::run(bool continuePrevious) {
         };
     }
     return ok;
-}
-
-bool ACStbCore::formatError(Status& s) const {
-    auto nr = UnknownNameResolver(circuit);
-    std::stringstream ss;
-    ss << std::scientific << std::setprecision(4);
-    
-    // First, handle AnalysisCore errors
-    if (lastError!=Error::OK) {
-        AnalysisCore::formatError(s);
-        return false;
-    }
-    
-    // Then handle ACStbCore errors
-    switch (lastAcError) {
-        case StbError::Sweeper:
-        case StbError::SweepCompute:
-            s.set(errorStatus);
-            break;
-        case StbError::EvalAndLoad:
-            s.set(Status::Analysis, "Jacobian evaluation failed.");
-            break;
-        case StbError::MatrixError:
-            acMatrix.formatError(s, &nr);
-            break;
-        case StbError::SolutionError:
-            acMatrix.formatError(s, &nr);
-            s.extend("Solution component is not finite.");
-            break;
-        case StbError::OperatingPointError:
-            opCore_.formatError(s);
-            break;
-        case StbError::SingularMatrix:
-            s.set(Status::Analysis, "Matrix is close to singular.");
-            break;
-        case StbError::BadFrequency:
-            s.set(Status::Analysis, "Frequency value cannot be converted to real.");
-            break;
-        case StbError::BadProbe:
-            s.set(Status::Analysis, "Probe must be a voltage source.");
-            break;
-        case StbError::BadLocalGnd:
-            s.set(Status::Analysis, "Local ground node not found.");
-            break;
-        default:
-            return true;
-    }
-    if (errorFreq>=0) {
-        ss.str(""); ss << errorFreq;
-        s.extend(std::string("Leaving frequency sweep at frequency=")+ss.str()+".");
-    } else {
-        s.extend("Leaving frequency sweep.");
-    }
-    return false;
 }
 
 void ACStbCore::dump(std::ostream& os) const {

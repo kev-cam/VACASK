@@ -33,4 +33,11 @@ Rb3 out3 0 r='1e6*abs(i(vs))'
 I4 0 out4 dc 1m
 Rb4 out4 0 r='0*v(c)'
 
+* A model-backed behavioral resistor must preserve noise geometry and model
+* parameters through the synthesized Verilog-A source.
+.param WIDTH=2u KFVAL=3.6e-23
+.model rnoise r (kf=KFVAL af=1.684 lf=1 wf=1 narrow=0 short=0 noise=0)
+I5 0 out5 dc 1m
+Rb5 out5 0 rnoise r='1000*v(c)' w=WIDTH l=10u noise=1
+
 .end

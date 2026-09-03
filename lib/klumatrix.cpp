@@ -20,14 +20,16 @@ void SparsityMap::enumerate() {
     // Prepare a vector of map keys
     ordering.clear();
     for(auto it=smap.begin(); it!=smap.end(); ++it) {
-        ordering.push_back(it->first);
+        ordering.push_back({it->first, it->second.flags});
     }
     
     // Order them
     struct {
-        bool operator()(const MatrixEntryPosition& lhs, const MatrixEntryPosition& rhs) const {
+        bool operator()(const OrderedEntry& lhs, const OrderedEntry& rhs) const {
+            const auto& [l, lflags] = lhs;
+            const auto& [r, rflags] = rhs;
             // Compare first by column (unknown), then by row (equation)
-            return (lhs.second < rhs.second) || ((lhs.second == rhs.second) && (lhs.first < rhs.first));
+            return (l.second < r.second) || ((l.second == r.second) && (l.first < r.first));
         }
     } comparison;
     
@@ -37,7 +39,8 @@ void SparsityMap::enumerate() {
     MatrixEntryIndex num = 0;
     for(auto it=ordering.begin(); it!=ordering.end(); ++it) {
         // first = equation, second = unknown
-        smap[*it].index = num;
+        const auto& [mep, flags] = *it;
+        smap[mep].index = num;
         num++;
     }
 }
@@ -45,8 +48,9 @@ void SparsityMap::enumerate() {
 void SparsityMap::dump(int indent, std::ostream& os) const {
     std::string pfx = std::string(indent, ' ');
     for(auto& it : ordering) {
-        auto entry = find(it);
-        auto [e, u] = it;
+        const auto& [mep, flags] = it;
+        auto entry = find(mep);
+        auto [e, u] = mep;
         os << pfx << "(" << e << ", " << u << ") : ";
         if (entry) {
             os << entry->index;
@@ -57,9 +61,9 @@ void SparsityMap::dump(int indent, std::ostream& os) const {
     }
 }
 
-
 template<typename IndexType, typename ValueType> KluMatrixCore<IndexType, ValueType>::KluMatrixCore()
-    : acct(nullptr),
+    : resolver_(nullptr),
+      acct(nullptr),
       isComplex_(std::is_same<ValueType, Complex>::value),
       nnz_(0),
       AN(0),
@@ -67,11 +71,7 @@ template<typename IndexType, typename ValueType> KluMatrixCore<IndexType, ValueT
       numeric(nullptr),
       common{},
       smap(nullptr),
-      bucket_{},
-      lastError(Error::OK),
-      errorIndex(0),
-      errorRank_(0),
-      errorNan(false) {
+      bucket_{} {
     // Sanity check: IndexType can only be int32_t or int64_t
     static_assert(
         std::is_same<IndexType, int>::value || std::is_same<IndexType, int64_t>::value, 
@@ -115,8 +115,7 @@ template<typename IndexType, typename ValueType> KluMatrixCore<IndexType, ValueT
     deleteKluObjects();
 }
 
-template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::rebuild(SparsityMap& m, EquationIndex n) {
-    clearError();
+template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::rebuild(SparsityMap& m, EquationIndex n, ErrorConsumer& ec) {
     
     deleteKluObjects();
 
@@ -139,8 +138,9 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
     // CSC column pointers: AP has AN+1 entries, AP[c] is the offset of column c's
     // first nonzero, AP[AN] == nnz, and an empty column satisfies AP[c] == AP[c+1].
     for(auto it=m.positions().begin(); it!=m.positions().end(); ++it) {
-        auto row = it->first;
-        auto col = it->second;
+        const auto& [mep, flags] = *it;
+        auto row = mep.first;
+        auto col = mep.second;
 
         // Skip entries that have zero index (they correspond to ground)
         if (!row || !col) {
@@ -181,7 +181,7 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
         st = klu_l_defaults(&common);
     }
     if (!st) {
-        lastError = Error::Defaults;
+        ec.push(KluDefaultsError{});
         // Set smap to nullptr indicating failed rebuild()
         smap = nullptr;
         return false;
@@ -193,7 +193,7 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
         symbolic = klu_l_analyze(AN, AP.data(), AI.data(), &common);
     }
     if (!symbolic) {
-        lastError = Error::Analysis;
+        ec.push(KluAnalysisError{});
         // Set smap to nullptr indicating failed rebuild()
         smap = nullptr;
         return false;
@@ -224,11 +224,9 @@ template<typename IndexType, typename ValueType> void KluMatrixCore<IndexType, V
             }
         }
     }
-    // Clear error
-    clearError();
 }
 
-template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::factor() {
+template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::factor(ErrorConsumer& ec) {
     auto t0 = Accounting::wclk();
     if (acct) {
         if constexpr(std::is_same<ValueType, Complex>::value) {
@@ -237,8 +235,6 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
             acct->acctNew.factor++;
         }
     }
-
-    clearError();
 
     if (numeric) {
         if constexpr(std::is_same<int32_t, IndexType>::value) {
@@ -271,9 +267,13 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
     }
     // Check status and numerical rank if it was computed
     if (!numeric || isSingular || (nr>=0 && nr!=AN)) {
-        lastError = Error::Factorization;
-        errorIndex = singularColumn();
-        errorRank_ = numericalRank();
+        auto col = singularColumn();
+        ec.push(KluFactorizationError{
+            static_cast<MatrixEntryIndex>(AN),
+            static_cast<MatrixEntryIndex>(numericalRank()),
+            static_cast<MatrixEntryIndex>(col),
+            resolver_ ? (*resolver_)(col) : Id()
+        });
         if (numeric) {
             if constexpr(std::is_same<int32_t, IndexType>::value) {
                 klu_free_numeric(&numeric, &common);
@@ -287,12 +287,11 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
     return true;
 }
 
-template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::refactor() {
-    clearError();
+template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::refactor(ErrorConsumer& ec) {
 
     if (!numeric) {
         // Fall through to factor(); accounting is handled there.
-        return factor();
+        return factor(ec);
     }
 
     auto t0 = Accounting::wclk();
@@ -328,8 +327,10 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
     }
     // Check status and numerical rank if it was computed
     if (!st || isSingular || (nr>=0 && nr!=AN)) {
-        lastError = Error::Refactorization;
-        errorRank_ = numericalRank();
+        ec.push(KluRefactorizationError{
+            static_cast<MatrixEntryIndex>(AN),
+            static_cast<MatrixEntryIndex>(numericalRank())
+        });
         if (numeric) {
             if constexpr(std::is_same<int32_t, IndexType>::value) {
                 klu_free_numeric(&numeric, &common);
@@ -343,8 +344,7 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
     return true;
 }
 
-template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::rgrowth(double& rgrowth) {
-    clearError();
+template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::rgrowth(double& rgrowth, ErrorConsumer& ec) {
 
     int st;
     if constexpr(std::is_same<ValueType, Complex>::value) {
@@ -361,15 +361,14 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
         }
     }
     if (!st) {
-        lastError = Error::ReciprocalPivotGrowth;
+        ec.push(KluPivotGrowthError{});
         return false;
     }
     rgrowth = common.rgrowth;
     return true;
 }
 
-template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::rcond(double& rcond) {
-    clearError();
+template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::rcond(double& rcond, ErrorConsumer& ec) {
 
     int st;
     if constexpr(std::is_same<ValueType, Complex>::value) {
@@ -386,15 +385,14 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
         }
     }
     if (!st) {
-        lastError = Error::ReciprocalCondEstimate;
+        ec.push(KluCondEstimateError{});
         return false;
     }
     rcond = common.rcond;
     return true;
 }
 
-template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::isFinite(bool infCheck, bool nanCheck) {
-    clearError();
+template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::isFinite(bool infCheck, bool nanCheck, ErrorConsumer& ec) {
 
     if (!infCheck && !nanCheck) {
         return true;
@@ -425,16 +423,20 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
     }
            
     if (gotInf || gotNan) {
-        lastError = Error::MatrixInfNan;
-        errorIndex = i;
-        errorNan = gotNan;
+        auto [row, col] = elementAt(i);
+        ec.push(KluMatrixInfNan{
+            gotNan,
+            static_cast<MatrixEntryIndex>(row),
+            static_cast<MatrixEntryIndex>(col),
+            resolver_ ? (*resolver_)(row) : Id(),
+            resolver_ ? (*resolver_)(col) : Id()
+        });
         return false;
     }
     return true;
 }
 
-template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::isFinite(ValueType* vec, bool infCheck, bool nanCheck) {
-    clearError();
+template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::isFinite(ValueType* vec, bool infCheck, bool nanCheck, ErrorConsumer& ec) {
 
     if (!infCheck && !nanCheck) {
         return true;
@@ -462,9 +464,11 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
             }
         }
         if (gotInf || gotNan) {
-            lastError = Error::VectorInfNan;
-            errorIndex = i;
-            errorNan = gotNan;
+            ec.push(KluVectorInfNan{
+                gotNan,
+                static_cast<MatrixEntryIndex>(i),
+                resolver_ ? (*resolver_)(i) : Id()
+            });
             return false;
         }
     }  
@@ -494,7 +498,7 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
     return true;
 }
 
-template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::solve(ValueType* b) {
+template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::solve(ValueType* b, ErrorConsumer& ec) {
     auto t0 = Accounting::wclk();
     if (acct) {
         if constexpr(std::is_same<ValueType, Complex>::value) {
@@ -504,8 +508,6 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
         }
     }
 
-    clearError();
-    
     int st;
     if constexpr(std::is_same<ValueType, Complex>::value) {
         if constexpr(std::is_same<int32_t, IndexType>::value) {
@@ -530,13 +532,13 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
     }
     
     if (!st) {
-        lastError = Error::Solve;
+        ec.push(KluSolveError{});
         return false;
     }
     return true;
 }
 
-template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::solveBlock(ValueType* B, IndexType nrhs) {
+template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::solveBlock(ValueType* B, IndexType nrhs, ErrorConsumer& ec) {
     auto t0 = Accounting::wclk();
     if (acct) {
         if constexpr(std::is_same<ValueType, Complex>::value) {
@@ -545,8 +547,6 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
             acct->acctNew.solve += nrhs;
         }
     }
-
-    clearError();
 
     int st;
     if constexpr(std::is_same<ValueType, Complex>::value) {
@@ -574,13 +574,13 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
     }
 
     if (!st) {
-        lastError = Error::Solve;
+        ec.push(KluSolveError{});
         return false;
     }
     return true;
 }
 
-template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::tsolve(ValueType* b) {
+template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::tsolve(ValueType* b, ErrorConsumer& ec) {
     auto t0 = Accounting::wclk();
     if (acct) {
         if constexpr(std::is_same<ValueType, Complex>::value) {
@@ -589,8 +589,6 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
             acct->acctNew.solve++;
         }
     }
-
-    clearError();
 
     int st;
     if constexpr(std::is_same<ValueType, Complex>::value) {
@@ -616,13 +614,13 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
     }
 
     if (!st) {
-        lastError = Error::Solve;
+        ec.push(KluSolveError{});
         return false;
     }
     return true;
 }
 
-template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::tsolveBlock(ValueType* B, IndexType nrhs) {
+template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::tsolveBlock(ValueType* B, IndexType nrhs, ErrorConsumer& ec) {
     auto t0 = Accounting::wclk();
     if (acct) {
         if constexpr(std::is_same<ValueType, Complex>::value) {
@@ -631,8 +629,6 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
             acct->acctNew.solve += nrhs;
         }
     }
-
-    clearError();
 
     int st;
     if constexpr(std::is_same<ValueType, Complex>::value) {
@@ -658,7 +654,7 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
     }
 
     if (!st) {
-        lastError = Error::Solve;
+        ec.push(KluSolveError{});
         return false;
     }
     return true;
@@ -686,9 +682,9 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
 }
 
 // Both views must be distinct
-template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::product(VectorView<ValueType> vec, VectorView<ValueType> res) {
+template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::product(VectorView<ValueType> vec, VectorView<ValueType> res, ErrorConsumer& ec) {
     if (vec.n()!=static_cast<size_t>(AN) || res.n()!=static_cast<size_t>(AN)) {
-        lastError = Error::MulVecSizeMismatch;
+        ec.push(KluMulVecSizeMismatch{});
         return false;
     }
 
@@ -731,9 +727,9 @@ template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, V
 }
 
 // Both views must be distinct
-template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::tproduct(VectorView<ValueType> vec, VectorView<ValueType> res) {
+template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::tproduct(VectorView<ValueType> vec, VectorView<ValueType> res, ErrorConsumer& ec) {
     if (vec.n()!=static_cast<size_t>(AN) || res.n()!=static_cast<size_t>(AN)) {
-        lastError = Error::MulVecSizeMismatch;
+        ec.push(KluMulVecSizeMismatch{});
         return false;
     }
 
@@ -925,96 +921,19 @@ template<typename IndexType, typename ValueType> void KluMatrixCore<IndexType, V
     os.copyfmt(oldState);
 }
 
-template<typename IndexType, typename ValueType> bool KluMatrixCore<IndexType, ValueType>::formatError(Status& s, NameResolver* resolver) const {
-    std::string txt;
-    IndexType row, col;
-    switch (lastError) {
-        case Error::Defaults:
-            s.set(Status::LinearSolver, "Cannot set up KLU defaults.");
-            return false;
-        case Error::Analysis:
-            s.set(Status::LinearSolver, "KLU matrix analysis failed. Probably the matrix is singular.");
-            return false;
-        case Error::ReciprocalPivotGrowth:
-            s.set(Status::LinearSolver, "Failed to compute reciprocal pivot growth.");
-            return false;
-        case Error::ReciprocalCondEstimate:
-            s.set(Status::LinearSolver, "Failed to compute reciprocal condition number estimate.");
-            return false;
-        case Error::Solve:
-            s.set(Status::LinearSolver, "Failed to solve factorized system.");
-            return false;
-        case Error::Factorization:
-            txt = "Factorization failed, size="+std::to_string(AN);
-            if (errorRank_>=0) {
-                txt += ", rank="+std::to_string(errorRank_);
-            }
-            if (resolver) {
-                txt += std::string(", zero pivot @ node '")+std::string((*resolver)(errorIndex))+"'" ;
-            } else {
-                txt += std::string(", zero pivot @ column ")+std::to_string(errorIndex+1);
-            }
-            txt += ".";
-            s.set(Status::LinearSolver, txt);
-            return false;
-        case Error::Refactorization:
-            txt = "Refactorization failed, size="+std::to_string(AN);
-            if (errorRank_>=0) {
-                txt += ", rank="+std::to_string(errorRank_);
-            }
-            txt += ".";
-            s.set(Status::LinearSolver, txt);
-            return false;
-        case Error::MatrixInfNan:
-            if (errorNan) {
-                txt = "NaN found in matrix";
-            } else {
-                txt = "Inf found in matrix";
-            }
-            std::tie(row, col) = errorElement();
-            if (resolver) {
-                txt +=   ", row node '"+std::string((*resolver)(row))+"'"
-                       + ", column node '"+std::string((*resolver)(col))+"'";
-            } else {
-                txt += ", row "+std::to_string(row+1)+", column "+std::to_string(col+1);
-            }
-            txt +=".";
-            s.set(Status::LinearSolver, txt);
-            return false;
-        case Error::VectorInfNan:
-            if (errorNan) {
-                txt = "NaN found in vector";
-            } else {
-                txt = "Inf found in vector";
-            }
-            if (resolver) {
-                txt += ", row node '"+std::string((*resolver)(errorIndex))+"'";
-            } else {
-                txt += ", row "+std::to_string(errorIndex+1);
-            }
-            txt += ".";
-            s.set(Status::LinearSolver, txt);
-            return false;
-        case Error::MulVecSizeMismatch:
-            s.set(Status::LinearSolver, "Matrix-vector multiplication vector size mismatch.");
-            return false;
-    }
-    return true;
-}
-
-template<typename IndexType, typename ValueType> 
+template<typename IndexType, typename ValueType>
 double* KluAtomicMatrix<IndexType, ValueType>::valueArray() {
     if constexpr(std::is_same<ValueType, Complex>::value) {
         return nullptr;
     } else {
-        return KluMatrixCore<IndexType, ValueType>::data();
+        return KluMatrixCore<IndexType, ValueType>::axData();
     }
 } 
 
 template<typename IndexType, typename ValueType> 
 Complex* KluAtomicMatrix<IndexType, ValueType>::cxValueArray() {
     if constexpr(std::is_same<ValueType, Complex>::value) {
-        return KluMatrixCore<IndexType, ValueType>::data();
+        return KluMatrixCore<IndexType, ValueType>::axData();
     } else {
         return nullptr;
     }
@@ -1048,6 +967,8 @@ Complex* KluAtomicMatrix<IndexType, ValueType>::cxValuePtr(
         if (entry) {
             return KluMatrixCore<IndexType, ValueType>::Ax.data()+entry->index;
         } else {
+            // Missing position: bucket contract (see MatrixAccess) - writes
+            // discarded, reads meaningless.
             return &(KluMatrixCore<IndexType, ValueType>::bucket_);
         }
     } else {

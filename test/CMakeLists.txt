@@ -165,7 +165,6 @@ prepare_netlist_test(test_behav.sim)
 prepare_netlist_test(test_behavsym.sim)
 prepare_netlist_test(test_behavop.sim)
 prepare_netlist_test(test_behavnoise.sim)
-
 # Foreign-format include dispatch: a native deck that pulls its devices from a
 # SPICE-dialect file via `include`. Only meaningful when the Rust parser is
 # compiled in.
@@ -220,3 +219,8 @@ if(VACASK_WITH_SPICE)
     set_tests_properties(test_spice_warnonly.sim PROPERTIES LABELS "warning")
 
 endif()
+prepare_netlist_test(test_behavexpr.sim)
+prepare_netlist_test(test_delay.sim)
+prepare_netlist_test(test_delayvar.sim)
+prepare_netlist_test(test_delayhb.sim)
+prepare_netlist_test(test_delayhbac.sim)

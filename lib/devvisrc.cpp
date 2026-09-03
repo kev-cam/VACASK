@@ -1184,7 +1184,8 @@ template<> bool BuiltinVSourceInstance::bindCore(
     Circuit& circuit, 
     KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
     KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-    Status& s
+    DelayLines* delayLines, 
+    ErrorConsumer& ec
 ) {
     auto& d = data.core();
 
@@ -1210,7 +1211,8 @@ template<> bool BuiltinISourceInstance::bindCore(
     Circuit& circuit, 
     KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
     KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-    Status& s
+    DelayLines* delayLines, 
+    ErrorConsumer& ec
 ) {
     auto& d = data.core();
 
@@ -1223,7 +1225,7 @@ template<> bool BuiltinISourceInstance::bindCore(
     return true;
 }
 
-template<> bool BuiltinVSourceInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup) {
+template<> bool BuiltinVSourceInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup, ErrorConsumer& errors) {
     auto& p = params.core();
     auto& d = data.core();
     auto& options = circuit.simulatorOptions().core();
@@ -1258,7 +1260,7 @@ template<> bool BuiltinVSourceInstance::evalCore(Circuit& circuit, CommonData& c
     return true;
 }
 
-template<> bool BuiltinVSourceInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup) {
+template<> bool BuiltinVSourceInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup, ErrorConsumer& errors) {
     auto& p = params.core();
     auto& d = data.core();
     auto& options = circuit.simulatorOptions().core();
@@ -1314,7 +1316,7 @@ template<> bool BuiltinVSourceInstance::loadCore(Circuit& circuit, CommonData& c
     return true;
 }
 
-template<> bool BuiltinISourceInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup) {
+template<> bool BuiltinISourceInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup, ErrorConsumer& errors) {
     auto& p = params.core();
     auto& d = data.core();
     auto sourceFactor = commons.sourcescalefactor;
@@ -1347,7 +1349,7 @@ template<> bool BuiltinISourceInstance::evalCore(Circuit& circuit, CommonData& c
     return true;
 }
 
-template<> bool BuiltinISourceInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup) {
+template<> bool BuiltinISourceInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup, ErrorConsumer& errors) {
     auto& p = params.core();
     auto& d = data.core();
     

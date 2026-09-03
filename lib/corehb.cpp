@@ -42,66 +42,58 @@ template<> int Introspection<HBParameters>::setup() {
 }
 instantiateIntrospection(HBParameters);
 
-class HbUnknownNameResolver : public NameResolver {
-public:
-    HbUnknownNameResolver(Circuit& circuit, size_t nb) : circuit(circuit), nb(nb) {};
-
-    virtual Id operator()(MatrixEntryIndex u) {
-        return circuit.reprNode(u/nb+1)->name();
-    };
-
-private:
-    Circuit& circuit;
-    size_t nb;
-};
-
 HBCore::HBCore(
     OutputDescriptorResolver& parentResolver, HBParameters& params, Circuit& circuit, CommonData& commons,
-    KluBlockSparseRealMatrix& jacColoc, KluBlockSparseRealMatrix& jacobian, VectorRepository<double>& solution
+    KluBlockSparseRealMatrix& jacColoc, KluBlockSparseRealMatrix& jacobian, VectorRepository<double>& solution, 
+    DelayLines& delayLines, DelayMatrixBindings<DenseMatrixView<double>>& delayBindings
 ) : AnalysisCore(parentResolver, circuit, commons),
-    lastHbError(HBError::OK),
     homotopySteps(0),
     jacColoc(jacColoc),
     bsjac(jacobian),
     solution(solution),
+    delayLines_(delayLines), 
+    delayBindings_(delayBindings), 
     continueState(nullptr),
     outfile(nullptr),
     converged_(false),
     firstBuild(true),
     params(params),
-    nrSolver(circuit, commons, jacColoc, jacobian, solution, solutionFD, 
-             timepoints, spurs_, 
-             APFT, IAPFT, OmegaGamma, GammaInvColumnMajor, nrSettings) {
+    hbResolver_(circuit),
+    nrSolver(circuit, commons, jacColoc, jacobian, solution, solutionFD,
+             timepoints, spurs_,
+             APFT, IAPFT, OmegaGamma, GammaInvColumnMajor,
+             delayLines_, delayBindings_,
+             nrSettings) {
 };
 
 HBCore::~HBCore() {
     delete outfile;
 }
 
-bool HBCore::addCoreOutputDescriptors(Status& s) {
+bool HBCore::addCoreOutputDescriptors(ErrorConsumer& errors) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdFrequency, "frequency"))) {
-        s.set(Status::Analysis, std::string("Failed to add output descriptor for frequency."));
+        errors.push(CoreAddOutputDescriptor{"frequency"});
         return false;
     }
     return true;
 }
 
-bool HBCore::addDefaultOutputDescriptors(Status& s) {
+bool HBCore::addDefaultOutputDescriptors(ErrorConsumer& errors) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (savesCount==0) {
-        return addAllUnknowns(PTSave("default", Id(), Id()), s);
+        return addAllUnknowns(PTSave("default", Id(), Id()), errors);
     }
     return true;
 }
 
-bool HBCore::resolveOutputDescriptors(bool strict, Status& s) {
+bool HBCore::resolveOutputDescriptors(bool strict, ErrorConsumer& errors) {
     // Clear output sources
     outputSources.clear();
     // Resolve output descriptors
@@ -112,14 +104,14 @@ bool HBCore::resolveOutputDescriptors(bool strict, Status& s) {
         // TODO: handle output variables someday
         switch (it->type) {
         case OutdSolComponent:
-            ok = addComplexVarOutputSource(strict, it->id, outputPhasors, 1, 0, it->name, s); 
+            ok = addComplexVarOutputSource(strict, it->id, outputPhasors, 1, 0, it->name, errors); 
             break;
         case OutdFrequency:
             outputSources.emplace_back(&outputFreq, it->name);
             break;
         default:
             // Delegate to parent
-            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, s);
+            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, errors);
             break;
         }
         if (!ok) {
@@ -129,7 +121,7 @@ bool HBCore::resolveOutputDescriptors(bool strict, Status& s) {
     return ok;
 }
 
-bool HBCore::initializeOutputs(const std::string& name, Status& s) {
+bool HBCore::initializeOutputs(const std::string& name, ErrorConsumer& errors) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
@@ -148,7 +140,7 @@ bool HBCore::initializeOutputs(const std::string& name, Status& s) {
     return true;
 }
 
-bool HBCore::finalizeOutputs(Status& s) {
+bool HBCore::finalizeOutputs(ErrorConsumer& errors) {
     if (outfile) {
         outfile->epilogue();
         delete outfile;
@@ -167,7 +159,7 @@ bool HBCore::finalizeOutputs(Status& s) {
     return true;
 }
 
-bool HBCore::deleteOutputs(Id name, Status& s) {
+bool HBCore::deleteOutputs(Id name, ErrorConsumer& errors) {
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
@@ -216,21 +208,21 @@ bool HBCore::restoreState(size_t ndx) {
     }
 }
 
-bool HBCore::buildGrid(Status& s) {
+bool HBCore::buildGrid(ErrorConsumer& errors) {
     auto n = params.freq.size();
 
     auto& options = circuit.simulatorOptions().core();
     auto debug = options.hb_debug>2;
     
     if (params.freq.size()<1) {
-        s.set(Status::BadArguments, "freq must have at least one component.");
+        errors.push(HbFreqEmpty{});
         return false;
     }
     
     // Check freq
     for(decltype(n) i=0; i<n; i++) {
         if (params.freq[i]==0.0) {
-            s.set(Status::BadArguments, "Zero frequency should not be specified explicitly.");
+            errors.push(HbFreqZeroExplicit{});
             return false;
         }
     }
@@ -242,7 +234,7 @@ bool HBCore::buildGrid(Status& s) {
     if (params.nharm.type()==ValueType::Int) {
         auto nScalar = params.nharm.val<Int>();
         if (nScalar<=0) {
-            s.set(Status::BadArguments, "nharm must be >0.");
+            errors.push(HbNharmNonPositive{});
             return false;
         }
         nHarmonics.resize(n, nScalar);
@@ -250,18 +242,18 @@ bool HBCore::buildGrid(Status& s) {
         auto& nVector = params.nharm.val<IntVector>();
         for(auto nh : nVector) {
             if (nh<=0) {
-                s.set(Status::BadArguments, "nharm components must be >0.");
+                errors.push(HbNharmComponentNonPositive{});
                 return false;
             }
         }
         auto nharmCount = nVector.size();
         if (nharmCount!=n) {
-            s.set(Status::BadArguments, "Number of nharm components must match number of freq components.");
+            errors.push(HbNharmCountMismatch{});
             return false;
         }
         nHarmonics = nVector;
     } else {
-        s.set(Status::BadArguments, "nharm must be an integer or an integer vector.");
+        errors.push(HbNharmType{});
         return false;
     }
 
@@ -270,16 +262,17 @@ bool HBCore::buildGrid(Status& s) {
         params.truncate==HBCore::truncateDiamond ||
         params.truncate==HBCore::truncateHybrid
     )) {
-        s.set(Status::BadArguments, "Unknown spectrum truncation method.");
+        errors.push(HbTruncateUnknown{});
         return false;
     }
 
-    if (!spurs_.build(params.freq, nHarmonics, params.immax, params.truncate==HBCore::truncateHybrid, debug, s)) {
+    if (!spurs_.build(params.freq, nHarmonics, params.immax, params.truncate==HBCore::truncateHybrid, debug)) {
+        errors.push(HbSpursBuildFailed{});
         return false;
     }
 
     if (spurs_.spectrum().size()<2) {
-        s.set(Status::BadArguments, "Too few frequencies in spectrum.");
+        errors.push(HbSpectrumTooSmall{});
         return false;
     }
 
@@ -287,8 +280,11 @@ bool HBCore::buildGrid(Status& s) {
 }
 
 // Called after build
-bool HBCore::evaluateAtNodeset() {
-    clearError();
+bool HBCore::evaluateAtNodeset(ErrorConsumer& errors) {
+
+    // Unlock delays, allow delay change
+    delayLines_.clearChanged();
+    delayLines_.lock(false);
 
     auto& options = circuit.simulatorOptions().core();
     nrSettings = NRSettings {
@@ -296,10 +292,11 @@ bool HBCore::evaluateAtNodeset() {
         .matrixCheck = bool(options.matrixcheck), 
     };
 
-    // Copy from forces slot 1 to solution vector
+    // Copy from forces slot 1 to solution vector.
+    // solution and the slot-1 force vector both carry an nt-wide bucket.
     auto n = circuit.unknownCount();
     auto nt = timepoints.size();
-    solution.upsize(2, n*nt);
+    solution.upsize(2, (n+1)*nt);
     solution.vector() = nrSolver.forces(1).unknownValue_;
 
     // Disable forces
@@ -308,19 +305,19 @@ bool HBCore::evaluateAtNodeset() {
     
     // Rebuild NR solver structures
     if (!nrSolver.rebuild(n*nt)) {
-        setError(HBError::SolverBuild);
+        errors.push(HbSolverBuildFailed{});
         return false;
     }
 
     // Initialize NR solver (continue previous)
-    if (!nrSolver.initialize(true)) {
-        setError(HBError::SolverError);
+    if (!nrSolver.initialize(true, errors)) {
+        errors.push(HbSolverInitFailed{});
         return false;
     }
 
     // Run evaluation (continue previous)
-    if (!nrSolver.evaluate(true)) {
-        setError(HBError::SolverError);
+    if (!nrSolver.evaluate(true, errors)) {
+        errors.push(HbEvaluationFailed{});
         return false;
     }
 
@@ -343,7 +340,12 @@ bool HBCore::getFrequencyDomainJacobians(KluBlockSparseComplexMatrix& jacSpec, c
     Vector<Complex> CFullJac(nfp);
 
     // Go through all dense blocks
-    for(auto& pos : circuit.sparsityMap().positions()) {
+    for(auto& [pos, flags] : circuit.sparsityMap().positions()) {
+        // Delay only blocks are skipped, we handle only nonlinear resistive/reactive Jacobian blocks
+        if ((flags & EntryFlags::EntryType) == EntryFlags::Delay) {
+            continue;
+        }
+        
         // Get block position (for debugging), make position 0-based
         auto [i, j] = pos;
         i--;
@@ -463,8 +465,16 @@ bool HBCore::getFrequencyDomainJacobians(KluBlockSparseComplexMatrix& jacSpec, c
     return true;
 }
 
-bool HBCore::rebuild(Status& s) {
-    clearError();
+bool HBCore::rebuild(ErrorConsumer& errors) {
+
+    // Size delay line information
+    delayLines_.scale(circuit.delayHistoryCount());
+    
+    // Check if any device has variable delays
+    if (circuit.usesIllegalDeviceFeatures(DeviceFlags::VariableAbsdelay, DeviceFlags::None, errors)) {
+        errors.push(HbVariableDelayUnsupported{});
+        return false;
+    }
 
     // solve=0 ... evaluate, collect spurs and timepoints from stored solution, 
     //             set up solution from stored solution
@@ -497,23 +507,23 @@ bool HBCore::rebuild(Status& s) {
 
     if (params.solve) {
         // Compute set of frequencies
-        if (!buildGrid(s)) {
+        if (!buildGrid(errors)) {
             return false;
         }
 
         // Compute colocation
-        if (!buildColocation(s)) {
+        if (!buildColocation(errors)) {
             return false;
         }
-        
+
         // Recompute transforms
-        if (!buildAPFT(s)) {
+        if (!buildAPFT(errors)) {
             return false;
         }
     } else {
         // Assume grid, colocation, and APFT are obtained from nodeset
         if (!solPtr || solPtr->typeTag()!=solutionTag) {
-            s.set(Status::NotFound, "Nodeset not found.");
+            errors.push(HbNodesetNotFound{});
             return false;
         }
 
@@ -524,7 +534,7 @@ bool HBCore::rebuild(Status& s) {
         timepoints = solPtr->auxRealVector();
 
         // Need APFT for transforming time-domain Jacobian to frequency-domain Jacobian
-        if (!buildAPFT(s)) {
+        if (!buildAPFT(errors)) {
             return false;
         }
     }
@@ -532,34 +542,51 @@ bool HBCore::rebuild(Status& s) {
     // Number of colocation points
     auto nt = timepoints.size();
 
+    // Timepoint count is now known (both the solve and the nodeset path have
+    // populated timepoints); install the resolver on the HB Jacobian so error
+    // messages map a block-matrix column index to a circuit node. bsjac only
+    // borrows hbResolver_; this core owns it.
+    hbResolver_.setTimepointCount(nt);
+    bsjac.setResolver(&hbResolver_);
+
     // Jacobian entries at colocation points, do not create structures for scalar access
-    jacColoc.rebuild(circuit.sparsityMap(), circuit.unknownCount(), nt, 2, true);
+    if (!jacColoc.rebuild(circuit.sparsityMap(), circuit.unknownCount(), nt, 2, errors, true)) {
+        return false;
+    }
 
     // Build these only if we want to solve the HB problem
     if (params.solve) {
         // HB Jacobian
-        if (!bsjac.rebuild(circuit.sparsityMap(), circuit.unknownCount(), nt, nt)) {
-            auto nb = timepoints.size();
-            auto nr = HbUnknownNameResolver(circuit, nb);
-            bsjac.formatError(s, &nr);
+        if (!bsjac.rebuild(circuit.sparsityMap(), circuit.unknownCount(), nt, nt, errors)) {
             return false;
         }
         // solutionFD - complex vector without bucket
         solutionFD.resize(spurs_.spectrum().size());
     }
 
-    // Bind resistive residuals to 0-based subelement (0,0) 
-    // Bind reactive residuals to 0-based subelement (0,1) 
+    // Bind resistive Jacobian contributions to 0-based subelement (0,0)
+    // Bind reactive Jacobian contributions to 0-based subelement (0,1)
+    // Bind delay lines to inputs and outputs
     if (!circuit.bind(
-        &jacColoc, Component::Real, MatrixEntryPosition(0, 0), 
-        &jacColoc, Component::Real, MatrixEntryPosition(0, 1), 
-        s
+        &jacColoc, Component::Real, MatrixEntryPosition(0, 0),
+        &jacColoc, Component::Real, MatrixEntryPosition(0, 1),
+        &delayLines_,
+        errors
     )) {
+        errors.push(HbBindFailed{});
         return false;
     }
 
+    // Bind delays to matrix blocks if we are solving the circuit
+    if (params.solve) {
+        if (!delayLines_.bindToBlockMatrix(bsjac, delayBindings_, errors)) {
+            errors.push(HbDelayBindFailed{});
+            return false;
+        }
+    }
+
     // Prepare nodesets
-    auto strictforce = circuit.simulatorOptions().core().strictforce; 
+    auto strictforce = circuit.simulatorOptions().core().strictforce;
     if (solutionName.length()>0) {
         // Solution from repository (obtained previously)
         if (!solPtr) {
@@ -568,10 +595,9 @@ bool HBCore::rebuild(Status& s) {
             Simulator::wrn() << "Warning, solution '"+solutionName+"' not found. No user nodesets applied.\n";
         } else {
             // Nodesets from solution repository
-            if (!nrSolver.setForces(1, *solPtr, strictforce)) {
-                // Abort if strictforce is set
+            if (!nrSolver.setForces(1, *solPtr, strictforce, errors)) {
+                // Abort if strictforce is set (setForces has pushed the detail)
                 if (strictforce) {
-                    nrSolver.formatError(s);
                     return false;
                 }
             }
@@ -580,11 +606,11 @@ bool HBCore::rebuild(Status& s) {
         // No nodesets, clear slot
         nrSolver.forces(1).clear();
     }
-    
+
     // Rebuild NR solver structures
     auto n = circuit.unknownCount();
     if (!nrSolver.rebuild(n*nt)) {
-        s.set(Status::NonlinearSolver, "Failed to rebuild internal structures of nonlinear solver.");
+        errors.push(HbSolverBuildFailed{});
         return false;
     }
     
@@ -592,7 +618,10 @@ bool HBCore::rebuild(Status& s) {
     return true;
 }
 
-std::tuple<bool, bool> HBCore::runSolver(bool continuePrevious) {
+std::tuple<bool, bool> HBCore::runSolver(bool continuePrevious, ErrorConsumer& errors) {
+    // Each solver run starts with an empty error stack
+    errors.clear();
+
     auto& options = circuit.simulatorOptions().core();
     // Assume no initial state given, start with standard initial point. 
     // Coherence information is set by an.cpp and homotopy. 
@@ -619,8 +648,8 @@ std::tuple<bool, bool> HBCore::runSolver(bool continuePrevious) {
             auto nf = spurs_.spectrum().size();
             auto nt = timepoints.size();
             for(decltype(n) i=0; i<n; i++) {
-                auto srcOrigin = i*nf;
-                auto destOrigin = i*nt;
+                auto srcOrigin = i*nf;              // stored spectrum, no bucket
+                auto destOrigin = (i+1)*nt;         // solution vector, nt-wide bucket
                 dest[destOrigin] = data[srcOrigin].real();
                 for(decltype(nf) k=1; k<nf; k++) {
                     auto base = destOrigin + 1 + (k-1)*2;
@@ -648,7 +677,7 @@ std::tuple<bool, bool> HBCore::runSolver(bool continuePrevious) {
             // Use forces to continue, but set no initial states vector nor initial solution. 
             // Ignore forces conflicts arising from stored solution. 
             // There should be no such conflicts as we are applying forces to nodes only, not node deltas. 
-            nrSolver.setForces(0, continueState->solution, false);
+            nrSolver.setForces(0, continueState->solution, false, errors);
             nrSolver.enableForces(0, true);
             // Disable user-specified forces (nodesets)
             nrSolver.enableForces(1, false);
@@ -688,11 +717,8 @@ std::tuple<bool, bool> HBCore::runSolver(bool continuePrevious) {
         }
     }
 
-    auto converged = nrSolver.run(runInContinueMode);
+    auto converged = nrSolver.run(runInContinueMode, errors);
     auto abort = nrSolver.checkFlags(HBNRSolver::Flags::Abort);
-    if (!converged || abort) {
-        setError(HBError::SolverError);
-    }
 
     return std::make_tuple(converged, abort);
 }
@@ -705,10 +731,13 @@ Int HBCore::iterationLimit(bool continuePrevious) const {
     return continuePrevious ? nrSettings.itlimCont : nrSettings.itlim;
 }
 
-CoreCoroutine HBCore::coroutine(bool continuePrevious) {
+CoreCoroutine HBCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
     initProgress(1, 0);
 
-    clearError();
+
+    // Unlock delays, allow delay change
+    delayLines_.clearChanged();
+    delayLines_.lock(false);
     
     auto& options = circuit.simulatorOptions().core();
     converged_ = false;
@@ -719,8 +748,8 @@ CoreCoroutine HBCore::coroutine(bool continuePrevious) {
     auto nb = timepoints.size();
     auto nf = spurs_.spectrum().size();
 
-    // Make sure structures are large enough
-    solution.upsize(2, n*nb);
+    // Make sure structures are large enough (solution carries an nb-wide bucket)
+    solution.upsize(2, (n+1)*nb);
     
     if (debug>0) {
         Simulator::dbg() << "Starting HB analysis.\n";
@@ -731,9 +760,9 @@ CoreCoroutine HBCore::coroutine(bool continuePrevious) {
     auto skipinitial = options.hb_skipinitial;
     if (!skipinitial) {
         tried = true;
-        std::tie(converged_, leave) = runSolver(continuePrevious);
+        std::tie(converged_, leave) = runSolver(continuePrevious, errors);
         if (!converged_) {
-            setError(HBError::InitialHB);
+            errors.push(HbInitialFailed{});
         }
         if (debug>0) {
             if (converged_) {
@@ -765,7 +794,7 @@ CoreCoroutine HBCore::coroutine(bool continuePrevious) {
             }
             // Run
             tried = true;
-            std::tie(converged_, leave) = homotopy->run();
+            std::tie(converged_, leave) = homotopy->run(errors);
             homotopySteps += homotopy->stepCount();
             if (debug>0) {
                 if (converged_) {
@@ -780,7 +809,7 @@ CoreCoroutine HBCore::coroutine(bool continuePrevious) {
             }
         }
         if (!converged_) {
-            setError(HBError::Homotopy);
+            errors.push(HbHomotopyFailed{homotopySteps});
         }
     }
 
@@ -788,7 +817,7 @@ CoreCoroutine HBCore::coroutine(bool continuePrevious) {
         // Did not leave early
         if (!tried) {
             // No algorithm tried
-            setError(HBError::NoAlgorithm);
+            errors.push(HbNoAlgorithm{});
         } else if (converged_) {
             // Tried and converged, fill solutionFD and outvec, write results
             if (outfile && params.write) {
@@ -834,8 +863,8 @@ CoreCoroutine HBCore::coroutine(bool continuePrevious) {
     }
 }
 
-bool HBCore::run(bool continuePrevious) {
-    auto c = coroutine(continuePrevious);
+bool HBCore::run(bool continuePrevious, ErrorConsumer& errors) {
+    auto c = coroutine(continuePrevious, errors);
     bool ok = true;
     while (!c.done()) {
         if (c.resume()==CoreState::Aborted) {
@@ -846,45 +875,6 @@ bool HBCore::run(bool continuePrevious) {
     return ok;
 }
 
-
-bool HBCore::formatError(Status& s) const {
-    auto nb = timepoints.size();
-    auto nr = HbUnknownNameResolver(circuit, nb);
-    std::stringstream ss;
-    ss << std::scientific << std::setprecision(4);
-
-    // Delegate to NRSolver (which in turn delegates to KluMatrix)
-    auto solverError = nrSolver.formatError(s, &nr);
-    
-    // First, handle AnalysisCore errors
-    if (lastError!=Error::OK) {
-        AnalysisCore::formatError(s);
-        return false;
-    }
-    
-    // Then handle HBCore errors
-    switch (lastHbError) {
-        case HBError::InitialHB:
-            s.extend("Initial HB analysis failed.");
-            return false;
-        case HBError::Homotopy:
-            s.set(Status::Analysis, "Homotopy failed, "+std::to_string(homotopySteps)+" step(s) tried.");
-            return false;
-        case HBError::NoAlgorithm:
-            s.set(Status::Analysis, "No HB algorithm tried."); 
-            return false;
-        case HBError::NoNodeset:
-            s.set(Status::Analysis, "Nodeset not found."); 
-            return false;
-        case HBError::SolverBuild:
-            s.set(Status::NonlinearSolver, "Failed to rebuild internal structures of nonlinear solver.");
-            return false;
-        case HBError::SolverError:
-            nrSolver.formatError(s, &nr);
-            return false;
-    }
-    return true;
-}
 
 void HBCore::dump(std::ostream& os) const {
     AnalysisCore::dump(os);
@@ -907,6 +897,7 @@ void HBCore::dump(std::ostream& os) const {
 
 bool HBCore::test() {
     Status s;
+    ErrorConsumer errors(s);
     bool ok = true;
 
     HBParameters p;
@@ -918,26 +909,28 @@ bool HBCore::test() {
 
     // Dummy strutures
     OutputDescriptorResolver dummyResolver;
+    CommonData dummyCommons;
     KluBlockSparseRealMatrix jacColoc;
     KluBlockSparseRealMatrix bsjac;
     VectorRepository<double> sol;
     ParserTables tab;
     Circuit dummyCircuit(tab);
-    CommonData dummyCommons;
+    DelayLines dummyDelayLines;
+    DelayMatrixBindings<DenseMatrixView<double>> dummyDelayBindings;
 
-    HBCore hb(dummyResolver, p, dummyCircuit, dummyCommons, jacColoc, bsjac, sol);
+    HBCore hb(dummyResolver, p, dummyCircuit, dummyCommons, jacColoc, bsjac, sol, dummyDelayLines, dummyDelayBindings);
 
-    if (ok && !hb.buildGrid(s)) {
+    if (ok && !hb.buildGrid(errors)) {
         ok = false;
         std::cout << "Failed to build grid: " << s.message() << "\n";
     }
     
-    if (ok && !hb.buildColocation(s)) {
+    if (ok && !hb.buildColocation(errors)) {
         ok = false;
         std::cout << "Failed to select colocation points: " << s.message() << "\n";
     } 
     
-    if (ok && !hb.buildAPFT(s)) {
+    if (ok && !hb.buildAPFT(errors)) {
         ok = false;
         std::cout << "Failed to build APFT: " << s.message() << "\n";
     }

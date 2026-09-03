@@ -248,6 +248,12 @@ public:
     // Does the device allow bypass
     bool allowsBypass(OsdiDeviceIndex deviceIndex) const { return allowsBypass_[deviceIndex]; };
 
+    // Does the device have at least one absdelay with a variable (runtime-computed) maxdelay
+    bool variableAbsdelay(OsdiDeviceIndex deviceIndex) const { return variableAbsdelay_[deviceIndex]; };
+
+    // Does the device use $abstime
+    bool usesAbstime(OsdiDeviceIndex deviceIndex) const { return descriptors[deviceIndex]->module_flags & MODULEFLAG_ABSTIME; };
+
     // Access to nonzero entry indices
     auto& nonzeroResistiveResiduals(OsdiDeviceIndex deviceIndex) { return nonzeroResistiveResNdx[deviceIndex]; };
     auto& nonzeroReactiveResiduals(OsdiDeviceIndex deviceIndex) { return nonzeroReactiveResNdx[deviceIndex]; };
@@ -257,6 +263,24 @@ public:
     // Access to disciplines and natures
     const OsdiNature* nature(OsdiNatureIndex index) const { if (natures && index!=UINT32_MAX && index<naturesCount) return natures+index; else return nullptr; };
     const OsdiDiscipline* discipline(OsdiDisciplineIndex index) const { if (disciplines && index!=UINT32_MAX && index<disciplinesCount) return disciplines+index; else return nullptr; };
+
+    // Absdelay information
+    inline size_t absdelayCount(OsdiDeviceIndex deviceIndex) const { 
+        if (experimental) {
+            auto desc = descriptors[deviceIndex];
+            return desc->absdelay_count;
+        } else {
+            return 0;
+        }
+    };
+    inline const OsdiAbsDelay* absdelays(OsdiDeviceIndex deviceIndex) const { 
+        if (experimental) {
+            auto desc = descriptors[deviceIndex];
+            return desc->absdelays;
+        } else {
+            return nullptr;
+        }
+    };
 
     // OsdiNatureRef to NatureTolerance and idt NatureTolerance
     std::tuple<NatureTolerance, NatureTolerance> natrefTolerances(OsdiNatureRef& natref) const {
@@ -322,6 +346,7 @@ private:
     void* handle;
     std::string file;
     bool valid;
+    bool experimental {false}; // OSDI 0.5 (experimental); only set true on the 0.5 version path
     void* descriptorArray;
     std::vector<std::string> namesArray; // (translated) names
     std::vector<OsdiDescriptor*> descriptors;
@@ -406,6 +431,9 @@ private:
 
     // Vector of allows bypass flags
     std::vector<bool> allowsBypass_;
+
+    // Vector of variable absdelay flags
+    std::vector<bool> variableAbsdelay_;
 
     // Limit functions
     static const OsdiLimitFunction limitFunctionTable[];

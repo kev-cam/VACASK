@@ -53,9 +53,10 @@ public:
         Circuit& circuit, 
         KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
         KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-        Status& s=Status::ignore
+        DelayLines* delayLines, 
+        ErrorConsumer& ec
     );
-    virtual bool evalAndLoad(Circuit& circuit, CommonData& commons, EvalSetup* evalSetup, LoadSetup* loadSetup);
+    virtual bool evalAndLoad(Circuit& circuit, CommonData& commons, EvalSetup* evalSetup, LoadSetup* loadSetup, ErrorConsumer& errors);
     virtual Model* createModel(Circuit& circuit, Instance* parentInstance, RpnEvaluator& evaluator, const PTModel& parsedModel, Status& s=Status::ignore);
     virtual void dump(int indent, std::ostream& os) const;
 
@@ -180,6 +181,10 @@ public:
     // Noise source type
     inline NoiseType noiseSourceType(ParameterIndex ndx) const { return osdiFile->noiseSourceType(index_, ndx); }; 
 
+    // Absdelay information
+    inline size_t absdelayCount() const { return osdiFile->absdelayCount(index_); };
+    inline const OsdiAbsDelay* absdelays() const { return osdiFile->absdelays(index_); };
+    
     // Parameter cleanup (called in instance and model destructor)
     bool freeValues(void* coreMod, void* coreInst);
     

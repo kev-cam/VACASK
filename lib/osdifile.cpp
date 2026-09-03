@@ -3,6 +3,7 @@
 #include "osdicallback.h"
 #include "limitfunctions.h"
 #include "osdi.h"
+#include "osdi04legacy.h"
 #include "osdifile.h"
 #include "osdidevice.h"
 #include "identifier.h"
@@ -55,6 +56,9 @@ OsdiFile::OsdiFile(void* handle_, std::string file_, Status& s)
     }
 
     descriptorSize = *ptrs;
+    
+    // Expected descriptor size based on struct declaration
+    size_t expectedDescriptorSize;
 
     // Version
     auto major = ((OsdiVersionType*)dynamicLibrarySymbol(handle, "OSDI_VERSION_MAJOR"));
@@ -64,12 +68,18 @@ OsdiFile::OsdiFile(void* handle_, std::string file_, Status& s)
         descriptorArray = nullptr;
         return;
     } else {
-        // Require OSDI 0.4, anything else is an error
-        if (!(*major==0 && *minor==4)) {
+        // Require OSDI 0.4 or 0.5 (experimental)
+        if (*major==0 && *minor==4) {
+            experimental = false;
+            expectedDescriptorSize = sizeof(OsdiDescriptor04);
+        } else if (*major==0 && *minor==5) {
+            experimental = true;
+            expectedDescriptorSize = sizeof(OsdiDescriptor);
+        } else {
             s.set(
                 Status::BadVersion, "Unsupported OSDI interface version ("+
                 std::to_string(*major)+"."+std::to_string(*minor)+
-                "). Required version 0.4."
+                "). Required version 0.4 or 0.5."
             );
             descriptorArray = nullptr;
             return;
@@ -78,11 +88,11 @@ OsdiFile::OsdiFile(void* handle_, std::string file_, Status& s)
         // Smaller is unsafe: our OsdiDescriptor fields would read past the
         // actual per-descriptor data. Larger is fine (forward compatibility,
         // see the comment on the descriptors vector below).
-        if (descriptorSize < sizeof(OsdiDescriptor)) {
+        if (descriptorSize < expectedDescriptorSize) {
             s.set(
                 Status::BadVersion, "OSDI descriptor structure size ("+
                 std::to_string(descriptorSize)+") is smaller than expected ("+
-                std::to_string(sizeof(OsdiDescriptor))+")."
+                std::to_string(expectedDescriptorSize)+")."
             );
             descriptorArray = nullptr;
             return;
@@ -198,6 +208,7 @@ OsdiFile::OsdiFile(void* handle_, std::string file_, Status& s)
     nodeNameLists.resize(descriptorCount);
     nodeMaps.resize(descriptorCount);
     allowsBypass_.resize(descriptorCount);
+    variableAbsdelay_.resize(descriptorCount);
     for(int i=0; i<descriptorCount; i++) {
         OsdiDescriptor* desc = descriptors[i];
         // Check if device allows bypass. Bypass is not allowed if
@@ -212,7 +223,22 @@ OsdiFile::OsdiFile(void* handle_, std::string file_, Status& s)
         if (desc->module_flags & MODULEFLAG_ABSTIME) {
             allowBypass = false;
         }
+        if (absdelayCount(i)>0) {
+            allowBypass = false;
+        }
+        // Loop through absdelays, check if there is one that is variable (maxDelay)
+        bool variableAbsdelayFound = false;
+        if (experimental) {
+            for(decltype(desc->absdelay_count) j=0; j<desc->absdelay_count; j++) {
+                if (desc->absdelays[j].maxdelay_offset!=UINT32_MAX) {
+                    variableAbsdelayFound = true;
+                    break;
+                }
+            }
+        }
+
         allowsBypass_[i] = allowBypass;
+        variableAbsdelay_[i] = variableAbsdelayFound;
 
         auto& translator = paramOsdiIdTranslators[i];
         osdiIdSimInstIdLists[i].resize(desc->num_params+desc->num_opvars);

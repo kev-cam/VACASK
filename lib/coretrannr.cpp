@@ -7,12 +7,20 @@
 namespace NAMESPACE {
 
 TranNRSolver::TranNRSolver(
-    Circuit& circuit, CommonData& commons, KluRealMatrix& jac, 
-    VectorRepository<double>& states, VectorRepository<double>& solution, 
+    Circuit& circuit, CommonData& commons, KluRealMatrix& jac,
+    VectorRepository<double>& states, VectorRepository<double>& solution,
+    DelayLines* delayLines, DelayMatrixBindings<double*>* delayBindings,
+    const CircularBuffer<double>& timepointHistory_,
     NRSettings& settings, IntegratorCoeffs& integCoeffs
-) : OpNRSolver(circuit, commons, jac, states, solution, settings, 3), 
-    integCoeffs(&integCoeffs), noiseEnabled(false), 
-    whiteBlock(nullptr), flickerBlock(nullptr) {
+) : OpNRSolver(circuit, commons, jac, states, solution, delayLines, nullptr, settings, 3),
+    // Pass delayLines (so OpNRSolver's loadSetup_ points loadCore() at it and
+    // per-slot delay values get refreshed every NR iteration) but NOT the
+    // bindings: the delay residual/Jacobian is loaded by our own buildSystem()
+    // using the transient dynamics, so OpNRSolver must skip its static
+    // passthrough stamp (it keys that off a non-null delayBindings_).
+    integCoeffs(&integCoeffs), noiseEnabled(false),
+    whiteBlock(nullptr), flickerBlock(nullptr),
+    tranDelayLines_(delayLines), tranDelayBindings_(delayBindings), timepointHistory_(timepointHistory_) {
     // TranNRSolver has 2 force slots
     // 0 .. continuation nodesets for sweep and homotopy
     //      cannot contain branch forces
@@ -54,6 +62,13 @@ TranNRSolver::TranNRSolver(
     loadSetup_.loadReactiveJacobian = false;
     loadSetup_.loadTransientJacobian = true;
     loadSetup_.integCoeffs = &integCoeffs;
+
+    // Per-timestep loads: not the first timepoint. loadCore() keeps refreshing a
+    // variable delay's td every iteration, but leaves maxDelay (and a
+    // no-maxdelay delay's frozen td) at the value seeded at t=0. The t=0 seed
+    // is done with firstTimepoint=true by the initial OP solve / lsInit in
+    // TranCore::coroutine().
+    loadSetup_.firstTimepoint = false;
 }
 
 void TranNRSolver::rebuildCheckResidualFlags() {
@@ -66,18 +81,15 @@ void TranNRSolver::rebuildCheckResidualFlags() {
     }
 }
 
-bool TranNRSolver::initialize(bool continuePrevious) {
+bool TranNRSolver::initialize(bool continuePrevious, ErrorConsumer& errors) {
     // This method is called once on entering run()
     // This is the right place to set vectors
-    
+
     // Call parent's initialize()
-    if (!OpNRSolver::initialize(continuePrevious)) {
-        // Assume parent has set lastError
+    if (!OpNRSolver::initialize(continuePrevious, errors)) {
+        // parent has pushed the error
         return false;
     }
-
-    // Clear OP NR solver error
-    clearError();
 
     // Set output vector for building linear system (reactive residual derivative)
     loadSetup_.reactiveResidualDerivative = delta.data();
@@ -132,13 +144,13 @@ void TranNRSolver::disableNoise() {
     evalSetup_.evaluateNoise = true;
 };
 
-std::tuple<bool, bool> TranNRSolver::advanceNoise(double time, double h, std::mt19937_64& gen) {
+std::tuple<bool, bool> TranNRSolver::advanceNoise(double time, double h, std::mt19937_64& gen, ErrorConsumer& errors) {
     bool changed = false;
 
     // Collect noise scaling if lagged noise is used
     if (circuit.simulatorOptions().core().tran_laggednoise) {
-        if (!collectNoiseScaling()) {
-            std::make_tuple(false, changed);
+        if (!collectNoiseScaling(errors)) {
+            return std::make_tuple(false, changed);
         }
     }
 
@@ -164,7 +176,7 @@ bool TranNRSolver::revertNoise(double time, double h, std::mt19937_64& gen) {
     return changed;
 }
 
-bool TranNRSolver::collectNoiseScaling() {
+bool TranNRSolver::collectNoiseScaling(ErrorConsumer& errors) {
     size_t atWhite = 0;
     size_t atFlicker = 0;
     
@@ -206,13 +218,11 @@ bool TranNRSolver::collectNoiseScaling() {
                                 // Do nothing
                             } else if (expStatus==ShapeSetStatus::OutOfRange) {
                                 // Out of range
-                                errorInstance = inst;
-                                lastTranNRError = TranNRSolverError::BadFlickerExponent;
+                                errors.push(TranNrBadFlickerExponent{inst->name()});
                                 return false;
                             } else if (expStatus==ShapeSetStatus::Changed) {
                                 // Changed, but should not
-                                errorInstance = inst;
-                                lastTranNRError = TranNRSolverError::FlickerExponentChanged;
+                                errors.push(TranNrFlickerExponentChanged{inst->name()});
                                 return false;
                             }
                             // Scale sample with sqrt(PSD) because this is a time-domain sample
@@ -294,15 +304,43 @@ bool TranNRSolver::buildNoiseResidual() {
     return true;
 }
 
-std::tuple<bool, bool> TranNRSolver::buildSystem(bool continuePrevious) {
+std::tuple<bool, bool> TranNRSolver::buildSystem(bool continuePrevious, ErrorConsumer& errors) {
     // First call the OpNRSolver method
-    auto [ok, preventConvergence] = OpNRSolver::buildSystem(continuePrevious);
+    auto [ok, preventConvergence] = OpNRSolver::buildSystem(continuePrevious, errors);
+
+    // Load delay line contributions
+    auto nDelay = circuit.delayHistoryCount();
+    if (ok && tranDelayLines_ && nDelay>0) {
+        // Get old solution
+        auto& oldSolution = solution.vector();
+        for(decltype(nDelay) i=0; i<nDelay; i++) {
+            // Get input and output unknowns
+            auto inU = tranDelayLines_->inputUnknown(i);
+            auto outU = tranDelayLines_->outputUnknown(i);
+
+            // Equation -out + delay(in, td) = 0
+            // Compute delayed input and its derivative wrt current sample
+            // oldSolution is the previous NR step's solution
+            auto [delayedSample, delayedSampleDerivative] = tranDelayLines_->getSample(i, evalSetup_.time, oldSolution, timepointHistory_);
+            // Compute residual, store it
+            auto delRes = -oldSolution[outU] + delayedSample;
+            delta[outU] = delRes;
+            // Get Jacobian Pointers
+            auto [outIn, outOut] = (*tranDelayBindings_)[i];
+            // Load Jacobian
+            *outIn += delayedSampleDerivative;
+            *outOut += -1;
+        }
+    }
+    
+    // Bucket is 0
+    delta[0] = 0.0;
 
     // Now load the tranisent noise residuals
     if (ok && noiseEnabled) {
         if (!circuit.simulatorOptions().core().tran_laggednoise) {
             // Fully coupled noise scaling
-            if (!collectNoiseScaling()) {
+            if (!collectNoiseScaling(errors)) {
                 return std::make_tuple(false, preventConvergence);
             }
         }
@@ -321,11 +359,9 @@ std::tuple<bool, bool> TranNRSolver::buildSystem(bool continuePrevious) {
     return std::make_tuple(ok, preventConvergence);
 }
 
-bool TranNRSolver::computeNoiseSolutionContribution() {
+bool TranNRSolver::computeNoiseSolutionContribution(ErrorConsumer& errors) {
     // Solve with last factored Jacobian
-    if (!jac.solve(dataWithoutBucket(noiseResidual, bucketSize_))) {
-        lastError = Error::LinearSolver;
-        errorIteration = iteration;
+    if (!jac.solve(dataWithoutBucket(noiseResidual, bucketSize_), errors)) {
         if (settings.debug) {
             Simulator::dbg() << "Failed to solve for noise contribution.\n";
         }
@@ -439,31 +475,7 @@ std::tuple<bool, bool> TranNRSolver::checkResidual() {
         }
     }
     
-    return std::make_tuple(true, residualWithinTol); 
-}
-
-bool TranNRSolver::formatError(Status& s, NameResolver* resolver) const {
-    // Error in NRSolver
-    if (lastError!=NRSolver::Error::OK) {
-        NRSolver::formatError(s, resolver);
-        return false;
-    }
-
-    if (lastError!=OpNRSolver::Error::OK) {
-        OpNRSolver::formatError(s, resolver);
-        return false;
-    }
-
-    switch (lastTranNRError) {
-        case TranNRSolverError::BadFlickerExponent:
-            s.set(Status::BadArguments, "Flicker noise exponent out of range for '"+std::string(errorInstance->name())+"'.");
-            return false;
-        case TranNRSolverError::FlickerExponentChanged:
-            s.set(Status::BadArguments, "Flicker noise exponent is not constant for '"+std::string(errorInstance->name())+"'.");
-            return false;
-        default:
-            return true;
-    }
+    return std::make_tuple(true, residualWithinTol);
 }
 
 }

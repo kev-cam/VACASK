@@ -163,9 +163,17 @@ Five behaviours are specific to foreign includes:
   Devices that impose a potential (`V`, `E`, `H`, and a `B` source written
   `v=`) take no multiplier, matching ngspice: replicating them in parallel
   changes neither the imposed voltage nor any node current. A behavioral source
-  has no `$mfactor` parameter, so for a current-defining one the multiplier is
-  folded into its expression instead, which is exact because a flow scales
-  linearly.
+  has no `$mfactor` parameter, so a current-defining source folds the multiplier
+  into its expression. A probe-dependent behavioral resistor uses a generated
+  `mfactor` Verilog-A parameter to scale its current and noise contributions.
+
+- **Solution-dependent resistor values become generic behavioral sources.** A
+  resistor whose `r=` expression contains `v(...)` or `i(...)` must be evaluated
+  with the circuit solution, rather than as an elaboration-time parameter. The
+  adapter lowers it through the behavioral `expr=` API and emits the resistor's
+  current, thermal noise, and flicker noise from a synthesized Verilog-A body.
+  Supported geometry and temperature parameters from the instance, plus noise
+  and noise-area parameters from its `.model` card, are forwarded to that body.
 
 - **SPICE `temper` becomes `$temp`.** ngspice names the simulation temperature
   (in degrees Celsius) `temper`; VACASK spells the same quantity in the same units

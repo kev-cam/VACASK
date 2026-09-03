@@ -18,7 +18,17 @@ OsdiDevice::OsdiDevice(OsdiFile* of, int descriptorIndex, Id asName, Loc locatio
     setFlags(Flags::IsValid);
     if (osdiFile->allowsBypass(index_)) {
         setFlags(Flags::Bypassable);
-    }}
+    }
+    if (absdelayCount()>0) {
+        setFlags(Flags::Absdelay);
+    }
+    if (osdiFile->variableAbsdelay(index_)) {
+        setFlags(Flags::VariableAbsdelay);
+    }
+    if (osdiFile->usesAbstime(index_)) {
+        setFlags(Flags::UsesAbstime);
+    }
+}
 
 bool OsdiDevice::operator==(const Device& other) const & {
     const OsdiDevice* devOther = dynamic_cast<const OsdiDevice*>(&other);
@@ -358,7 +368,8 @@ bool OsdiDevice::bind(
     Circuit& circuit, 
     KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
     KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-    Status& s
+    DelayLines* delayLines, 
+    ErrorConsumer& ec
 ) {
     // Call bind() for all instances
     for(auto model : models()) {
@@ -367,7 +378,8 @@ bool OsdiDevice::bind(
                 circuit, 
                 matResist, compResist, mepResist, 
                 matReact, compReact, mepReact, 
-                s
+                delayLines, 
+                ec
             )) {
                 return false;
             }
@@ -376,7 +388,9 @@ bool OsdiDevice::bind(
     return true;
 }
 
-bool OsdiDevice::evalAndLoad(Circuit& circuit, CommonData& commons, EvalSetup* evalSetup, LoadSetup* loadSetup) {
+
+
+bool OsdiDevice::evalAndLoad(Circuit& circuit, CommonData& commons, EvalSetup* evalSetup, LoadSetup* loadSetup, ErrorConsumer& errors) {
     auto& opt = circuit.simulatorOptions().core();
     OsdiSimInfo simInfo;
 
@@ -457,11 +471,11 @@ bool OsdiDevice::evalAndLoad(Circuit& circuit, CommonData& commons, EvalSetup* e
             continue;
         }
         for(auto instance : model->instances()) {
-            if (evalSetup && !static_cast<OsdiInstance*>(instance)->evalCore(circuit, commons, simInfo, *evalSetup)) {
+            if (evalSetup && !static_cast<OsdiInstance*>(instance)->evalCore(circuit, commons, simInfo, *evalSetup, errors)) {
                 return false;
             }
             if (loadSetup) {
-                auto lst = static_cast<OsdiInstance*>(instance)->loadCore(circuit, commons, *loadSetup);
+                auto lst = static_cast<OsdiInstance*>(instance)->loadCore(circuit, commons, *loadSetup, errors);
                 if (!lst) {
                     return false;
                 }
@@ -664,6 +678,9 @@ void OsdiDevice::dump(int indent, std::ostream& os) const {
     }
     if (descriptor_->bound_step_offset!=UINT32_MAX) {
         os << "    sets $bound_step\n";
+    }
+    if (absdelayCount()>0) {
+        os << "    uses absdelay()\n";
     }
     if (checkFlags(Device::Flags::Bypassable)) {
         os << "    bypassable\n";

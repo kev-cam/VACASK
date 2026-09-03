@@ -182,19 +182,21 @@ template<> bool BuiltinVSourceInstance::bindCore(
     Circuit& circuit, 
     KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
     KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-    Status& s
+    DelayLines* delayLines, 
+    ErrorConsumer& ec
 );
 template<> bool BuiltinISourceInstance::bindCore(
     Circuit& circuit, 
     KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
     KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-    Status& s
+    DelayLines* delayLines, 
+    ErrorConsumer& ec
 );
 
-template<> bool BuiltinVSourceInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup);    
-template<> bool BuiltinISourceInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup);    
-template<> bool BuiltinVSourceInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup);    
-template<> bool BuiltinISourceInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup);    
+template<> bool BuiltinVSourceInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup, ErrorConsumer& errors);    
+template<> bool BuiltinISourceInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup, ErrorConsumer& errors);    
+template<> bool BuiltinVSourceInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup, ErrorConsumer& errors);
+template<> bool BuiltinISourceInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup, ErrorConsumer& errors);
 
 }
 

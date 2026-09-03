@@ -193,7 +193,8 @@ template<> bool BuiltinVccsInstance::bindCore(
     Circuit& circuit, 
     KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
     KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-    Status& s
+    DelayLines* delayLines, 
+    ErrorConsumer& ec
 ) {
     auto& d = data.core();
 
@@ -217,7 +218,7 @@ template<> bool BuiltinVccsInstance::bindCore(
 }
 
 
-template<> bool BuiltinVccsInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup) {
+template<> bool BuiltinVccsInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup, ErrorConsumer& errors) {
     auto& p = params.core();
     auto& d = data.core();
     
@@ -235,7 +236,7 @@ template<> bool BuiltinVccsInstance::evalCore(Circuit& circuit, CommonData& comm
     return true;
 }
 
-template<> bool BuiltinVccsInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup) {
+template<> bool BuiltinVccsInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup, ErrorConsumer& errors) {
     auto& p = params.core();
     auto& d = data.core();
     
@@ -367,7 +368,8 @@ template<> bool BuiltinVcvsInstance::bindCore(
     Circuit& circuit, 
     KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
     KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-    Status& s
+    DelayLines* delayLines, 
+    ErrorConsumer& ec
 ) {
     auto& d = data.core();
 
@@ -393,7 +395,7 @@ template<> bool BuiltinVcvsInstance::bindCore(
     return true;
 }
 
-template<> bool BuiltinVcvsInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup) {
+template<> bool BuiltinVcvsInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup, ErrorConsumer& errors) {
     auto& p = params.core();
     auto& d = data.core();
     
@@ -413,7 +415,7 @@ template<> bool BuiltinVcvsInstance::evalCore(Circuit& circuit, CommonData& comm
     return true;
 }
 
-template<> bool BuiltinVcvsInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup) {
+template<> bool BuiltinVcvsInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup, ErrorConsumer& errors) {
     auto& p = params.core();
     auto& d = data.core();
     
@@ -535,7 +537,8 @@ template<> bool BuiltinCccsInstance::bindCore(
     Circuit& circuit, 
     KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
     KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-    Status& s
+    DelayLines* delayLines, 
+    ErrorConsumer& ec
 ) {
     auto& d = data.core();
 
@@ -554,7 +557,7 @@ template<> bool BuiltinCccsInstance::bindCore(
     return true;
 }
 
-template<> bool BuiltinCccsInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup) {
+template<> bool BuiltinCccsInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup, ErrorConsumer& errors) {
     auto& p = params.core();
     auto& d = data.core();
     
@@ -572,7 +575,7 @@ template<> bool BuiltinCccsInstance::evalCore(Circuit& circuit, CommonData& comm
     return true;
 }
 
-template<> bool BuiltinCccsInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup) {
+template<> bool BuiltinCccsInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup, ErrorConsumer& errors) {
     auto& p = params.core();
     auto& d = data.core();
     
@@ -708,7 +711,8 @@ template<> bool BuiltinCcvsInstance::bindCore(
     Circuit& circuit, 
     KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
     KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-    Status& s
+    DelayLines* delayLines, 
+    ErrorConsumer& ec
 ) {
     auto& d = data.core();
 
@@ -732,7 +736,7 @@ template<> bool BuiltinCcvsInstance::bindCore(
 }
 
 
-template<> bool BuiltinCcvsInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup) {
+template<> bool BuiltinCcvsInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup, ErrorConsumer& errors) {
     auto& p = params.core();
     auto& d = data.core();
     
@@ -752,7 +756,7 @@ template<> bool BuiltinCcvsInstance::evalCore(Circuit& circuit, CommonData& comm
     return true;
 }
 
-template<> bool BuiltinCcvsInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup) {
+template<> bool BuiltinCcvsInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup, ErrorConsumer& errors) {
     auto& p = params.core();
     auto& d = data.core();
     
@@ -1002,7 +1006,8 @@ template<> bool BuiltinMutualInstance::bindCore(
     Circuit& circuit, 
     KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
     KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-    Status& s
+    DelayLines* delayLines, 
+    ErrorConsumer& ec
 ) {
     auto& d = data.core();
 
@@ -1026,7 +1031,7 @@ template<> bool BuiltinMutualInstance::bindCore(
 
 
 
-template<> bool BuiltinMutualInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup) {
+template<> bool BuiltinMutualInstance::evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup, ErrorConsumer& errors) {
     auto& p = params.core();
     auto& d = data.core();
     
@@ -1059,7 +1064,7 @@ template<> bool BuiltinMutualInstance::evalCore(Circuit& circuit, CommonData& co
     return true;
 }
 
-template<> bool BuiltinMutualInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup) {
+template<> bool BuiltinMutualInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup, ErrorConsumer& errors) {
     auto& p = params.core();
     auto& d = data.core();
     

@@ -5,6 +5,7 @@
 #include <limits>
 #include "ansupport.h"
 #include "coretrancoef.h"
+#include "coredelay.h"
 #include "common.h"
 
 
@@ -277,6 +278,10 @@ typedef struct LoadSetup {
 
     // Where to load AC small-signal residual, skip if nullptr
     Complex* acResidual {}; // with bucket
+
+    // Delay lines
+    DelayLines* delayLines_ {nullptr};
+    bool firstTimepoint {};
     
     // 
     // Internals
@@ -295,7 +300,7 @@ typedef struct LoadSetup {
         } else {
             oldStates = newStates = nullptr;
         }
-        
+                
         return true;
     };
 } LoadSetup;

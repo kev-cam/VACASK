@@ -230,6 +230,8 @@ struct SpiceBin {
     std::string wmax;
 };
 using BinnedModels = std::map<std::string, std::vector<SpiceBin>>;
+using BehavioralParameterValues = std::map<std::string, std::string>;
+using BehavioralResistorModels = std::map<std::string, BehavioralParameterValues>;
 
 static IncludeKey includeKey(const std::filesystem::path& path,
                              const rust::String& section) {
@@ -242,15 +244,18 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
                                const std::filesystem::path& baseDir,
                                IncludeSet& visited,
                                BinnedModels& visibleBins,
+                               BehavioralResistorModels& resistorModels,
                                bool projectAnalyses = true,
                                const std::string& language = "");
 
 static bool fillSubDef(PTSubcircuitDefinition& def, const netlist::Subckt& s, Parser& p,
                        ParserTables& tab, Status& st,
-                       const std::filesystem::path& baseDir,
-                       IncludeSet& visited,
-                       const BinnedModels& inheritedBins) {
+                        const std::filesystem::path& baseDir,
+                        IncludeSet& visited,
+                        const BinnedModels& inheritedBins,
+                        const BehavioralResistorModels& inheritedResistorModels) {
     BinnedModels visibleBins = inheritedBins;
+    BehavioralResistorModels resistorModels = inheritedResistorModels;
     auto sp = paramString(s.params);
     if (!sp.empty()) def.add(p.parseParameters(sp));
     for (const auto& m : s.models)       def.add(makeModel(m, p));
@@ -258,11 +263,13 @@ static bool fillSubDef(PTSubcircuitDefinition& def, const netlist::Subckt& s, Pa
     for (const auto& c : s.conditionals) def.add(makeConditional(c, p));
     for (const auto& sub : s.subckts) {
         PTSubcircuitDefinition child(Id(toString(sub.name).c_str()), nodeList(sub.ports));
-        if (!fillSubDef(child, sub, p, tab, st, baseDir, visited, visibleBins)) return false;
+        if (!fillSubDef(child, sub, p, tab, st, baseDir, visited, visibleBins,
+                        resistorModels)) return false;
         def.add(std::move(child));
     }
     for (const auto& sb : s.spice_blocks) {
-        if (!spiceBlockToTables(sb, def, tab, p, st, baseDir, visited, visibleBins)) return false;
+        if (!spiceBlockToTables(sb, def, tab, p, st, baseDir, visited, visibleBins,
+                                resistorModels)) return false;
     }
     return true;
 }
@@ -487,6 +494,8 @@ static void addSpiceModelCard(const netlist::SpiceModel& m,
     if (mod) into.add(std::move(*mod));
 }
 
+static BehavioralParameterValues behavioralResistorModelParams(const netlist::SpiceModel& model);
+
 // ngspice recognizes a bin only when the model name has a numeric suffix.
 static std::optional<std::string> binBaseName(const std::string& name) {
     auto pos = name.find_last_of('.');
@@ -537,10 +546,15 @@ static void emitBinnedModelGroup(std::vector<const netlist::SpiceModel*>& bins,
 
 static void emitSpiceModels(const rust::Vec<netlist::SpiceModel>& models,
                             PTSubcircuitDefinition& into, Parser& p,
-                            BinnedModels& visibleBins) {
+                            BinnedModels& visibleBins,
+                            BehavioralResistorModels& resistorModels) {
     std::vector<std::string> order;
     std::map<std::string, std::vector<const netlist::SpiceModel*>> groups;
     for (const auto& m : models) {
+        std::string modelType = lowercase(toString(m.model_type));
+        if (modelType == "r" || modelType == "res") {
+            resistorModels[lowercase(toString(m.name))] = behavioralResistorModelParams(m);
+        }
         auto base = binBaseName(toString(m.name));
         if (isBinnedModel(m)) {
             std::string key = lowercase(*base);
@@ -700,12 +714,114 @@ static bool addSpiceBehavioral(const std::string& name, PTIdentifierList&& terms
         s.extend(std::string("  in ") + what + " '" + name + "'.");
         return false;
     }
-    into.add(PTBehavioral(Id(name.c_str()), std::move(terms), std::move(expr), currentSource));
+    PTBehavioral behavioral(Id(name.c_str()), std::move(terms));
+    if (currentSource) behavioral.setCurrent(std::move(expr));
+    else               behavioral.setVoltage(std::move(expr));
+    into.add(std::move(behavioral));
+    return true;
+}
+
+static constexpr const char* kBehavioralResistorDeclarations = R"(
+parameter real w=10e-6;
+parameter real l=10e-6;
+parameter real temp=27;
+parameter real dtemp=0;
+parameter real kf=0;
+parameter real af=1;
+parameter real ef=1;
+parameter real short=0;
+parameter real narrow=0;
+parameter real lf=1;
+parameter real wf=1;
+parameter integer noise=1;
+parameter real mfactor=1;
+real devTemp;
+real noiseArea;
+real cpscale=$simparam("scale", 1);
+real r;
+real i;
+)";
+
+static constexpr const char* kBehavioralResistorEvaluation = R"(
+if ($param_given(temp)) devTemp=temp+`P_CELSIUS0;
+else devTemp=$temperature+dtemp;
+if ($param_given(w) || $param_given(l))
+  noiseArea=pow(l*cpscale-2*short, lf)*pow(w*cpscale-2*narrow, wf);
+else
+  noiseArea=1;
+r=#expr#;
+if (r>=0 && r<1e-12) r=1e-12;
+else if (r<0 && r>-1e-12) r=-1e-12;
+i=V(br)/r;
+I(br)<+mfactor*i;
+if (noise) begin
+  I(br)<+white_noise(mfactor*4*`P_K*devTemp/r, "thermal");
+  I(br)<+flicker_noise(mfactor*((i>=0) ? 1 : -1)*kf*pow(abs(i), af)/noiseArea, ef, "flicker");
+end
+)";
+
+static BehavioralParameterValues behavioralResistorModelParams(const netlist::SpiceModel& model) {
+    static const std::map<std::string, std::string> supported = {
+        {"af", "af"}, {"kf", "kf"}, {"ef", "ef"},
+        {"lf", "lf"}, {"wf", "wf"}, {"short", "short"},
+        {"dlr", "short"}, {"narrow", "narrow"}, {"dw", "narrow"},
+        {"noise", "noise"}, {"noisy", "noise"},
+    };
+    BehavioralParameterValues values;
+    for (const auto& param : model.params) {
+        auto it = supported.find(lowercase(toString(param.name)));
+        if (it == supported.end()) continue;
+        values[it->second] = lowercase(spiceValue(param.value));
+    }
+    return values;
+}
+
+static BehavioralParameterValues behavioralResistorInstanceParams(const netlist::SpiceDevice& dev) {
+    static const std::map<std::string, std::string> supported = {
+        {"w", "w"}, {"l", "l"}, {"temp", "temp"}, {"dtemp", "dtemp"},
+        {"noise", "noise"}, {"noisy", "noise"},
+    };
+    BehavioralParameterValues values;
+    for (const auto& param : dev.params) {
+        auto it = supported.find(lowercase(toString(param.name)));
+        if (it == supported.end()) continue;
+        values[it->second] = lowercase(spiceValue(param.value));
+    }
+    return values;
+}
+
+static bool addSpiceBehavioralResistor(const std::string& name, PTIdentifierList&& terms,
+                                       const std::string& resistance,
+                                       const BehavioralParameterValues& modelParams,
+                                       const BehavioralParameterValues& instanceParams,
+                                       const std::string& mfactor,
+                                       PTSubcircuitDefinition& into,
+                                       Parser& p, Status& s) {
+    Rpn expr;
+    try {
+        expr = p.parseExpression(spiceExpr(resistance, /*behavioral=*/true));
+    } catch (const std::exception&) {
+        s.extend("  in behavioral resistor '" + name + "'.");
+        return false;
+    }
+
+    PTBehavioral behavioral(Id(name.c_str()), std::move(terms));
+    behavioral.setExpression(std::move(expr));
+    behavioral.setUserDeclarations(std::string(kBehavioralResistorDeclarations));
+    behavioral.setUserEvaluation(std::string(kBehavioralResistorEvaluation));
+    BehavioralParameterValues values = modelParams;
+    for (const auto& value : instanceParams) values[value.first] = value.second;
+    if (!mfactor.empty()) values["mfactor"] = mfactor;
+    std::ostringstream params;
+    for (const auto& value : values) params << value.first << "=" << value.second << " ";
+    if (!values.empty()) behavioral.add(p.parseParameters(params.str()));
+    into.add(std::move(behavioral));
     return true;
 }
 
 static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSubckt& s,
-                            Parser& p, Status& st, const BinnedModels& inheritedBins);
+                            Parser& p, Status& st, const BinnedModels& inheritedBins,
+                            const BehavioralResistorModels& inheritedResistorModels);
 
 static void ensureSpiceModel(PTSubcircuitDefinition& into, const std::string& master) {
     for (const auto& model : into.root().models()) {
@@ -723,7 +839,8 @@ static bool hasSpiceModel(const PTSubcircuitDefinition& into, const std::string&
 
 static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefinition& into,
                            Parser& p, Status& s, const std::string& mfactorIn,
-                           const BinnedModels& visibleBins) {
+                           const BinnedModels& visibleBins,
+                           const BehavioralResistorModels& resistorModels) {
     std::string name = lowercase(toString(dev.name));
     std::string val  = lowercase(spiceValue(dev.value));
     std::string mdl  = lowercase(toString(dev.model));
@@ -770,11 +887,20 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                                      << "' needs exactly 2 nodes (skipped)\n";
                     break;
                 }
+                std::string modelName = mdl.empty() ? (valIsModel ? val : "") : mdl;
+                BehavioralParameterValues modelParams;
+                if (!modelName.empty()) {
+                    auto model = resistorModels.find(modelName);
+                    if (model != resistorModels.end()) modelParams = model->second;
+                    else Simulator::err() << "WARNING: behavioral resistor '" << name
+                                          << "' references unknown model '" << modelName << "'\n";
+                }
                 std::string dropped;
-                if (valIsModel || !mdl.empty()) dropped = "model " + (mdl.empty() ? val : mdl);
                 for (const auto& prm : dev.params) {
                     std::string key = lowercase(toString(prm.name));
-                    if (key == "r" || key == "m") continue;   // m is honored below
+                    if (key == "r" || key == "m" || key == "w" || key == "l" ||
+                        key == "temp" || key == "dtemp" || key == "noise" || key == "noisy")
+                        continue;
                     if (!dropped.empty()) dropped += ", ";
                     dropped += key;
                 }
@@ -782,12 +908,9 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
                     Simulator::err() << "WARNING: behavioral resistor '" << name
                                      << "' has no place for " << dropped << "; ignored\n";
                 }
-                // Scale the behavioral flow directly because it has no instance parameters.
-                std::string src = "v(" + lowercase(toString(dev.nodes[0])) + "," + lowercase(toString(dev.nodes[1])) +
-                                  ")/max(" + rexpr + ", 1e-12)";
-                if (!mfac.empty()) src = "(" + src + ")*(" + mfac + ")";
-                if (!addSpiceBehavioral(name, spiceNodeList(dev.nodes), src, true,
-                                        "behavioral resistor", into, p, s)) {
+                if (!addSpiceBehavioralResistor(
+                        name, spiceNodeList(dev.nodes), rexpr, modelParams,
+                        behavioralResistorInstanceParams(dev), mfac, into, p, s)) {
                     return false;
                 }
                 break;
@@ -1104,8 +1227,10 @@ static bool addSpiceDevice(const netlist::SpiceDevice& dev, PTSubcircuitDefiniti
 }
 
 static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSubckt& s,
-                            Parser& p, Status& st, const BinnedModels& inheritedBins) {
+                            Parser& p, Status& st, const BinnedModels& inheritedBins,
+                            const BehavioralResistorModels& inheritedResistorModels) {
     BinnedModels visibleBins = inheritedBins;
+    BehavioralResistorModels resistorModels = inheritedResistorModels;
     // Every subcircuit accepts a multiplier so X-line m= can cross file boundaries.
     warnIfTemperDeclared(s.params, "SPICE .subckt '" + lowercase(toString(s.name)) + "'");
     auto sp = lowercase(paramString(s.params, /*spiceValues=*/true));
@@ -1113,13 +1238,14 @@ static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSub
     sp += std::string(kMfactorParam) + "=1";
     def.add(p.parseParameters(sp));
     // Models must precede the devices that reference them.
-    emitSpiceModels(s.models, def, p, visibleBins);
+    emitSpiceModels(s.models, def, p, visibleBins, resistorModels);
     for (const auto& dev : s.devices) {
-        if (!addSpiceDevice(dev, def, p, st, kMfactorParam, visibleBins)) return false;
+        if (!addSpiceDevice(dev, def, p, st, kMfactorParam, visibleBins,
+                            resistorModels)) return false;
     }
     for (const auto& sub : s.subckts) {
         PTSubcircuitDefinition child(spiceId(toString(sub.name)), spiceNodeList(sub.ports));
-        if (!fillSpiceSubDef(child, sub, p, st, visibleBins)) return false;
+        if (!fillSpiceSubDef(child, sub, p, st, visibleBins, resistorModels)) return false;
         def.add(std::move(child));
     }
     return true;
@@ -1129,9 +1255,10 @@ static bool fillSpiceSubDef(PTSubcircuitDefinition& def, const netlist::SpiceSub
 bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
                   ParserTables& tab, Parser& p,
                   const std::filesystem::path& baseDir,
-                  IncludeSet& visited,
-                  BinnedModels& visibleBins,
-                  Status& s, bool projectAnalyses = true,
+                   IncludeSet& visited,
+                   BinnedModels& visibleBins,
+                   BehavioralResistorModels& resistorModels,
+                   Status& s, bool projectAnalyses = true,
                   const std::string& language = "");
 
 static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefinition& into,
@@ -1140,6 +1267,7 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
                                const std::filesystem::path& baseDir,
                                IncludeSet& visited,
                                BinnedModels& visibleBins,
+                               BehavioralResistorModels& resistorModels,
                                bool projectAnalyses,
                                const std::string& language) {
     // Includes define models and parameters visible to this block. The bridge
@@ -1183,7 +1311,8 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
             return false;
         }
 
-        if (!mergeNetlist(sub, into, tab, p, absPath.parent_path(), visited, visibleBins, s,
+        if (!mergeNetlist(sub, into, tab, p, absPath.parent_path(), visited, visibleBins,
+                          resistorModels, s,
                           projectAnalyses, kSpiceBlockDialect))
             return false;
     }
@@ -1192,16 +1321,16 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
     auto sp = paramString(sb.params, /*spiceValues=*/true);
     if (!sp.empty()) into.add(p.parseParameters(lowercase(sp)));
 
-    emitSpiceModels(sb.models, into, p, visibleBins);
+    emitSpiceModels(sb.models, into, p, visibleBins, resistorModels);
 
     // The top level has no multiplier to inherit.
     for (const auto& dev : sb.devices) {
-        if (!addSpiceDevice(dev, into, p, s, "", visibleBins)) return false;
+        if (!addSpiceDevice(dev, into, p, s, "", visibleBins, resistorModels)) return false;
     }
 
     for (const auto& sub : sb.subckts) {
         PTSubcircuitDefinition child(spiceId(toString(sub.name)), spiceNodeList(sub.ports));
-        if (!fillSpiceSubDef(child, sub, p, s, visibleBins)) return false;
+        if (!fillSpiceSubDef(child, sub, p, s, visibleBins, resistorModels)) return false;
         into.add(std::move(child));
     }
 
@@ -1211,9 +1340,10 @@ static bool spiceBlockToTables(const netlist::SpiceBlock& sb, PTSubcircuitDefini
 bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
                   ParserTables& tab, Parser& p,
                   const std::filesystem::path& baseDir,
-                  IncludeSet& visited,
-                  BinnedModels& visibleBins,
-                  Status& s, bool projectAnalyses,
+                   IncludeSet& visited,
+                   BinnedModels& visibleBins,
+                   BehavioralResistorModels& resistorModels,
+                   Status& s, bool projectAnalyses,
                   const std::string& language) {
     auto sp = paramString(nl.params);
     if (!sp.empty()) top.add(p.parseParameters(sp));
@@ -1221,12 +1351,14 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
     for (const auto& i : nl.instances) top.add(makeInstance(i, p));
     for (const auto& sub : nl.subckts) {
         PTSubcircuitDefinition child(Id(toString(sub.name).c_str()), nodeList(sub.ports));
-        if (!fillSubDef(child, sub, p, tab, s, baseDir, visited, visibleBins)) return false;
+        if (!fillSubDef(child, sub, p, tab, s, baseDir, visited, visibleBins,
+                        resistorModels)) return false;
         top.add(std::move(child));
     }
 
     for (const auto& sb : nl.spice_blocks) {
         if (!spiceBlockToTables(sb, top, tab, p, s, baseDir, visited, visibleBins,
+                                resistorModels,
                                 projectAnalyses, language))
             return false;
     }
@@ -1296,7 +1428,8 @@ bool mergeNetlist(const netlist::Netlist& nl, PTSubcircuitDefinition& top,
             return false;
         }
 
-        if (!mergeNetlist(sub, top, tab, p, absPath.parent_path(), visited, visibleBins, s,
+        if (!mergeNetlist(sub, top, tab, p, absPath.parent_path(), visited, visibleBins,
+                          resistorModels, s,
                           projectAnalyses, language))
             return false;
     }
@@ -1346,7 +1479,9 @@ bool mergeForeignFile(const std::string& path, const std::string& section,
         try { absPath = fs::canonical(fp); } catch (...) { absPath = fs::absolute(fp); }
         IncludeSet visited{{absPath, lowercase(section)}};
         BinnedModels visibleBins;
-        if (!mergeNetlist(nl, top, tab, p, absPath.parent_path(), visited, visibleBins, s,
+        BehavioralResistorModels resistorModels;
+        if (!mergeNetlist(nl, top, tab, p, absPath.parent_path(), visited, visibleBins,
+                          resistorModels, s,
                           /*projectAnalyses=*/false, language))
             return false;
         emitOsdiLoads(tab, top);

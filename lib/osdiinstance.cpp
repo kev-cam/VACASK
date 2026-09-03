@@ -574,7 +574,27 @@ bool OsdiInstance::populateStructuresCore(Circuit& circuit, Status& s) {
         model()->device()->nonzeroResistiveResiduals().size() + 
         model()->device()->nonzeroReactiveResiduals().size();
     offsDeviceStates = circuit.allocateDeviceStates(deviceStateCount);
-    
+
+    // Reserve delay history entries
+    auto delayCount = model()->device()->absdelayCount();
+    offsDelayHistory = circuit.allocateDelayHistory(delayCount);
+
+    // Loop through delays, create (out, in) and (out, out) sparsity pattern entries
+    for(decltype(delayCount) i=0; i<delayCount; i++) {
+        // y_node is input, z_node is output (same convention as bindCore())
+        auto nin = nodes_[descr->absdelays[i].y_node];
+        auto nout = nodes_[descr->absdelays[i].z_node];
+        // Entries are considered resistive. Complex matrices should be a union of resistive 
+        // and reactive entries. At this point real matrices (resistive or reactive) have 
+        // the same sparsity pattern (union of both) as complex matrices. 
+        if (auto [_, ok] = circuit.createJacobianEntry(nout, nin, EntryFlags::Delay, s); !ok) {
+            return false;
+        }
+        if (auto [_, ok] = circuit.createJacobianEntry(nout, nout, EntryFlags::Delay, s); !ok) {
+            return false;
+        }
+    }
+
     // Increment residual contribution counters
     auto nodeCount = descr->num_nodes;
     for(decltype(nodeCount) i=0; i<nodeCount; i++) {
@@ -597,7 +617,8 @@ bool OsdiInstance::bindCore(
     Circuit& circuit, 
     KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
     KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-    Status& s
+    DelayLines* delayLines, 
+    ErrorConsumer& ec
 ) {
     auto descr = model()->device()->descriptor();
     // Bind nodes
@@ -609,35 +630,53 @@ bool OsdiInstance::bindCore(
     }
 
     // Bind Jacobian entries
-    auto numEntries = model()->device()->jacobianEntriesCount();
-    auto jacResistArray = resistiveJacobianPointers();
-    for(decltype(numEntries) i=0; i<numEntries; i++) {
-        // Position contains local terminal/node indices (0-based) 
-        auto& entry = model()->device()->jacobianEntry(i);
-        
-        // Translate them to circuit nodes
-        auto ne = nodes_[entry.nodes.node_1];
-        auto nu = nodes_[entry.nodes.node_2];
-        
-        // Translate to equations/unknowns
-        auto e = ne->unknownIndex();
-        auto u = nu->unknownIndex();
-        
-        // Set resistive Jacobian element pointer
-        if (matResist && !(jacResistArray[i] = matResist->valuePtr(MatrixEntryPosition(e, u), compResist, mepResist))) {
-            s.set(Status::BadConversion, "Matrix is of incorrect type.");
-            return false;
-        }
+    if (matResist || matReact) {
+        auto numEntries = model()->device()->jacobianEntriesCount();
+        auto jacResistArray = resistiveJacobianPointers();
+        for(decltype(numEntries) i=0; i<numEntries; i++) {
+            // Position contains local terminal/node indices (0-based) 
+            auto& entry = model()->device()->jacobianEntry(i);
+            
+            // Translate them to circuit nodes
+            auto ne = nodes_[entry.nodes.node_1];
+            auto nu = nodes_[entry.nodes.node_2];
+            
+            // Translate to equations/unknowns
+            auto e = ne->unknownIndex();
+            auto u = nu->unknownIndex();
+            
+            // Set resistive Jacobian element pointer
+            if (matResist && !(jacResistArray[i] = matResist->valuePtr(MatrixEntryPosition(e, u), compResist, mepResist))) {
+                ec.push(OsdiBindMatrixWrongType{});
+                return false;
+            }
 
-        // Set reactive Jacobian element pointer
-        if (matReact) {
-            auto reactivePointer = reactiveJacobianPointer(i);
-            if (reactivePointer) {
-                // Set reactive Jacobian pointer
-                if (!(*reactivePointer = matReact->valuePtr(MatrixEntryPosition(e, u), compReact, mepReact))) {
-                    s.set(Status::BadConversion, "Matrix is of incorrect type.");
-                    return false;
+            // Set reactive Jacobian element pointer
+            if (matReact) {
+                auto reactivePointer = reactiveJacobianPointer(i);
+                if (reactivePointer) {
+                    // Set reactive Jacobian pointer
+                    if (!(*reactivePointer = matReact->valuePtr(MatrixEntryPosition(e, u), compReact, mepReact))) {
+                        ec.push(OsdiBindMatrixWrongType{});
+                        return false;
+                    }
                 }
+            }
+        }
+    }
+
+    // Bind delay lines, binding to matrix elements will be done by analyses. 
+    // Analyses are resposible for computing and filling these entries. 
+    // Therefore analyses are the ones that actually bind to matrix elements. 
+    if (delayLines) {
+        auto n = model()->device()->absdelayCount();
+        auto atLine = offsDelayHistory;
+        for(decltype(n) i=0; i<n; i++, atLine++) {
+            // y_node is input, z_node is output
+            auto nin = nodes_[descr->absdelays[i].y_node];
+            auto nout = nodes_[descr->absdelays[i].z_node];
+            if (!delayLines->bindToUnknowns(atLine, nin->unknownIndex(), nout->unknownIndex(), ec)) {
+                return false;
             }
         }
     }
@@ -1185,7 +1224,7 @@ bool OsdiInstance::outputBypassCheckCore(Circuit& circuit, CommonData& commons, 
     return converged;
 }
 
-bool OsdiInstance::evalCore(Circuit& circuit, CommonData& commons, OsdiSimInfo& simInfo, EvalSetup& evalSetup) {
+bool OsdiInstance::evalCore(Circuit& circuit, CommonData& commons, OsdiSimInfo& simInfo, EvalSetup& evalSetup, ErrorConsumer& errors) {
     // Get descriptor 
     auto model_ = model();
     auto device = model_->device();
@@ -1425,7 +1464,7 @@ bool OsdiInstance::evalCore(Circuit& circuit, CommonData& commons, OsdiSimInfo& 
     return true;
 }
 
-bool OsdiInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup) {
+bool OsdiInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup, ErrorConsumer& errors) {
     // Get descriptor
     auto model_ = model();
     auto device = model_->device();
@@ -1477,6 +1516,7 @@ bool OsdiInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& lo
         } else {
             // Not supported, needs support in OpenVAF
             // At this point it is not needed. 
+            errors.push(OsdiUnsupportedTranJacOffs(name()));
             return false;
         }
     }
@@ -1577,6 +1617,43 @@ bool OsdiInstance::loadCore(Circuit& circuit, CommonData& commons, LoadSetup& lo
             }
             // Go to next node
             nodeStateIndex += 2;
+        }
+    }
+
+    // Load delay line delays and maxdelays
+    if (loadSetup.delayLines_) {
+        // Go through all delays
+        auto n = model()->device()->absdelayCount();
+        for(decltype(n) i=0; i<n; i++) {
+            // Compute global index
+            GlobalStorageIndex delayNdx = offsDelayHistory + i;
+            // delay
+            auto offs = descr->absdelays[i].td_offset;
+            auto td = *getDataPtr<double*>(core(), offs);
+            // max delay
+            auto maxDelayOffs = descr->absdelays[i].maxdelay_offset;
+            if (maxDelayOffs!=UINT32_MAX) {
+                // Variable delay
+                auto maxDelay = *getDataPtr<double*>(core(), maxDelayOffs);
+                // If this is the first timepoint store maxdelay
+                if (loadSetup.firstTimepoint) {
+                    loadSetup.delayLines_->setMaxDelay(delayNdx, maxDelay);
+                }
+                // Store delay always
+                if (!loadSetup.delayLines_->setDelay(delayNdx, td)) {
+                    errors.push(OsdiDelayChangeDetected(name()));
+                    return false;
+                }
+            } else {
+                // No maxdelay, delay is determined at first timepoint
+                if (loadSetup.firstTimepoint) {
+                    if (!loadSetup.delayLines_->setDelay(delayNdx, td)) {
+                        errors.push(OsdiDelayChangeDetected(name()));
+                        return false;
+                    }
+                    loadSetup.delayLines_->setMaxDelay(delayNdx, td);
+                }
+            }
         }
     }
 

@@ -43,46 +43,33 @@ template<> int Introspection<HBACParameters>::setup() {
 }
 instantiateIntrospection(HBACParameters);
 
-class HBACUnknownNameResolver : public NameResolver {
-public:
-    HBACUnknownNameResolver(Circuit& circuit, size_t nf) : circuit(circuit), nf(nf) {};
-
-    virtual Id operator()(MatrixEntryIndex u) {
-        return circuit.reprNode(u/nf+1)->name();
-    };
-
-private:
-    Circuit& circuit;
-    size_t nf;
-};
-
 HBACCore::HBACCore(
     OutputDescriptorResolver& parentResolver, HBACParameters& params, HBCore& hbCore,
     Circuit& circuit, CommonData& commons,
     KluBlockSparseComplexMatrix& jacSpec,
     VectorRepository<Complex>& hbSolution,
-    KluBlockSparseComplexMatrix& acMatrix, Vector<Complex>& acSolution
+    KluBlockSparseComplexMatrix& acMatrix, Vector<Complex>& acSolution,
+    DelayLines& delayLines, DelayMatrixBindings<DenseMatrixView<Complex>>& hbacDelayBindings
 ) : AnalysisCore(parentResolver, circuit, commons),
     hbCore_(hbCore),
     outfile(nullptr),
-    lastHBACError(HBACError::OK),
-    errorFreq(-1.0),
-    errorInst(nullptr),
-    errorSpur(0),
     hbSolution(hbSolution),
     jacSpec(jacSpec),
     acMatrix(acMatrix),
     acSolution(acSolution),
     firstBuild(true),
     params(params),
-    frequency(0.0) {
+    delayLines_(delayLines),
+    hbacDelayBindings_(hbacDelayBindings),
+    frequency(0.0),
+    hbacResolver_(circuit) {
 }
 
 HBACCore::~HBACCore() {
     delete outfile;
 }
 
-bool HBACCore::resolveOutputDescriptors(bool strict, Status& s) {
+bool HBACCore::resolveOutputDescriptors(bool strict, ErrorConsumer& errors) {
     // Clear output sources
     outputSources.clear();
     // Resolve output descriptors
@@ -97,7 +84,7 @@ bool HBACCore::resolveOutputDescriptors(bool strict, Status& s) {
         case OutdSolComponent:
             for(decltype(nSpurs) i=0; i<nStoredSpurs; i++) {
                 Id name = std::string(it->id)+";"+suffixes[i];
-                if (!addComplexVarOutputSource(strict, it->id, acSolution, nSpurs, spurIndices[i], name, s)) {
+                if (!addComplexVarOutputSource(strict, it->id, acSolution, nSpurs, spurIndices[i], name, errors)) {
                     ok = false;
                     break;
                 }
@@ -108,7 +95,7 @@ bool HBACCore::resolveOutputDescriptors(bool strict, Status& s) {
             break;
         default:
             // Delegate to parent
-            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, s);
+            ok = parentResolver.resolveOutputDescriptor(*it, outputSources, strict, errors);
             break;
         }
         if (!ok) {
@@ -118,30 +105,30 @@ bool HBACCore::resolveOutputDescriptors(bool strict, Status& s) {
     return ok;
 }
 
-bool HBACCore::addCoreOutputDescriptors(Status& s) {
+bool HBACCore::addCoreOutputDescriptors(ErrorConsumer& errors) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (!addOutputDescriptor(OutputDescriptor(OutdFrequency, "frequency"))) {
-        s.set(Status::Analysis, std::string("Failed to add output descriptor for frequency."));
+        errors.push(CoreAddOutputDescriptor{"frequency"});
         return false;
     }
     return true;
 }
 
-bool HBACCore::addDefaultOutputDescriptors(Status& s) {
+bool HBACCore::addDefaultOutputDescriptors(ErrorConsumer& errors) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
     if (savesCount==0) {
-        return addAllUnknowns(PTSave("default", Id(), Id()), s);
+        return addAllUnknowns(PTSave("default", Id(), Id()), errors);
     }
     return true;
 }
 
-bool HBACCore::initializeOutputs(Id name, Status& s) {
+bool HBACCore::initializeOutputs(Id name, ErrorConsumer& errors) {
     // If output is suppressed, skip all this work
     if (!params.write || Simulator::noOutput()) {
         return true;
@@ -160,7 +147,7 @@ bool HBACCore::initializeOutputs(Id name, Status& s) {
     return true;
 }
 
-bool HBACCore::finalizeOutputs(Status& s) {
+bool HBACCore::finalizeOutputs(ErrorConsumer& errors) {
     if (outfile) {
         outfile->epilogue();
         delete outfile;
@@ -169,7 +156,7 @@ bool HBACCore::finalizeOutputs(Status& s) {
     return true;
 }
 
-bool HBACCore::deleteOutputs(Id name, Status& s) {
+bool HBACCore::deleteOutputs(Id name, ErrorConsumer& errors) {
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
@@ -271,7 +258,12 @@ void HBACCore::fillDenseBlock(
 
 void HBACCore::fillMatrix() {
     acMatrix.zero();
-    for(auto& pos : circuit.sparsityMap().positions()) {
+    for(auto& [pos, flags] : circuit.sparsityMap().positions()) {
+        // Delay only blocks are skipped, we load only nonlinear resistive/reactive Jacobian blocks
+        if ((flags & EntryFlags::EntryType) == EntryFlags::Delay) {
+            continue;
+        }
+
         // Jacobian spectrum block, column 1 is G, column 2 is C
         auto [jacSpecBlock, found1] = jacSpec.block(pos);
         auto G = jacSpecBlock.column(0);
@@ -295,10 +287,30 @@ void HBACCore::fillMatrix() {
         // C.dump(std::cout);
         // block.dump(std::cout);
     }
+
+    // Delay lines.
+    // A linear delay does not mix spurs, so at spur n the small-signal
+    // equation of the delay output at any spur is 
+    //   -out + exp(-j omega td) in = 0
+    // i.e. the (out,in) block is diag(exp(-j w_n td)) and (out,out) is -I.
+    // The main loop above skips delay-only blocks, so these blocks still hold
+    // the zeros left by acMatrix.zero(); the += below builds them from scratch.
+    auto nDelay = circuit.delayHistoryCount();
+    auto nf = spurs_.mixingStencil().nRows();
+    for(decltype(nDelay) i=0; i<nDelay; i++) {
+        auto td = delayLines_.delay(i);
+        auto [outIn, outOut] = hbacDelayBindings_[i];
+        
+        auto outOutDiag = outOut.diagonal();
+        auto outInDiag = outIn.diagonal();
+        for(decltype(nf) k=0; k<nf; k++) {
+            outOutDiag[k] += -1;
+            outInDiag[k] += std::exp(Complex(0.0, -omega[k]*td));
+        }
+    }
 }
 
-bool HBACCore::rebuild(Status& s) {
-    clearError();
+bool HBACCore::rebuild(ErrorConsumer& errors) {
 
     auto& options = circuit.simulatorOptions().core();
 
@@ -310,18 +322,18 @@ bool HBACCore::rebuild(Status& s) {
     if (params.maxharm.isVector()) {
         // Vector maxharm
         if (params.maxharm.type()!=Value::Type::IntVec) {
-            s.set(Status::BadArguments, "Maxharm vector must be an integer vector.");
+            errors.push(HbAcMaxharmType{});
             return false;
         }
         if (params.maxharm.size()!=spurs_.fundamentals().size()) {
-            s.set(Status::BadArguments, "Maxharm vector size must match the number of fundamental frequencies.");
+            errors.push(HbAcMaxharmSize{});
             return false;
         }
         maxharm = params.maxharm.val<IntVector>();
     } else {
         // Scalar maxharm
         if (params.maxharm.type()!=Value::Type::Int) {
-            s.set(Status::BadArguments, "Maxharm scalar must be an integer.");
+            errors.push(HbAcMaxharmScalarType{});
             return false;
         }
         maxharm.assign(spurs_.fundamentals().size(), params.maxharm.val<Int>());
@@ -329,16 +341,21 @@ bool HBACCore::rebuild(Status& s) {
     auto maxfreq = params.maxfreq;
     
     // Prune spurs
-    if (!spurs_.prune(maxharm, maxfreq, s)) {
+    if (!spurs_.prune(maxharm, maxfreq)) {
+        errors.push(HbAcSpurPruneFailed{});
         return false;
     }
-    
+
     // Build mixing map
-    if (!spurs_.buildMixingMap(options.smsig_debug>0, s)) {
+    if (!spurs_.buildMixingMap(options.smsig_debug>0)) {
+        errors.push(HbAcMixingMapFailed{});
         return false;
     }
     auto& stencil = spurs_.mixingStencil();
     auto nf = stencil.nRows();
+
+    hbacResolver_.setFreqCount(nf);
+    acMatrix.setResolver(&hbacResolver_);
 
     // Collect output spurs
     std::vector<int> newSpurIndices;
@@ -356,7 +373,7 @@ bool HBACCore::rebuild(Status& s) {
             for (const auto& v : params.outspur.val<ValueVector>()) {
                 auto [ok, ndx] = spurs_.smsigFreqIndex(v);
                 if (!ok) {
-                    s.set(Status::BadArguments, "Output spur #"+std::to_string(cnt)+" not found.");
+                    errors.push(HbAcOutspurNotFound{cnt});
                     return false;
                 }
                 newSpurIndices.push_back(static_cast<int>(ndx));
@@ -367,7 +384,7 @@ bool HBACCore::rebuild(Status& s) {
         // Single spur: scalar real frequency or integer weight vector
         auto [ok, ndx] = spurs_.smsigFreqIndex(params.outspur);
         if (!ok) {
-            s.set(Status::BadArguments, "Output spur not found.");
+            errors.push(HbAcOutspurSingleNotFound{});
             return false;
         }
         newSpurIndices.push_back(static_cast<int>(ndx));
@@ -375,7 +392,7 @@ bool HBACCore::rebuild(Status& s) {
 
     // No output spurs, error
     if (newSpurIndices.empty()) {
-        s.set(Status::BadArguments, "No output spur given.");
+        errors.push(HbAcNoOutspur{});
         return false;
     }
 
@@ -394,12 +411,12 @@ bool HBACCore::rebuild(Status& s) {
     // Check for change
     if (spurIndices.size()!=0) {
         if (newSignatures.size()!=spurSignatures.size()) {
-            s.set(Status::BadArguments, "Output spurs are not allowed to change.");
+            errors.push(HbAcOutspurChanged{});
             return false;
         }
         for(size_t i=0; i<spurSignatures.size(); i++) {
             if (newSignatures[i]!=spurSignatures[i]) {
-                s.set(Status::BadArguments, "Output spurs are not allowed to change.");
+                errors.push(HbAcOutspurChanged{});
                 return false;
             }
         }
@@ -413,21 +430,30 @@ bool HBACCore::rebuild(Status& s) {
     constructSuffixes();
 
     // Jacobian spectral components
-    if (!jacSpec.rebuild(circuit.sparsityMap(), circuit.unknownCount(), nf, 2, true)) {
-        setError(HBACError::MatrixError);
+    if (!jacSpec.rebuild(circuit.sparsityMap(), circuit.unknownCount(), nf, 2, errors, true)) {
         return false;
     }
 
     // AC analysis matrix
-    if (!acMatrix.rebuild(circuit.sparsityMap(), circuit.unknownCount(), nf, nf)) {
-        setError(HBACError::MatrixError);
+    if (!acMatrix.rebuild(circuit.sparsityMap(), circuit.unknownCount(), nf, nf, errors)) {
         return false;
     }
-    
+
+    // Bind delay lines to acMatrix blocks. delayLines_ is shared with hbCore_
+    // and already sized by HBCore::rebuild() (run before this by
+    // HBAC::rebuildCores); delay values are filled during the HB solve /
+    // evaluateAtNodeset() in coroutine(). The (out,in) and (out,out) blocks
+    // must exist in the sparsity map (absdelay declares the Jacobian entry),
+    // so this only fails on a genuine topology error.
+    if (!delayLines_.bindToBlockMatrix(acMatrix, hbacDelayBindings_, errors)) {
+        errors.push(HbAcDelayBindFailed{});
+        return false;
+    }
+
     return true;
 }
 
-bool HBACCore::collectExcitations() {
+bool HBACCore::collectExcitations(ErrorConsumer& errors) {
     excitations.clear();
 
     auto ndev = circuit.deviceCount();
@@ -448,13 +474,11 @@ bool HBACCore::collectExcitations() {
                 // Check vector lengths
                 auto nSpurs = spurs.size();
                 if (mags.size()>nSpurs) {
-                    setError(HBACError::MagLength);
-                    errorInst = inst;
+                    errors.push(HbAcMagLength{inst->name()});
                     return false;
                 }
                 if (phases.size()>nSpurs) {
-                    setError(HBACError::PhaseLength);
-                    errorInst = inst;
+                    errors.push(HbAcPhaseLength{inst->name()});
                     return false;
                 }
 
@@ -462,13 +486,11 @@ bool HBACCore::collectExcitations() {
                     continue;
                 }
 
-                excitations.push_back(Excitation(inst, {}, {}));
+                excitations.push_back(Excitation{inst, {}, {}});
                 for(decltype(nSpurs) i=0; i<nSpurs; i++) {
                     auto [ok, ndx] = spurs_.smsigFreqIndex(spurs[i]);
                     if (!ok) {
-                        setError(HBACError::SpurNotFound);
-                        errorInst = inst;
-                        errorSpur = i;
+                        errors.push(HbAcSpurNotFound{i, inst->name()});
                         return false;
                     }
                     auto mag = (mags.size()>i) ? mags[i] : 0.0;
@@ -487,10 +509,9 @@ bool HBACCore::collectExcitations() {
     return true;
 }
 
-CoreCoroutine HBACCore::coroutine(bool continuePrevious) {
+CoreCoroutine HBACCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
     acMatrix.setAccounting(circuit.tables().accounting());
     
-    clearError();
 
     auto& options = circuit.simulatorOptions().core();
     Int debug = options.smsig_debug;
@@ -500,7 +521,7 @@ CoreCoroutine HBACCore::coroutine(bool continuePrevious) {
     auto nf = stencil.nRows();
 
     // Colect excitations
-    if (!collectExcitations()) {
+    if (!collectExcitations(errors)) {
         co_yield CoreState::Aborted;
         co_return;
     }
@@ -513,19 +534,18 @@ CoreCoroutine HBACCore::coroutine(bool continuePrevious) {
     omega.resize(nf);
     
     // Compute HB solution
-    // (errorFreq was already reset to -1 by clearError() at coroutine entry)
     if (params.hbParams.solve) {
         // Solve HB
-        auto hbOk = hbCore_.run(continuePrevious);
+        auto hbOk = hbCore_.run(continuePrevious, errors);
         if (!hbOk) {
-            setError(HBACError::HBError);
+            errors.push(HbAcHbFailed{});
             co_yield CoreState::Aborted;
             co_return;
         }
     } else {
         // Evaluate HB at nodeset
-        if (!hbCore_.evaluateAtNodeset()) {
-            setError(HBACError::HBError);
+        if (!hbCore_.evaluateAtNodeset(errors)) {
+            errors.push(HbAcHbFailed{});
             co_yield CoreState::Aborted;
             co_return;
         }
@@ -535,8 +555,8 @@ CoreCoroutine HBACCore::coroutine(bool continuePrevious) {
     hbCore_.getFrequencyDomainJacobians(jacSpec, spurs_);
 
     // Check if the Jacobians are finite
-    if (options.matrixcheck && !jacSpec.isFinite(true, true)) {
-        setError(HBACError::MatrixError);
+    if (options.matrixcheck && !jacSpec.isFinite(true, true, errors)) {
+        errors.push(HbAcMatrixError{});
         if (debug>0) {
             Simulator::dbg() << "A frequency-domain Jacobian matrix entry is not finite.\n";
         }
@@ -550,8 +570,8 @@ CoreCoroutine HBACCore::coroutine(bool continuePrevious) {
     
     // Create sweeper
     ScalarSweep sweeper;
-    if (!sweeper.setup(params, errorStatus)) {
-        setError(HBACError::Sweeper);
+    if (!sweeper.setup(params, errors)) {
+        errors.push(HbAcSweepSetupFailed{});
         co_yield CoreState::Aborted;
         co_return;
     }
@@ -571,15 +591,15 @@ CoreCoroutine HBACCore::coroutine(bool continuePrevious) {
     do {
         // Compute should always succeed
         Value v;
-        if (!sweeper.compute(v, errorStatus)) {
-            setError(HBACError::SweepCompute);
+        if (!sweeper.compute(v, errors)) {
+            errors.push(HbAcSweepComputeFailed{});
             error = true;
             break;
         }
 
         // The value, however, must be convertible to real
-        if (!v.convertInPlace(Value::Type::Real, errorStatus)) {
-            setError(HBACError::BadFrequency);
+        if (!v.convertInPlace(Value::Type::Real)) {
+            errors.push(HbAcBadFrequency{});
             if (debug>0) {
                 Simulator::dbg() << "Frequency value cannot be converted to real.\n";
             }
@@ -624,8 +644,8 @@ CoreCoroutine HBACCore::coroutine(bool continuePrevious) {
 
         // Check if matrix entries are finite, no need to check RHS 
         // since we loaded it without any computation (i.e. we only used mag and phase)
-        if (options.matrixcheck && !acMatrix.isFinite(true, true)) {
-            setError(HBACError::MatrixError);
+        if (options.matrixcheck && !acMatrix.isFinite(true, true, errors)) {
+            errors.push(HbAcMatrixError{});
             if (debug>0) {
                 Simulator::dbg() << "A matrix entry is not finite.\n";
             }
@@ -636,29 +656,33 @@ CoreCoroutine HBACCore::coroutine(bool continuePrevious) {
         // Factor
         bool forceFullFactorization = false;        
         if (acMatrix.isFactored()) {
-            // Refactor (if possible)
-            if (!acMatrix.refactor()) {
+            // Refactor (if possible). A refactor failure is not fatal here.
+            if (!acMatrix.refactor(errors)) {
                 // Failed, try again by fully factoring
                 forceFullFactorization = true;
             } 
         }
         if (forceFullFactorization || !acMatrix.isFactored()) {
             // Full factorization
-            if (!acMatrix.factor()) {
+            if (!acMatrix.factor(errors)) {
                 // Failed, give up
-                setError(HBACError::MatrixError);
+                errors.push(HbAcMatrixError{});
                 if (debug>0) {
                     Simulator::dbg() << "LU factorization failed.\n";
                 }
                 error = true;
                 break;
             }
+            // Full factorization recovered, drop the non-fatal refactor error
+            if (forceFullFactorization) {
+                errors.clear();
+            }
         }
         // Check if matrix is singular
         if (options.rcondcheck>0) { 
             double rcond;
-            if (!acMatrix.rcond(rcond)) {
-                setError(HBACError::MatrixError);
+            if (!acMatrix.rcond(rcond, errors)) {
+                errors.push(HbAcMatrixError{});
                 if (debug>0) {
                     Simulator::dbg() << "Condition number estimation failed.\n";
                 }
@@ -669,15 +693,15 @@ CoreCoroutine HBACCore::coroutine(bool continuePrevious) {
                 if (debug>0) {
                     Simulator::dbg() << "Matrix is close to singular.\n";
                 }
-                setError(HBACError::SingularMatrix);
+                errors.push(HbAcSingularMatrix{});
                 error = true;
                 break;
             }
         }
 
         // Solve
-        if (!acMatrix.solve(dataWithoutBucket(acSolution, nf))) {
-            setError(HBACError::MatrixError);
+        if (!acMatrix.solve(dataWithoutBucket(acSolution, nf), errors)) {
+            errors.push(HbAcMatrixError{});
             if (debug>2) {
                 Simulator::dbg() << "Failed to solve factored system.\n";
             }
@@ -695,8 +719,8 @@ CoreCoroutine HBACCore::coroutine(bool continuePrevious) {
         //     }
         // }
 
-        if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution, nf), true, true)) {
-            setError(HBACError::SolutionError);
+        if (options.solutioncheck && !acMatrix.isFinite(dataWithoutBucket(acSolution, nf), true, true, errors)) {
+            errors.push(HbAcSolutionNotFinite{});
             if (options.smsig_debug) {
                 Simulator::dbg() << "A solution entry is not finite. Solver failed.\n";
             }
@@ -718,23 +742,20 @@ CoreCoroutine HBACCore::coroutine(bool continuePrevious) {
         Simulator::dbg() << "HBAC frequency sweep " << (finished ? "completed" : "exited prematurely") << ".\n";
     }
 
-    if (!finished) {
-        errorFreq = frequency;
-    }
+    // No need to bind resistive Jacobian enatries.
+    // OP analysis will still work fine, even in sweep.
+    // We only changed the bindings of the reactive Jacobian entries.
 
-    // No need to bind resistive Jacobian enatries. 
-    // OP analysis will still work fine, even in sweep. 
-    // We only changed the bindings of the reactive Jacobian entries. 
-    
     if (finished) {
         co_yield CoreState::Finished;
     } else {
+        errors.push(HbAcSweepAborted{frequency});
         co_yield CoreState::Aborted;
     }
 }
 
-bool HBACCore::run(bool continuePrevious) {
-    auto c = coroutine(continuePrevious);
+bool HBACCore::run(bool continuePrevious, ErrorConsumer& errors) {
+    auto c = coroutine(continuePrevious, errors);
     bool ok = true;
     while (!c.done()) {
         if (c.resume()==CoreState::Aborted) {
@@ -743,60 +764,6 @@ bool HBACCore::run(bool continuePrevious) {
         };
     }
     return ok;
-}
-
-bool HBACCore::formatError(Status& s) const {
-    auto nr = HBACUnknownNameResolver(circuit, spurs_.smsigFreq().size());
-    std::stringstream ss;
-    ss << std::scientific << std::setprecision(4);
-    
-    // First, handle AnalysisCore errors
-    if (lastError!=Error::OK) {
-        AnalysisCore::formatError(s);
-        return false;
-    }
-    
-    // Then handle ACCore errors
-    switch (lastHBACError) {
-        case HBACError::Sweeper:
-        case HBACError::SweepCompute:
-            s.set(errorStatus);
-            break;
-        case HBACError::MatrixError:
-            acMatrix.formatError(s, &nr);
-            break;
-        case HBACError::SolutionError:
-            acMatrix.formatError(s, &nr);
-            s.extend("Solution component is not finite.");
-            break;
-        case HBACError::HBError:
-            hbCore_.formatError(s);
-            break;
-        case HBACError::SingularMatrix:
-            s.set(Status::Analysis, "Matrix is close to singular.");
-            break;
-        case HBACError::BadFrequency:
-            s.set(Status::Analysis, "Frequency value cannot be converted to real.");
-            break;
-        case HBACError::MagLength:
-            s.set(Status::Analysis, "smag length exceeds spur length for instance '"+std::string(errorInst->name())+"'.");
-            break;
-        case HBACError::PhaseLength:
-            s.set(Status::Analysis, "sphase length exceeds spur length for instance '"+std::string(errorInst->name())+"'.");
-            break;
-        case HBACError::SpurNotFound:
-            s.set(Status::Analysis, "Spur #"+std::to_string(errorSpur)+" specified for instance '"+std::string(errorInst->name())+"' not found.");
-            break;
-        default:
-            return true;
-    }
-    if (errorFreq>=0) {
-        ss.str(""); ss << errorFreq;
-        s.extend(std::string("Leaving frequency sweep at frequency=")+ss.str()+".");
-    } else {
-        s.extend("Leaving frequency sweep.");
-    }
-    return false;
 }
 
 void HBACCore::dump(std::ostream& os) const {

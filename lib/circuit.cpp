@@ -1131,6 +1131,31 @@ bool Circuit::collapseNodes(Node* n1, Node* n2, Status& s) {
     return true;
 }
 
+bool Circuit::usesIllegalDeviceFeatures(Device::Flags prohibitedFeatures, Device::Flags exceptions, ErrorConsumer& ec) {
+    for(size_t i=0; i<deviceCount(); i++) {
+        auto* d = device(i);
+        if (d->anyFlags(exceptions)) {
+            continue;
+        }
+        if (d->instanceCount()>0 && d->anyFlags(prohibitedFeatures)) {
+            auto matched = d->flags() & prohibitedFeatures;
+            std::string txt;
+            if (bool(matched & DeviceFlags::Absdelay)) {
+                txt += std::string((txt.size() ? ", " : "")) + "delay";
+            }
+            if (bool(matched & DeviceFlags::VariableAbsdelay)) {
+                txt += std::string((txt.size() ? ", " : "")) + "variable delay";
+            }
+            if (bool(matched & DeviceFlags::UsesAbstime)) {
+                txt += std::string((txt.size() ? ", " : "")) + "depends on time";
+            }
+            ec.push(CircuitIllegalDeviceFeatures{d->name(), std::move(txt)});
+            return true;
+        }
+    }
+    return false;
+}
+
 std::tuple<bool, bool> Circuit::createJacobianEntry(Node* ne, Node* nu, EntryFlags f, Status& s) {
     // Map nodes to equation, unknown pair
     auto e = ne->unknownIndex();
@@ -1160,6 +1185,12 @@ GlobalStorageIndex Circuit::allocateStates(LocalStorageIndex n) {
 GlobalStorageIndex Circuit::allocateDeviceStates(LocalStorageIndex n) {
     auto retval = deviceStatesCount_;
     deviceStatesCount_ += n;
+    return retval;
+}
+
+GlobalStorageIndex Circuit::allocateDelayHistory(LocalStorageIndex n) {
+    auto retval = delayHistoryCount_;
+    delayHistoryCount_ += n;
     return retval;
 }
 
@@ -1314,6 +1345,7 @@ bool Circuit::buildSparsityAndStates(Status& s) {
     // Create Jacobian entries, allocate state vector slots
     statesCount_ = 0;
     deviceStatesCount_ = 0;
+    delayHistoryCount_ = 0;
     for(auto& dev : devices) {
         if (!dev.get()->populateStructures(*this, s)) {
             return false;
@@ -1341,10 +1373,12 @@ bool Circuit::enumerateSystem(Status& s) {
     return true;
 }
 
+// TODO: add delay lines, update analysis cores
 bool Circuit::bind(
     KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
     KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-    Status& s
+    DelayLines* delayLines, 
+    ErrorConsumer& ec
 ) {
     // Call bind() for all devices
     for(auto& dev : devices) {
@@ -1352,7 +1386,8 @@ bool Circuit::bind(
             *this, 
             matResist, compResist, mepResist, 
             matReact, compReact, mepReact, 
-            s
+            delayLines, 
+            ec
         )) {
             return false;
         }
@@ -1372,7 +1407,7 @@ bool Circuit::applyInstanceFlags(Instance::Flags fClear, Instance::Flags fSet) {
     return true;
 }
 
-bool Circuit::evalAndLoad(CommonData& commons, EvalSetup* evalSetup, LoadSetup* loadSetup, bool (*deviceSelector)(Device*)) {
+bool Circuit::evalAndLoad(CommonData& commons, EvalSetup* evalSetup, LoadSetup* loadSetup, bool (*deviceSelector)(Device*), ErrorConsumer& errors) {
     auto t0 = Accounting::wclk();
     tables_.accounting().acctNew.evalload++; 
     
@@ -1423,7 +1458,7 @@ bool Circuit::evalAndLoad(CommonData& commons, EvalSetup* evalSetup, LoadSetup* 
             if constexpr(devacct) {
                 td0 = Accounting::wclk();
             }
-            if (!devPtr->evalAndLoad(*this, commons, evalSetup, loadSetup)) {
+            if (!devPtr->evalAndLoad(*this, commons, evalSetup, loadSetup, errors)) {
                 retval = false;
                 break;
             }

@@ -58,9 +58,10 @@ public:
         Circuit& circuit, 
         KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
         KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-        Status& s=Status::ignore
+        DelayLines* delayLines, 
+        ErrorConsumer& ec
     );
-    virtual bool evalAndLoad(Circuit& circuit, CommonData& commons, EvalSetup* evalSetup, LoadSetup* loadSetup);
+    virtual bool evalAndLoad(Circuit& circuit, CommonData& commons, EvalSetup* evalSetup, LoadSetup* loadSetup, ErrorConsumer& errors);
     virtual Model* createModel(Circuit& circuit, Instance* parentInstance, RpnEvaluator& evaluator, const PTModel& ptModel, Status& s=Status::ignore);
     virtual bool isSource() const { return false; };
     virtual bool isVoltageSource() const { return false; };
@@ -223,10 +224,11 @@ public:
         Circuit& circuit, 
         KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
         KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-        Status& s=Status::ignore
+        DelayLines* delayLines, 
+        ErrorConsumer& ec
     );
-    bool evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup);
-    bool loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup);
+    bool evalCore(Circuit& circuit, CommonData& commons, EvalSetup& evalSetup, ErrorConsumer& errors);
+    bool loadCore(Circuit& circuit, CommonData& commons, LoadSetup& loadSetup, ErrorConsumer& errors);
         
 protected:
     // Get Jacobian entry pointer
@@ -355,7 +357,8 @@ bool BuiltinDevice<ModelParams, InstanceParams, InstanceData>::bind(
     Circuit& circuit, 
     KluMatrixAccess* matResist, Component compResist, const std::optional<MatrixEntryPosition>& mepResist, 
     KluMatrixAccess* matReact, Component compReact, const std::optional<MatrixEntryPosition>& mepReact, 
-    Status& s
+    DelayLines* delayLines, 
+    ErrorConsumer& ec
 ) {
     using InstanceType = BuiltinInstance<ModelParams, InstanceParams, InstanceData>;
     // Call bind() for all instances
@@ -365,7 +368,8 @@ bool BuiltinDevice<ModelParams, InstanceParams, InstanceData>::bind(
                 circuit, 
                 matResist, compResist, mepResist, 
                 matReact, compReact, mepReact, 
-                s
+                delayLines, 
+                ec
             )) {
                 return false;
             }
@@ -376,7 +380,7 @@ bool BuiltinDevice<ModelParams, InstanceParams, InstanceData>::bind(
 
 template<typename ModelParams, typename InstanceParams, typename InstanceData> 
 bool BuiltinDevice<ModelParams, InstanceParams, InstanceData>::evalAndLoad(
-    Circuit& circuit, CommonData& commons, EvalSetup* evalSetup, LoadSetup* loadSetup
+    Circuit& circuit, CommonData& commons, EvalSetup* evalSetup, LoadSetup* loadSetup, ErrorConsumer& errors
 ) {
     using InstanceType = BuiltinInstance<ModelParams, InstanceParams, InstanceData>;
     for(auto model : models()) {
@@ -384,10 +388,10 @@ bool BuiltinDevice<ModelParams, InstanceParams, InstanceData>::evalAndLoad(
             continue;
         }
         for(auto instance : model->instances()) {
-            if (evalSetup && !static_cast<InstanceType*>(instance)->evalCore(circuit, commons, *evalSetup)) {
+            if (evalSetup && !static_cast<InstanceType*>(instance)->evalCore(circuit, commons, *evalSetup, errors)) {
                 return false;
             }
-            if (loadSetup && !static_cast<InstanceType*>(instance)->loadCore(circuit, commons, *loadSetup)) {
+            if (loadSetup && !static_cast<InstanceType*>(instance)->loadCore(circuit, commons, *loadSetup, errors)) {
                 return false;
             }
         }

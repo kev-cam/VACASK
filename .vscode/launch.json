@@ -1,4 +1,4 @@
-{
+opnr{
     // Use IntelliSense to learn about possible attributes.
     // Hover to view descriptions of existing attributes.
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
@@ -65,9 +65,10 @@
             // "args": [ "-df", "${workspaceFolder}/test/test_behavsym.sim" ], 
             // "args": [ "-df", "${workspaceFolder}/test/test_behavnoise.sim" ], 
             // "args": [ "-df", "${workspaceFolder}/test/test_behavop.sim" ], 
+            // "args": [ "-df", "${workspaceFolder}/test/test_behavexpr.sim" ], 
             // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_hb1.sim" ],
             // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_hb2.sim" ],
-            // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_hb3.sim" ],
+             "args": [ "-df", "-dp", "${workspaceFolder}/test/test_hb3.sim" ],
             // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_hb4.sim" ],
             // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_hb5.sim" ],
             // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_hb6.sim" ],
@@ -83,6 +84,10 @@
             // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_cblock.sim" ],
             // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_cblocksweep.sim" ],
             // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_optpar.sim" ],
+            // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_delay.sim" ],
+            // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_delayvar.sim" ],
+            // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_delayhb.sim" ],
+            // "args": [ "-df", "-dp", "${workspaceFolder}/test/test_delayhbac.sim" ],
             // "args": [ "-df", "${workspaceFolder}/demo/bsim3-ptm/characteristic.sim" ], 
             // "args": [ "-df", "${workspaceFolder}/demo/bsim3-ptm/mirror.sim" ], 
             // "args": [ "-df", "${workspaceFolder}/demo/bsim3-ptm/amp.sim" ], 
@@ -125,7 +130,7 @@
             // "args": [ "-df", "${workspaceFolder}/demo/spice/vdmosamp.sim" ], 
             // "args": [ "-df", "${workspaceFolder}/demo/spice/vdmosinv.sim" ], 
             // "args": [ "-df", "${workspaceFolder}/demo/spice/vdmossh.sim" ], 
-             "args": [ "-df", "${workspaceFolder}/demo/spice/vdmosrr.sim" ], 
+            // "args": [ "-df", "${workspaceFolder}/demo/spice/vdmosrr.sim" ], 
             // "args": [ "-df", "-dp", "${workspaceFolder}/demo/spice/bsim3v3.sim" ], 
             // "args": [ "-df", "-dp", "${workspaceFolder}/demo/spice/bsim3v3amp.sim" ], 
             // "args": [ "-df", "-dp", "${workspaceFolder}/demo/spice/bsim3v3inv.sim" ], 
@@ -153,6 +158,7 @@
             // "args": [ "-df", "${workspaceFolder}/demo/ts/inductor.sim" ], 
             // "args": [ "-df", "${workspaceFolder}/demo/ts/inductor-tap.sim" ], 
             // "args": [ "-df", "${workspaceFolder}/demo/behavioral/lightbulb.sim" ], 
+            // "args": [ "-df", "${workspaceFolder}/demo/delay/tline.sim" ], 
             // "args": [ "-dp" ], 
             // "args": [ "-df", "${workspaceFolder}/benchmark/c6288/vacask/runme.sim" ], 
             // "args": [ "-df", "${workspaceFolder}/benchmark/c6288/vacask-ieb/runme.sim" ], 
@@ -276,7 +282,8 @@
             // "program": "${workspaceFolder}/../build.${workspaceRootFolderName}/Debug/demo/api/demo2",
             // "program": "${workspaceFolder}/../build.${workspaceRootFolderName}/Debug/demo/api/demo3",
             // "program": "${workspaceFolder}/../build.${workspaceRootFolderName}/Debug/demo/api/demo4",
-             "program": "${workspaceFolder}/../build.${workspaceRootFolderName}/Debug/demo/api/demo5",
+            // "program": "${workspaceFolder}/../build.${workspaceRootFolderName}/Debug/demo/api/demo5",
+             "program": "${workspaceFolder}/../build.${workspaceRootFolderName}/Debug/demo/api/demo6",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/../build.${workspaceRootFolderName}/Release/test/manual_run",

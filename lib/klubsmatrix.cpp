@@ -6,7 +6,7 @@
 
 namespace NAMESPACE {
 
-template<typename IndexType, typename ValueType> KluBlockSparseMatrixCore<IndexType, ValueType>::KluBlockSparseMatrixCore(bool largeBucket) 
+template<typename IndexType, typename ValueType> KluBlockSparseMatrixCore<IndexType, ValueType>::KluBlockSparseMatrixCore(bool largeBucket)
     : blockBucket_(nullptr), largeBucket_(largeBucket) {
 }
 
@@ -18,14 +18,14 @@ double* KluBlockSparseMatrixCore<IndexType, ValueType>::valueArray() {
     if constexpr(std::is_same<ValueType, Complex>::value) {
         return nullptr;
     } else {
-        return KluMatrixCore<IndexType, ValueType>::data();
+        return KluMatrixCore<IndexType, ValueType>::axData();
     }
 } 
 
 template<typename IndexType, typename ValueType> 
 Complex* KluBlockSparseMatrixCore<IndexType, ValueType>::cxValueArray() {
     if constexpr(std::is_same<ValueType, Complex>::value) {
-        return KluMatrixCore<IndexType, ValueType>::data();
+        return KluMatrixCore<IndexType, ValueType>::axData();
     } else {
         return nullptr;
     }
@@ -54,6 +54,9 @@ Complex* KluBlockSparseMatrixCore<IndexType, ValueType>::cxValuePtr(
         if (found) {
             return Ax.data()+nzPosition;
         } else {
+            // Bucket contract (see MatrixAccess): writes discarded, reads
+            // meaningless. blockMep is ignored here - every missing subentry
+            // aliases the bucket origin.
             return blockBucket_;
         }
     } else {
@@ -62,9 +65,7 @@ Complex* KluBlockSparseMatrixCore<IndexType, ValueType>::cxValuePtr(
 }
 
 template<typename IndexType, typename ValueType> 
-bool KluBlockSparseMatrixCore<IndexType, ValueType>::rebuild(SparsityMap& m, EquationIndex n, EquationIndex nbRow, UnknownIndex nbCol, bool storageOnly) {
-    KluMatrixCore<IndexType, ValueType>::clearError();
-    
+bool KluBlockSparseMatrixCore<IndexType, ValueType>::rebuild(SparsityMap& m, EquationIndex n, EquationIndex nbRow, UnknownIndex nbCol, ErrorConsumer& ec, bool storageOnly) {
     KluMatrixCore<IndexType, ValueType>::deleteKluObjects();
 
     n_ = n;
@@ -104,7 +105,8 @@ bool KluBlockSparseMatrixCore<IndexType, ValueType>::rebuild(SparsityMap& m, Equ
     atCol = 0;
     auto& positions = m.positions();
     for(size_t posNdx=0; posNdx<positions.size(); posNdx++) {
-        auto [row, col] = positions[posNdx];
+        auto [mep, flags] = positions[posNdx];
+        auto [row, col] = mep;
         // Make column index 0-based
         col--;
         // Reached next column
@@ -157,7 +159,8 @@ bool KluBlockSparseMatrixCore<IndexType, ValueType>::rebuild(SparsityMap& m, Equ
             for(auto blkPos = colBeginNdx; blkPos < colEndNdx ; blkPos++) {
                 // Get block row and column index
                 // We do not need blkCol - it is useful for debugging
-                auto [blkRow, blkCol] = positions[blkPos];
+                auto [blkMep, blkFlags] = positions[blkPos];
+                auto [blkRow, blkCol] = blkMep;
                 // These indices are 1-based, make them 0-based
                 blkRow--;
                 blkCol--;
@@ -192,14 +195,22 @@ bool KluBlockSparseMatrixCore<IndexType, ValueType>::rebuild(SparsityMap& m, Equ
     
     // Allocate array for nozero element values
     Ax.resize(nnz_);
+
+    // Point blockBucket_ at the scratch sink for missing positions (bucket
+    // contract on MatrixAccess: writes discarded, reads meaningless). A large
+    // bucket is a full nbRow_*nbCol_ column-major block so that offset-based
+    // loading (base pointer + bounded element offset) and block()'s real-layout
+    // view stay in bounds; a small bucket is the inherited single scalar.
+    // Not re-zeroed on same-size rebuilds, and never zeroed by zero() - callers
+    // must honour the "reads meaningless" half of the contract.
     if (largeBucket_) {
         bucketStorage_.resize(nbRow_*nbCol_);
         blockBucket_ = bucketStorage_.data();
     } else {
         blockBucket_ = &bucket_;
     }
-    
-    // Zero array
+
+    // Zero array (Ax only - not the bucket)
     KluMatrixCore<IndexType, ValueType>::zero();
     
     // Set up KLU structures
@@ -210,7 +221,7 @@ bool KluBlockSparseMatrixCore<IndexType, ValueType>::rebuild(SparsityMap& m, Equ
         st = klu_l_defaults(&common);
     }
     if (!st) {
-        lastError = Error::Defaults;
+        ec.push(KluDefaultsError{});
         // Set smap to nullptr indicating failed rebuild()
         smap = nullptr;
         return false;
@@ -223,7 +234,7 @@ bool KluBlockSparseMatrixCore<IndexType, ValueType>::rebuild(SparsityMap& m, Equ
             symbolic = klu_l_analyze(AN, AP.data(), AI.data(), &common);
         }
         if (!symbolic) {
-            lastError = Error::Analysis;
+            ec.push(KluAnalysisError{});
             // Set smap to nullptr indicating failed rebuild()
             smap = nullptr;
             return false;

@@ -59,7 +59,7 @@ PssCore::PssCore(
 
 // PSS core does not produce anything itself. 
 // This is just a dummy override so this class is not abstract. 
-bool PssCore::addDefaultOutputDescriptors(Status& s) {
+bool PssCore::addDefaultOutputDescriptors(ErrorConsumer& errors) {
     return true;
 }
 
@@ -68,8 +68,15 @@ bool PssCore::addDefaultOutputDescriptors(Status& s) {
 
 // Don't need preMapping() and populateStructures()
 
-bool PssCore::rebuild(Status& s) {
+bool PssCore::rebuild(ErrorConsumer& errors) {
     auto& options = circuit.simulatorOptions().core();
+
+    // Check if any device has delays
+    if (circuit.usesIllegalDeviceFeatures(DeviceFlags::Absdelay, DeviceFlags::None, errors)) {
+        errors.push(PssCircuitUsesUnsupportedFeatures{});
+        return false;
+    }
+
     // Tran IC forces
     stabilTran_.solver().setForcesFactor(3, options.nr_force);
     // OP IC forces
@@ -89,7 +96,7 @@ bool PssCore::rebuild(Status& s) {
     return true;
 }
 
-bool PssCore::initializeOutputs(Id name, Status& s) {
+bool PssCore::initializeOutputs(Id name, ErrorConsumer& errors) {
     // Store the name for use when the output file is opened after convergence.
     // Do NOT open the pssTran_ raw file here: it must be opened only once,
     // after the Newton loop converges, so that intermediate shooting iterations
@@ -98,11 +105,11 @@ bool PssCore::initializeOutputs(Id name, Status& s) {
     return true;
 }
 
-bool PssCore::finalizeOutputs(Status& s) {
-    return pssTran_.finalizeOutputs(s);
+bool PssCore::finalizeOutputs(ErrorConsumer& errors) {
+    return pssTran_.finalizeOutputs(errors);
 }
 
-bool PssCore::deleteOutputs(Id name, Status& s) {
+bool PssCore::deleteOutputs(Id name, ErrorConsumer& errors) {
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
@@ -187,7 +194,7 @@ void PssCore::prepareStabilisation(double period) {
 }
 
 // If we ever allow homotopy, move part of this to runSolver()
-std::tuple<bool, double> PssCore::runStabilisation(bool continuePrevious) {
+std::tuple<bool, double> PssCore::runStabilisation(bool continuePrevious, ErrorConsumer& errors) {
     auto& options = circuit.simulatorOptions().core();
     double period = 0;
     if (continuePrevious) {
@@ -209,14 +216,14 @@ std::tuple<bool, double> PssCore::runStabilisation(bool continuePrevious) {
             }
             // Check for valid period (we need it)
             if (period<=0) {
-                setError(PssError::TperInvalid);
+                errors.push(PssTperInvalid{});
                 return std::make_tuple(false, period);
             }
             // Put it in forces slot 3 of stabilTran_
-            if (!stabilTran_.solver().setForces(3, continueState->solution, options.strictforce)) {
+            if (!stabilTran_.solver().setForces(3, continueState->solution, options.strictforce, errors)) {
                 // Abort on error if strictforce is set
                 if (options.strictforce) {
-                    setError(PssError::ForcesFailed);
+                    errors.push(PssForcesFailed{});
                     return std::make_tuple(false, period);
                 }
                 Simulator::wrn() << "Warning, setting IC forces from previous state failed.\n";
@@ -238,14 +245,14 @@ std::tuple<bool, double> PssCore::runStabilisation(bool continuePrevious) {
             }
             // Check for valid period (we need it)
             if (period<=0) {
-                setError(PssError::TperInvalid);
+                errors.push(PssTperInvalid{});
                 return std::make_tuple(false, period);
             }
             // Put it in forces slot 3 of opCore_, op mode
-            if (!opCore_.solver().setForces(3, continueState->solution, options.strictforce)) {
+            if (!opCore_.solver().setForces(3, continueState->solution, options.strictforce, errors)) {
                 // Abort on error if strictforce is set
                 if (options.strictforce) {
-                    setError(PssError::ForcesFailed);
+                    errors.push(PssForcesFailed{});
                     return std::make_tuple(false, period);
                 }
                 Simulator::wrn() << "Warning, setting IC forces from previous state failed.\n";
@@ -257,8 +264,8 @@ std::tuple<bool, double> PssCore::runStabilisation(bool continuePrevious) {
             params.stabilParams.icmode = TranCore::icmodeOp;
             prepareStabilisation(period);
             // Run stabilTran_ with continuePrevious=false
-            if (!stabilTran_.run(false)) {
-                setError(PssError::StabilisationTranFailed);
+            if (!stabilTran_.run(false, errors)) {
+                errors.push(PssStabilisationTranFailed{});
                 return std::make_tuple(false, period);
             }
             // Set ic forces slot to 2 (back to normal)
@@ -271,7 +278,7 @@ std::tuple<bool, double> PssCore::runStabilisation(bool continuePrevious) {
             period = params.tper;
             // Check for valid period (we need it)
             if (period<=0) {
-                setError(PssError::TperInvalid);
+                errors.push(PssTperInvalid{});
                 return std::make_tuple(false, period);
             }
             // Nothing to do
@@ -292,7 +299,7 @@ std::tuple<bool, double> PssCore::runStabilisation(bool continuePrevious) {
         }
         // Check for valid period (we need it)
         if (period<=0) {
-            setError(PssError::TperInvalid);
+            errors.push(PssTperInvalid{});
             return std::make_tuple(false, period);
         }
         // Check parameters
@@ -302,8 +309,8 @@ std::tuple<bool, double> PssCore::runStabilisation(bool continuePrevious) {
         params.stabilParams.icmode = params.icmode;
         prepareStabilisation(period);
         // Run stabilTran_ with continuePrevious=false
-        if (!stabilTran_.run(false)) {
-            setError(PssError::StabilisationTranFailed);
+        if (!stabilTran_.run(false, errors)) {
+            errors.push(PssStabilisationTranFailed{});
             return std::make_tuple(false, period);
         }
     }
@@ -316,7 +323,7 @@ std::tuple<bool, double> PssCore::runStabilisation(bool continuePrevious) {
 // One-period shoot
 // ----------------------------------------------------------------
 
-bool PssCore::runShoot(double T0) {
+bool PssCore::runShoot(double T0, ErrorConsumer& errors) {
     auto& options = circuit.simulatorOptions().core();
     params.shootParams.stop    = T0;
     params.shootParams.step    = T0 / options.pss_minpts;
@@ -326,16 +333,16 @@ bool PssCore::runShoot(double T0) {
     clampStepToMaxacfreq(params.shootParams, T0);
 
 
-    if (!pssTran_.run(false)) {
-        setError(PssError::ShootingTranFailed);
+    if (!pssTran_.run(false, errors)) {
+        errors.push(PssShootingTranFailed{});
         return false;
     }
 
     // Psi_T (period sensitivity) is only needed for the autonomous phase
     // condition/Jacobian column. Computed once per shoot, here, rather than
     // at every accepted step inside PssTranCore - see pss.md, "Computing Psi_T".
-    if (!params.driven && !pssTran_.computePsiT()) {
-        setError(PssError::SensitivityFailed);
+    if (!params.driven && !pssTran_.computePsiT(errors)) {
+        errors.push(PssSensitivityFailed{});
         return false;
     }
     return true;
@@ -399,8 +406,7 @@ void PssCore::computePhaseConstraint(
 // Main Newton loop
 // ----------------------------------------------------------------
 
-CoreCoroutine PssCore::coroutine(bool continuePrevious) {
-    clearError();
+CoreCoroutine PssCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
 
     // Disable shooting transient output
     params.shootParams.write = 0;
@@ -429,18 +435,18 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious) {
     if (params.stabstep<0 ||
         (params.tstab>0 && params.stabstep>0 && params.stabstep>=params.tstab)
     ) {
-        setError(PssError::StabstepInvalid);
+        errors.push(PssStabstepInvalid{});
         co_yield CoreState::Aborted;
     }
 
     // Stabilisation transient, determine initial period from parameters and stored solution
-    auto [okStabil, period] = runStabilisation(continuePrevious);
+    auto [okStabil, period] = runStabilisation(continuePrevious, errors);
     if (!okStabil) {
         co_yield CoreState::Aborted;
     }
     // Require tper>0
     if(period <= 0) {
-        setError(PssError::TperInvalid);
+        errors.push(PssTperInvalid{});
         co_yield CoreState::Aborted;
     }
 
@@ -460,11 +466,11 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious) {
     // Obtain x_T^(0) by running a transient simulation for T_0 seconds
     solution.vector() = x0;
     pssTran_.setShootIC(x0);
-    if (!pssTran_.clearTrajectory()) {
-        setError(PssError::ShootingTranFailed);
+    if (!pssTran_.clearTrajectory(errors)) {
+        errors.push(PssShootingTranFailed{});
         co_yield CoreState::Aborted;
     }
-    if (!runShoot(T0)) {
+    if (!runShoot(T0, errors)) {
         // runShoot() sets the error code
         co_yield CoreState::Aborted;
     }
@@ -488,8 +494,8 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious) {
         }
 
         // Obtain sensitivity matrices
-        if (!pssTran_.phiValid()) {
-            setError(PssError::SensitivityFailed);
+        if (!pssTran_.phiValid(errors)) {
+            errors.push(PssSensitivityFailed{});
             co_yield CoreState::Aborted;
         }
         auto& tmpPhiT = pssTran_.phiCurrent();
@@ -552,7 +558,7 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious) {
         VectorView rhsView(Fp);
         VectorView rowPermView(rowPerm_);
         if (!Jp.factorAndLuSolve(rhsView, &rowPermView)) {
-             setError(PssError::SingularJacobian);
+             errors.push(PssSingularJacobian{});
              co_yield CoreState::Aborted;
         }
         // Update x0 and T0
@@ -564,11 +570,11 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious) {
         // Get new xT
         solution.vector() = x0;
         pssTran_.setShootIC(x0);
-        if (!pssTran_.clearTrajectory()) {
-            setError(PssError::ShootingTranFailed);
+        if (!pssTran_.clearTrajectory(errors)) {
+            errors.push(PssShootingTranFailed{});
             co_yield CoreState::Aborted;
         }
-        if (!runShoot(T0)) {
+        if (!runShoot(T0, errors)) {
             // runShoot() sets the error code
             co_yield CoreState::Aborted;
         }
@@ -603,7 +609,7 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious) {
     } // end PSS-SHOOT main loop
     
     if (!converged) {
-        setError(PssError::NoConvergence);
+        errors.push(PssNoConvergence{options.pss_itl});
         co_yield CoreState::Aborted;
     }
 
@@ -631,22 +637,22 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious) {
     
     solution.vector() = x0;
     pssTran_.setShootIC(x0);
-    if (!pssTran_.clearTrajectory()) {
-        setError(PssError::ShootingTranFailed);
+    if (!pssTran_.clearTrajectory(errors)) {
+        errors.push(PssShootingTranFailed{});
         co_yield CoreState::Aborted;
     }
     // Only capture trajectory if we intend to calculate the adjoint monodromy matrix
     if (params.adjoint) {
         pssTran_.enableTrajectoryCapture();
     }
-    if (!runShoot(T0)) {
+    if (!runShoot(T0, errors)) {
         co_yield CoreState::Aborted;
     }
 
     // Integrate Omega backward using captured trajectory
     if (params.adjoint) {
-        if ( !pssTran_.integrateAdjointMonodromy(omegaT_)) {
-            setError(PssError::AdjointFailed);
+        if ( !pssTran_.integrateAdjointMonodromy(omegaT_, errors)) {
+            errors.push(PssAdjointFailed{});
             co_yield CoreState::Aborted;
         
         }
@@ -679,8 +685,8 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious) {
     
 }
 
-bool PssCore::run(bool continuePrevious) {
-    auto c = coroutine(continuePrevious);
+bool PssCore::run(bool continuePrevious, ErrorConsumer& errors) {
+    auto c = coroutine(continuePrevious, errors);
     bool ok = true;
     while (!c.done()) {
         if (c.resume() == CoreState::Aborted) {
@@ -692,68 +698,12 @@ bool PssCore::run(bool continuePrevious) {
 
 }
 
-std::tuple<bool, const DenseMatrix<double>&> PssCore::convergedAdjointMonodromy() {
+std::tuple<bool, const DenseMatrix<double>&> PssCore::convergedAdjointMonodromy(ErrorConsumer& errors) {
     if (!params.adjoint) {
-        setError(PssError::AdjointDisabled);
+        errors.push(PssAdjointDisabled{});
         return std::make_tuple(false, omegaT_);
     }
-    return std::make_tuple(true, omegaT_);;
-}
-
-bool PssCore::formatError(Status& s) const {
-    switch (lastPssError) {
-        case PssError::NoConvergence:
-            s.set(Status::Analysis,
-                  "PSS failed to converge in " +
-                  std::to_string(circuit.simulatorOptions().core().pss_itl) + " iterations.");
-            return false;
-        case PssError::SensitivityFailed:
-            // Format pssTran_ error, add message
-            pssTran_.formatError(s);
-            s.extend("PSS sensitivity integration failed.");
-            return false;
-        case PssError::AdjointFailed:
-            s.set(Status::Analysis, "Adjoint monodromy computation failed.");
-            return false;
-        case PssError::AdjointDisabled:
-            s.set(Status::Analysis, "Adjoint monodromy was not computed. Set adjoint=1 before running PSS.");
-            return false;
-        case PssError::LinearSolveFailed:
-            s.set(Status::Analysis, "PSS Newton linear solve failed.");
-            return false;
-        case PssError::OutputError:
-            s.set(Status::Analysis, "PSS output error.");
-            return false;
-        case PssError::TperInvalid:
-            s.set(Status::Analysis, "Period should be >0.");
-            return false;
-        case PssError::SingularJacobian:
-            s.set(Status::Analysis, "Singular Jacobian.");
-            return false;
-        case PssError::StabstepInvalid:
-            s.set(Status::Analysis, "Stabilization timestep must be smaller than the period.");
-            return false;
-        case PssError::StabilisationTranFailed:
-            stabilTran_.formatError(s);
-            s.extend("PSS stabilisation transient failed.");
-            return false;
-        case PssError::OpFailed:
-            opCore_.formatError(s);
-            s.extend("PSS operating point failed.");
-            return false;
-        case PssError::ShootingTranFailed:
-            pssTran_.formatError(s);
-            s.extend("PSS transient failed.");
-            return false;
-        case PssError::ForcesFailed: {
-            auto nr = UnknownNameResolver(circuit);
-            opCore_.solver().formatError(s, &nr);
-            s.extend("Failed to set forces.");
-            return false;
-        }
-        default:
-            return true;
-    }
+    return std::make_tuple(true, omegaT_);
 }
 
 void PssCore::dump(std::ostream& os) const {
