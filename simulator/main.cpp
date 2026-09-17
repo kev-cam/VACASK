@@ -71,6 +71,9 @@ int main(int argc, char**argv) {
     #ifdef SIM_HAVE_SUPERLU
     Simulator::out() << "  SuperLU_MT parallel linear solver\n";
     #endif
+    #ifdef SIM_HAVE_TRILINOS
+    Simulator::out() << "  Trilinos ShyLU-Basker parallel linear solver\n";
+    #endif
     #ifdef CADNIP_PARSERS
     Simulator::out() << "  Cadnip foreign parsers\n";
     #endif

@@ -8,7 +8,8 @@
 #include <cstdlib>
 
 #include <Kokkos_Core.hpp>
-#include <shylubasker.hpp>
+#include <shylubasker_decl.hpp>
+#include <shylubasker_def.hpp>
 
 #include "solbasker_common.h"
 
@@ -18,7 +19,10 @@ namespace basker_wrapper {
 void ensureKokkosInitialized() {
     static const bool done = [] {
         if (!Kokkos::is_initialized() && !Kokkos::is_finalized()) {
-            Kokkos::initialize();
+            // Explicit thread count, matching Basker's own SetThreads(threadCount())
+            // below, so the Kokkos::OpenMP pool isn't left at a default (e.g. 1
+            // thread under some OMP_NUM_THREADS settings).
+            Kokkos::initialize(Kokkos::InitializationSettings().set_num_threads(threadCount()));
             std::atexit([] {
                 if (Kokkos::is_initialized() && !Kokkos::is_finalized()) {
                     Kokkos::finalize();

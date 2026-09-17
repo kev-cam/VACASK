@@ -6,7 +6,8 @@
 // in the instantiation below.
 
 #include <Kokkos_Core.hpp>
-#include <shylubasker.hpp>
+#include <shylubasker_decl.hpp>
+#include <shylubasker_def.hpp>
 
 #include "solbasker_common.h"
 

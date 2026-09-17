@@ -272,3 +272,22 @@ if (SIM_HAVE_SUPERLU)
         COMPILE_DEFINITIONS "__OPENMP"
     )
 endif()
+
+# Trilinos ShyLU-Basker backend: added only when CMakeLists.txt found Trilinos
+# (SIM_HAVE_TRILINOS, which also requires OpenMP - see the comment there). The
+# Kokkos + Basker headers are only ever included from these two TUs, and they
+# need the -fopenmp flag since the backend runs Kokkos::OpenMP (not Serial).
+if (SIM_HAVE_TRILINOS)
+    target_sources(simlib PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include/solbasker.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include/solbaskeritf.h
+        solbasker_common.h
+        solbasker.cpp
+        solbasker_real.cpp
+        solbasker_complex.cpp
+    )
+    set_source_files_properties(solbasker_real.cpp solbasker_complex.cpp PROPERTIES
+        INCLUDE_DIRECTORIES "${SIM_TRILINOS_INCLUDE_DIRS}"
+        COMPILE_OPTIONS "${OpenMP_CXX_FLAGS}"
+    )
+endif()

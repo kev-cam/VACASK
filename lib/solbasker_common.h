@@ -3,7 +3,7 @@
 
 // Shared body of the Trilinos ShyLU-Basker backend, included by
 // lib/solbasker_real.cpp and lib/solbasker_complex.cpp *after* their
-// <Kokkos_Core.hpp> and <shylubasker.hpp>.
+// <Kokkos_Core.hpp>, <shylubasker_decl.hpp> and <shylubasker_def.hpp>.
 //
 // Value is double or std::complex<double>; both are handled by the same
 // BaskerNS::Basker<int, Value, HostSpace> instantiation, so - unlike SuperLU_MT -
@@ -16,7 +16,7 @@
 // rebuild() -> setPattern().
 
 #if !defined(SHYLUBASKER_HPP) && !defined(BASKER_HPP) && !defined(SHYLUBASKER_DECL_HPP)
-#error "solbasker_common.h must be included after <shylubasker.hpp>"
+#error "solbasker_common.h must be included after <shylubasker_decl.hpp> (and <shylubasker_def.hpp>)"
 #endif
 
 #include <algorithm>
@@ -37,7 +37,10 @@ static_assert(sizeof(int) == sizeof(MatrixEntryIndex) && std::is_signed<MatrixEn
               "Basker Int (int) width/signedness differs from MatrixEntryIndex; "
               "VACASK aliases CSCMatrix index arrays directly.");
 
-using HostSpace = Kokkos::DefaultHostExecutionSpace;
+// Explicit OpenMP, not Kokkos::DefaultHostExecutionSpace: the default can
+// resolve to Kokkos::Serial depending on how Kokkos was configured, and this
+// backend is meant to run Basker OpenMP-parallel.
+using HostSpace = Kokkos::OpenMP;
 
 // Wrapper status codes (see include/solbasker.h for the contract).
 enum : int { OK = 0, SINGULAR = 1, NANFOUND = 2, NOMEM = 3, OTHER = 4, NOPATTERN = -1 };
@@ -165,19 +168,12 @@ public:
             }
         }
 
-        int rc;
-        if (fact >= 2 && factored_) {
-            // Incremental refactor: reuse ordering + symbolic, new values.
-            basker_.Options.same_pattern = BASKER_TRUE;
-            rc = basker_.Factor_Inc(0);
-            basker_.Options.same_pattern = BASKER_FALSE;
-            if (rc != BASKER_SUCCESS) {
-                // Fall back to a full numeric factorization on the same symbolic.
-                rc = basker_.Factor(n_, n_, nnz_, cp_, ri_, nz_);
-            }
-        } else {
-            rc = basker_.Factor(n_, n_, nnz_, cp_, ri_, nz_);
-        }
+        // Basker::Factor_Inc() is declared in shylubasker_decl.hpp but has no
+        // definition anywhere in Trilinos (verified against the 17.2.1 source
+        // tree) - it's dead API. fact >= 2 ("incremental refactor") therefore
+        // just runs a full numeric Factor() on the already-built symbolic
+        // structure, same as fact == 1.
+        int rc = basker_.Factor(n_, n_, nnz_, cp_, ri_, nz_);
 
         if (rc != BASKER_SUCCESS) {
             factored_ = false;

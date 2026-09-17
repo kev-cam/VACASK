@@ -322,8 +322,54 @@ else()
 endif()
 
 #
+# Optional Trilinos (Kokkos + ShyLU-Basker sparse solver backend,
+# lib/solbasker_{real,complex}.cpp, lib/solbasker_common.h, include/solbasker.h).
+#
+# The backend drives Basker through its native C++ API (BaskerNS::Basker), not
+# through Amesos2, and runs it OpenMP-parallel (Kokkos::OpenMP execution space,
+# not Kokkos::Serial) - so OpenMP is required alongside Trilinos itself.
+#
+# Enabled with -DTRILINOS_DIR=<path> pointing at a Trilinos install tree built
+# with static libraries (TrilinosConfig.cmake under <dir>/lib/cmake/Trilinos or
+# <dir>/lib64/cmake/Trilinos). When found, SIM_HAVE_TRILINOS is defined
+# project-wide; SIM_TRILINOS_INCLUDE_DIRS and Trilinos_LIBRARIES (target names)
+# are picked up by lib/CMakeLists.txt and scoped to just the backend TUs -
+# NOT added project-wide, since the -fopenmp flag that comes with Kokkos must
+# stay off the rest of simlib (see the OpenMP comment further down). Without
+# -DTRILINOS_DIR the build proceeds without it.
+#
+set(SIM_HAVE_TRILINOS FALSE)
+
+if (DEFINED TRILINOS_DIR)
+    find_package(Trilinos CONFIG
+        HINTS "${TRILINOS_DIR}" "${TRILINOS_DIR}/lib/cmake/Trilinos" "${TRILINOS_DIR}/lib64/cmake/Trilinos"
+        NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+
+    if (Trilinos_FOUND AND OpenMP_CXX_FOUND)
+        set(SIM_HAVE_TRILINOS TRUE)
+        # Trilinos_INCLUDE_DIRS (classic, deprecated variable) covers every
+        # package except Kokkos itself: Kokkos ships as a "modern" CMake
+        # package nested under Trilinos and installs its headers to a
+        # package-private <prefix>/include/kokkos subdirectory, exposed only
+        # via the Kokkos::kokkoscore imported target's own
+        # INTERFACE_INCLUDE_DIRECTORIES - not through the classic variable.
+        set(SIM_TRILINOS_INCLUDE_DIRS "${Trilinos_INCLUDE_DIRS}" "${Trilinos_INCLUDE_DIRS}/kokkos")
+        message(STATUS "Trilinos: enabled (version ${Trilinos_VERSION})")
+        message(STATUS "  include dirs: ${SIM_TRILINOS_INCLUDE_DIRS}")
+    elseif (Trilinos_FOUND)
+        message(WARNING "Trilinos: found, but OpenMP is required for the Basker backend "
+            "(runs OpenMP-parallel, not serial) and was not found; building without it")
+    else()
+        message(WARNING "Trilinos: -DTRILINOS_DIR set but TrilinosConfig.cmake not found under "
+            "${TRILINOS_DIR}, building without it")
+    endif()
+else()
+    message(STATUS "Trilinos: disabled (set -DTRILINOS_DIR to enable)")
+endif()
+
+#
 # Custom build types
-# 
+#
 
 # Profiling debug version -pg -fprofile-arcs -ftest-coverage --coverage
 # Also does line coverage
@@ -473,6 +519,20 @@ if (SIM_HAVE_SUPERLU)
     set(SIM_EXE_LIBRARIES ${SIM_EXE_LIBRARIES}
             ${SIM_SUPERLU_LIBRARY}
             $<$<BOOL:${SIM_SUPERLU_BLAS}>:${SIM_SUPERLU_BLAS}>
+        CACHE STRING "External libraries for creating an executable."
+        FORCE
+    )
+endif()
+
+# Wire Trilinos in once SIM_EXE_LIBRARIES exists. Trilinos_LIBRARIES is a list
+# of per-package IMPORTED target names (e.g. Kokkos::all_libs), not paths;
+# target_link_libraries(sim ... ${SIM_EXE_LIBRARIES}) in simulator/CMakeLists.txt
+# resolves each one, pulling in the right static archives, transitively linked
+# TPLs (e.g. OpenMP), and link order automatically.
+if (SIM_HAVE_TRILINOS)
+    add_compile_definitions(SIM_HAVE_TRILINOS)
+    set(SIM_EXE_LIBRARIES ${SIM_EXE_LIBRARIES}
+            ${Trilinos_LIBRARIES}
         CACHE STRING "External libraries for creating an executable."
         FORCE
     )

@@ -18,10 +18,12 @@
 // triangular form typical of circuit Jacobians - the same niche KLU occupies,
 // but threaded. It is used here through its *native* C++ API (BaskerNS::Basker),
 // not through Amesos2: the native API takes raw CSC arrays (zero-copy, like KLU
-// and SuperLU_MT), splits cleanly into Symbolic / Factor / Factor_Inc / Solve
-// that map straight onto rebuild() / factor() / refactor() / solve(), and needs
-// only Kokkos + Basker headers rather than the whole Tpetra/Teuchos/Amesos2
-// stack.
+// and SuperLU_MT), splits cleanly into Symbolic / Factor / Solve that map
+// straight onto rebuild() / factor() / solve(), and needs only Kokkos + Basker
+// headers rather than the whole Tpetra/Teuchos/Amesos2 stack. (Basker::Factor_Inc
+// - true incremental refactor reusing the previous numeric pivoting - is declared
+// in Trilinos but never defined anywhere in the library, so refactor() just reruns
+// Factor() on the existing symbolic structure; see lib/solbasker_common.h.)
 //
 // Basker's templated headers do not redeclare the Fortran BLAS symbols, so there
 // is no blaslapack.h clash (unlike SuperLU_MT). The backend is still confined to
@@ -54,8 +56,8 @@ void setPattern(
 
 // Numeric factorization of the values currently in the buffer handed to
 // setPattern(). fact: 0 = first factorization (runs Symbolic first),
-// 1 = reuse the column ordering / symbolic structure, 2 = incremental refactor
-// (Basker::Factor_Inc). Return codes:
+// 1 or 2 = reuse the column ordering / symbolic structure (both just call
+// Factor() again - see the Factor_Inc note above). Return codes:
 //   0  success
 //   1  singular / rank deficient
 //   2  NaN encountered
@@ -116,7 +118,7 @@ END_ERRORCLASS(BaskerRefactorizationError);
 
 //   rebuild()  -> CSC pattern install (Symbolic is deferred to the first factor)
 //   factor()   -> Basker::Symbolic + Basker::Factor
-//   refactor() -> Basker::Factor_Inc reusing the ordering / symbolic structure
+//   refactor() -> Basker::Factor reusing the existing ordering / symbolic structure
 //   solve()    -> Basker::Solve (transpose flag for tsolve)
 //   rcond()    -> 1-norm reciprocal condition estimate via repeated solves
 template<typename IndexType, typename ValueType>

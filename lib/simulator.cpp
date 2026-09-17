@@ -17,6 +17,9 @@
 #ifdef SIM_HAVE_SUPERLU
 #include "solsuperlu.h"
 #endif
+#ifdef SIM_HAVE_TRILINOS
+#include "solbasker.h"
+#endif
 #include "libplatform.h"
 #include "common.h"
 
@@ -141,6 +144,12 @@ bool Simulator::setup(
 #else 
     Simulator::defaultHbSolverId      = KluRealSparseSolver::solverId;
     Simulator::defaultQpsmsigSolverId = KluRealSparseSolver::solverId;
+#endif
+
+#ifdef SIM_HAVE_TRILINOS
+    // Register real and complex Trilinos ShyLU-Basker solver (build-time optional)
+    ok &= RealSparseSolver::registerSolver<BaskerRealSparseSolver>();
+    ok &= ComplexSparseSolver::registerSolver<BaskerComplexSparseSolver>();
 #endif
 
     // Default solver when no solver is specified
