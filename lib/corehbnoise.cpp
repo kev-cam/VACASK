@@ -507,6 +507,7 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
         powerGain *= powerGain;
 
         Vector<double> noiseDensity;
+        Vector<double> flickerExponent;
 
         Vector<Complex> zr(nf);
         Vector<Complex> wr(nf);
@@ -544,6 +545,27 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
                         Simulator::dbg() << "  instance '" << std::string(name) << "'\n";
                     }
                     
+                    // Flicker exponent of each noise source, from the modulation slots
+                    // the HB evaluation filled (white sources carry 0, unused). Slots
+                    // are allocated per non-Table source in source order, the same
+                    // walk as modulatedNoiseSlot below.
+                    flickerExponent.resize(nSources);
+                    {
+                        auto base = inst->noiseModulationBase();
+                        auto& exponents = hbCore_.noiseExponents();
+                        GlobalStorageIndex slot = 0;
+                        for(decltype(nSources) ndx=0; ndx<nSources; ndx++) {
+                            flickerExponent[ndx] = 1.0;
+                            if (inst->noiseSourceType(ndx)==NoiseType::Table) {
+                                continue;
+                            }
+                            if (base!=SIM_SIZE_T_MAX && base+slot<exponents.size()) {
+                                flickerExponent[ndx] = exponents[base+slot];
+                            }
+                            slot++;
+                        }
+                    }
+
                     // Loop through all frequencies, evaluate noise at each frequency
                     // Store in a vector with nf slots, one slot per one frequency.
                     // slot size equals number of noise sources.
@@ -564,7 +586,7 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
                         // All computations work with two-sided PSD. 
                         // The fact that OSDI returns one-sided PSD was compensated in the 
                         // modulation function when we absorbed A (see corehb.cpp). 
-                        // Overwrite white noise with 1 and flicker noise with 1/f
+                        // Overwrite white noise with 1 and flicker noise with 1/f^alpha
                         for (decltype(nSources) ndx=0; ndx<nSources; ndx++) {
                             switch (inst->noiseSourceType(ndx)) {
                                 case NoiseType::White:
@@ -577,7 +599,7 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
                                     // (or nan for a source with zero flicker amplitude)
                                     // into every total.
                                     if (freqAtSpur>0) {
-                                        noiseDensity[i*nSources+ndx] = 1/freqAtSpur;
+                                        noiseDensity[i*nSources+ndx] = std::pow(freqAtSpur, -flickerExponent[ndx]);
                                     } else {
                                         noiseDensity[i*nSources+ndx] = 0;
                                         flickerAtDc = true;

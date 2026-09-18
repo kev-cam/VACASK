@@ -179,6 +179,10 @@ public:
 
     Spurs& spurs() { return spurs_; };
 
+    // Flicker exponents of the modulated noise sources, one per modulation
+    // slot, filled by evaluateAtNodeset(true, ...)
+    const Vector<double>& noiseExponents() const { return noiseExponent; };
+
     static Id solutionTag;
 
 protected:

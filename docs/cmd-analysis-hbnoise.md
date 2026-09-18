@@ -41,8 +41,9 @@ analysis name hbnoise [parameters]
 4. For each noise source, its per-spur transfer function is folded through its own
    Toeplitz modulation matrix $M$ (built from that source's $M_k$ harmonics) without
    ever forming $M$ or $M M^H$ explicitly, then combined with the source's reference
-   noise shape (white or flicker) at every spur to give its output-referred PSD
-   contribution at the current offset frequency.
+   noise shape (white, or $1/f^{\alpha}$ with the exponent the flicker source declares)
+   at every spur to give its output-referred PSD contribution at the current offset
+   frequency.
 5. Contributions are accumulated per instance and summed into the total output noise.
 6. Steps 3-5 are repeated across the offset frequency sweep.
 
