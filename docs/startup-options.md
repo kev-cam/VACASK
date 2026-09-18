@@ -11,26 +11,34 @@
 | `-sp` | `--skip-postprocess` | Do not run `postprocess` steps defined in the control block. |
 | `-qp` | `--quiet-progress` | Suppress progress messages. |
 | `--no-output` | | Suppress writing of result files. |
-| `-n <n>` | `--ncpu <n>` | Number of threads the multithreaded SuperLU solver spawns per factorization. Default `1`. `n <= 0` autodetects: it honors `OMP_NUM_THREADS` if set, otherwise uses all available CPUs. |
+| `-n <n>` | `--ncpu <n>` | Number of threads the multithreaded solvers (`superlu`, `basker`) spawn per factorization. Default `1`. `n <= 0` autodetects: it honors `OMP_NUM_THREADS` if set, otherwise uses all available CPUs. `basker` rounds this down to the nearest power of two (Basker's `SetThreads()` requires one). |
 | `-b <n>` | `--blas-ncpu <n>` | Number of threads OpenBLAS may use for dense operations. Default `1`. `n <= 0` lets OpenBLAS autodetect. |
 
 If no filename is given VACASK prints a hint and exits.
 
 ## Parallelism
 
-VACASK runs single-threaded except for the sparse linear solver used by
-[harmonic balance](cmd-analysis-hb.md) and the harmonic-balance-based
-[(quasi)periodic small-signal analysis](cmd-analysis-hbac.md). When the simulator
-is built with the multithreaded SuperLU backend, that solver is the default for
-these analyses. Every other analysis uses the `klu` solver, which ignores both
-options below.
+VACASK runs single-threaded unless a multithreaded linear solver is selected.
+Builds compiled with the SuperLU_MT and/or Trilinos backends additionally
+provide the `superlu` and `basker` solvers; see [Linear Solver
+Selection](cmd-options-solver.md) for how to pick one per analysis or option.
+When the simulator is built with the multithreaded SuperLU backend, `superlu`
+is the default for [harmonic balance](cmd-analysis-hb.md) and the
+harmonic-balance-based [(quasi)periodic small-signal
+analysis](cmd-analysis-hbac.md). Every other analysis defaults to the `klu`
+solver, which ignores both options below - unless a multithreaded solver is
+selected explicitly for it.
 
 There are two independent thread counts:
 
-- `--ncpu` (`-n`): threads the SuperLU factorization (`pdgstrf`) spawns.
+- `--ncpu` (`-n`): threads a `superlu` or `basker` factorization spawns.
   Default `1`.
 - `--blas-ncpu` (`-b`): threads OpenBLAS uses for dense operations, most of which
   occur in the small-signal analyses. Default `1`.
+
+This section describes `superlu`'s use of the OpenMP pool in detail; it does
+not apply to `basker`, which manages its own thread pool independently (see
+below).
 
 ### Serial runs
 
@@ -67,15 +75,24 @@ raising it only adds thread-management overhead and inflates the required
 `OMP_NUM_THREADS` (recall the `ncpu * blas_ncpu` product above). It pays off only
 when the small-signal dense blocks are large enough to amortize that cost.
 
-Builds without the SuperLU backend or without OpenMP run everything on one
-thread, and both options have no effect.
+Builds without the SuperLU backend, without the Trilinos backend, or without
+OpenMP run everything on one thread, and both options have no effect on the
+analyses that would otherwise use `superlu` or `basker`.
+
+### `basker`'s thread pool
+
+`basker` runs on Kokkos's OpenMP backend, which is sized once, at process
+startup, directly from `--ncpu` (rounded down to the nearest power of two) -
+not from `OMP_NUM_THREADS` or the ambient pool described above. There is
+nothing to size manually: just pick `--ncpu`, and expect it to be clamped down
+to a power of two (`--ncpu 6` behaves like `--ncpu 4`).
 
 ## Startup Sequence
 
 When VACASK is launched it performs the following steps in order:
 
 1. Parse command line flags.
-2. Resolve the thread counts from `--ncpu` / `--blas-ncpu` (and `OMP_NUM_THREADS`); cap the OpenMP pool to one thread when both are `1`.
+2. Resolve the thread counts from `--ncpu` / `--blas-ncpu` (and `OMP_NUM_THREADS`); cap the OpenMP pool to one thread when both are `1`. `basker`'s Kokkos pool is sized separately, from `--ncpu` alone, the first time `basker` is used.
 3. Apply `SIM_MODULE_PATH`, `SIM_INCLUDE_PATH`, and `SIM_OPENVAF` environment variables if set.
 4. Read [TOML configuration files](startup-paths.md#toml-configuration-files) in order. Later files override earlier ones.
 5. Parse the input file.

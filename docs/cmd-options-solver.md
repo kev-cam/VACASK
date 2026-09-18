@@ -6,7 +6,9 @@ sparse solver). Builds compiled with the SuperLU_MT backend also provide
 `superlu`, a multithreaded solver whose thread count is set with the
 [`--ncpu` command line option](startup-options.md#parallelism). Builds compiled
 with Trilinos also provide `basker`, the Trilinos ShyLU-Basker solver, likewise
-multithreaded (OpenMP) and controlled by the same `--ncpu` option.
+multithreaded (OpenMP) and controlled by the same `--ncpu` option (rounded down
+to the nearest power of two; see [Command Line
+Options](startup-options.md#parallelism)).
 
 | Name | Type | Default | Allowed | Description |
 |------|------|---------|---------|-------------|
