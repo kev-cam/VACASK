@@ -33,4 +33,10 @@ The following device models were converted from the SPICE3 C model format to Ver
 
 Devices in `spice/` are the default model versions. They do not expose output variables that would introduce additional internal nodes. The noise model of these devices is appropriate for all types on noise analysis. 
 
-Use the `sn` variant for maximum simulation speed when only ordinary small-signal noise analysis is needed. Use the `full` variant when collecting device output variables not available in the default verion. If a device does not have a `sn` or `full` variant use the default variant since it does not differ from the respective `sn` or `full` variant. 
+Use the `sn` variant for maximum simulation speed when only ordinary small-signal noise analysis is needed. Use the `full` variant when collecting device output variables not available in the default verion. If a device does not have a `sn` or `full` variant use the default variant since it does not differ from the respective `sn` or `full` variant.
+
+## Known differences from released ngspice
+
+The models are distilled from the `vadng-pre-48` branch of ngspice, which carries fixes that released ngspice does not have yet. Results can therefore differ from ngspice-47 on the same model card.
+
+- **Gummel-Poon BJT, area scaling of the base-collector saturation current.** When the model card gives no `ibc`, ngspice up to and including version 47 derives the base-collector saturation current from the already area-scaled `BJTtSatCur` and multiplies it by `areab` again (`bjttemp.c`), which scales it by `area` squared since `areab` defaults to `area`. `sp_bjt` (since the 2026-09-07 device update) scales it once, `is * areab`, like the base-emitter side. Cards with `area` different from 1 and no explicit `ibc` give a different base-collector current, and everything that depends on it, in the two simulators. An example is the parasitic PNP of the IHP SG13G2 `schottky_nbl1` PCell (`area` = 0.3 per cell): its reverse-active current is 3.5 times larger in `sp_bjt` than in ngspice-47. 
