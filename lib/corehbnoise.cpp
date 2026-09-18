@@ -517,6 +517,9 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
         // Zero results vector
         zero(results);
 
+        // Set when a flicker source meets a spur at zero frequency
+        bool flickerAtDc = false;
+
         // Go through all instances
         auto ndev = circuit.deviceCount();
         for(decltype(ndev) idev=0; idev<ndev; idev++) {
@@ -568,7 +571,17 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
                                     noiseDensity[i*nSources+ndx] = 1;
                                     break;
                                 case NoiseType::Flicker:
-                                    noiseDensity[i*nSources+ndx] = 1/freqAtSpur;
+                                    // 1/f is undefined where a spur lands on DC, i.e. the
+                                    // offset frequency equals a pump harmonic. Leave that
+                                    // spur out and warn below instead of propagating inf
+                                    // (or nan for a source with zero flicker amplitude)
+                                    // into every total.
+                                    if (freqAtSpur>0) {
+                                        noiseDensity[i*nSources+ndx] = 1/freqAtSpur;
+                                    } else {
+                                        noiseDensity[i*nSources+ndx] = 0;
+                                        flickerAtDc = true;
+                                    }
                                     break;
                                 case NoiseType::Table:
                                     // For table noise the modulation function is ma(t) = 1.
@@ -709,6 +722,11 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
 
         if (error) {
             break;
+        }
+
+        if (flickerAtDc) {
+            Simulator::wrn() << "Warning, offset frequency " << frequency
+                             << " coincides with a pump harmonic. Flicker noise of the spur at zero frequency is undefined and was left out.\n";
         }
 
         // Dump solution
