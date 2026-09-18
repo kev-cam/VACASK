@@ -241,7 +241,8 @@ template<> int Introspection<TranParameters>::setup() {
     registerMember(noisemode);
     registerMember(oversample);
     registerNamedMember(opParams.nodeset, "nodeset");
-    registerNamedMember(opParams.solver, "opsolver");
+    // op and tran core share the same solver set by opParams.solver
+    registerNamedMember(opParams.solver, "solver");
     registerMember(ic);
     registerMember(store);
     registerMember(write);

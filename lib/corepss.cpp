@@ -25,6 +25,7 @@ template<> int Introspection<PssParameters>::setup() {
     registerNamedMember(stabilParams.ic, "ic");
     registerNamedMember(stabilParams.write, "writestab");
     registerNamedMember(opParams.nodeset, "nodeset");
+    // All cores share the same solver set by opParams.solver
     registerNamedMember(opParams.solver, "solver");
     return 0;
 }
