@@ -24,8 +24,11 @@
 #include <complex>
 #include <cstdint>
 #include <cstddef>
+#include <iostream>
+#include <map>
 #include <vector>
 
+#include "acct.h"
 #include "solbaskeritf.h"
 #include "common.h"
 
@@ -68,36 +71,43 @@ class SolverImpl {
     bool factored_     { false };
 
     void applyOptions() {
-        // Circuit Jacobians: structurally unsymmetric, block triangular, and we
-        // must be able to *detect* a singular matrix (gmin stepping depends on
-        // it) - so no pivot replacement.
-        basker_.Options.symmetric          = BASKER_FALSE;
+        // Mirrors the Options Amesos2's ShyLUBasker adapter sets, for parity
+        // with a known-working configuration.
+        basker_.Options.symmetric          = BASKER_FALSE;  // important for MNA
         basker_.Options.transpose          = BASKER_FALSE;
         basker_.Options.matching           = BASKER_TRUE;   // pre-order for a zero-free diagonal
         basker_.Options.btf                = BASKER_TRUE;
         basker_.Options.no_pivot           = BASKER_FALSE;  // threshold partial pivoting, like KLU
-        basker_.Options.replace_zero_pivot = BASKER_FALSE;
-        basker_.Options.replace_tiny_pivot = BASKER_FALSE;
-        basker_.Options.verbose            = BASKER_FALSE;
         basker_.Options.realloc            = BASKER_TRUE;
+        basker_.Options.replace_zero_pivot = BASKER_TRUE;
+        basker_.Options.replace_tiny_pivot = BASKER_FALSE;
+        basker_.Options.btf_matching       = 2;
+        basker_.Options.blk_matching       = 0;
+        basker_.Options.amd_dom            = BASKER_TRUE;
+        basker_.Options.use_metis          = BASKER_TRUE;
+        basker_.Options.use_nodeNDP        = BASKER_TRUE;
+        basker_.Options.run_nd_on_leaves   = BASKER_TRUE;
+        basker_.Options.run_amd_on_leaves  = BASKER_FALSE;
+        basker_.Options.prune              = BASKER_TRUE;
+        basker_.Options.threaded_solve     = BASKER_TRUE;   // parallel L\ and U\ triangular solves
+        // basker_.Options.verbose            = BASKER_TRUE; // For BASKER_TIME
+        basker_.Options.verbose            = BASKER_FALSE;
         if (minBlockSize_ > 0) {
             basker_.Options.min_block_size = minBlockSize_;
         }
         basker_.SetThreads(threadCount());
     }
 
-    // Map a Basker return / Info() code onto a wrapper status code.
+    // Map a Basker return code onto a wrapper status code.
+    //
+    // Basker::Info() looks like an error-code query (its return value even
+    // matches the shape of a switch target) but in this Trilinos version it
+    // just prints a fixed banner to std::cout and unconditionally returns 0 -
+    // it carries no information about what failed. There is no other public
+    // accessor in this Basker version that reports SINGULAR/NAN/REMALLOC/
+    // NOMALLOC specifically, so every failure is reported as OTHER.
     int classify(int rc) {
-        if (rc == BASKER_SUCCESS) {
-            return OK;
-        }
-        switch (basker_.Info()) {
-            case BASKER_ERROR_SINGULAR: return SINGULAR;
-            case BASKER_ERROR_NAN:      return NANFOUND;
-            case BASKER_ERROR_REMALLOC:
-            case BASKER_ERROR_NOMALLOC: return NOMEM;
-            default:                    return OTHER;
-        }
+        return (rc == BASKER_SUCCESS) ? OK : OTHER;
     }
 
     int runSymbolic() {
@@ -107,10 +117,56 @@ class SolverImpl {
         }
         factored_ = false;
         applyOptions();
+        // Symbolic() (BTF/matching/ordering) performance degrades as core count
+        // increases, measured on circuit-sized matrices. Reducing basker_'s thread
+        // count here does not help: Kokkos::OpenMP spawns its worker pool once, at
+        // process-wide Kokkos::initialize() time (see ensureKokkosInitialized()),
+        // sized to threadCount(). Most of Symbolic()'s Kokkos::parallel_for calls
+        // are unscoped and always run across that whole persistent pool; only the
+        // nested-dissection step honors Basker's own SetThreads() (via an explicit
+        // TeamPolicy(num_threads, 1)). So there is no cheap way to throttle this
+        // phase without shrinking or re-creating the process-wide Kokkos pool.
+        // auto t0 = Accounting::wclk();
         int rc = basker_.Symbolic(n_, n_, nnz_, cp_, ri_, nz_, /*transpose_needed=*/false);
+        // std::cout << "Basker Symbolic() time: " << Accounting::wclkDelta(t0) << "\n";
         if (rc != BASKER_SUCCESS) {
             return classify(rc);
         }
+        // std::cout << "Basker Symbolic() stats: n=" << n_ << " nnz=" << nnz_
+        //            << " threads=" << threadCount()
+        //            << " btf_nblks=" << basker_.btf_nblks
+        //            << " btf_tabs_offset=" << basker_.btf_tabs_offset
+        //            << " btf_top_nblks=" << basker_.btf_top_nblks
+        //            << " btf_top_tabs_offset=" << basker_.btf_top_tabs_offset
+        //            << " btf_total_work=" << basker_.btf_total_work
+        //            << "\n";
+        //
+        // std::map<long long, long long> hist;
+        // long long maxSize = 0;
+        // long long maxWork = 0;
+        // long long maxWorkBlock = -1;
+        // for (long long b = 0; b < basker_.btf_nblks; ++b) {
+        //     long long sz = basker_.btf_tabs(b + 1) - basker_.btf_tabs(b);
+        //     hist[sz]++;
+        //     long long w = basker_.btf_blk_work(b);
+        //     if (sz > maxSize) {
+        //         maxSize = sz;
+        //     }
+        //     if (w > maxWork) {
+        //         maxWork = w;
+        //         maxWorkBlock = b;
+        //     }
+        // }
+        // std::cout << "BTF block size histogram:\n";
+        // for (auto [size, count] : hist) {
+        //     std::cout << "  size " << size << ": " << count << "\n";
+        //     if (size > 100) {
+        //         break;
+        //     }
+        // }
+        // std::cout << "largest block = " << maxSize << "\n";
+        // std::cout << "largest work  = " << maxWork << " at block " << maxWorkBlock << "\n";
+
         symbolicDone_ = true;
         return OK;
     }
@@ -131,13 +187,14 @@ public:
         n_ = nnz_ = 0;
     }
 
-    // Basker has no "drop numeric, keep symbolic" call; the next factor(0) will
-    // re-run Symbolic anyway, so just tear the whole thing down.
+    // Symbolic() (BTF matching + METIS ND) is structural only - it never reads
+    // nz_ - so a failed numeric Factor() does not invalidate it. Basker's own
+    // Factor() resets factor-local state at the start of every call precisely
+    // to support retrying after a prior failure (see the "factor may have
+    // failed" reset in shylubasker_tree.hpp), so keep the symbolic structure
+    // and only drop the numeric result. Symbolic is only redone at a real
+    // matrix rebuild() (clearAll()/setPattern()).
     void freeFactor() {
-        if (symbolicDone_) {
-            basker_.Finalize();
-            symbolicDone_ = false;
-        }
         factored_ = false;
     }
 
@@ -161,7 +218,11 @@ public:
             return NOPATTERN;
         }
 
-        if (fact == 0 || !symbolicDone_) {
+        // Gated on symbolicDone_ alone, not fact: the caller's fact==0 also
+        // fires after any prior factor failure (BaskerLinearSparseSolver's
+        // factExecuted_ resets to false on failure), which no longer implies
+        // the symbolic structure was dropped - see freeFactor() above.
+        if (!symbolicDone_) {
             int st = runSymbolic();
             if (st != OK) {
                 return st;
@@ -173,6 +234,14 @@ public:
         // tree) - it's dead API. fact >= 2 ("incremental refactor") therefore
         // just runs a full numeric Factor() on the already-built symbolic
         // structure, same as fact == 1.
+        // std::cerr
+        //     << "before Factor:"
+        //     << " verbose=" << basker_.Options.verbose
+        //     << " realloc=" << basker_.Options.realloc
+        //     << " threads=" << threadCount()
+        //     << " btf_tabs_offset=" << basker_.btf_tabs_offset
+        //     << "\n";
+        // basker_.Options.verbose = true;
         int rc = basker_.Factor(n_, n_, nnz_, cp_, ri_, nz_);
 
         if (rc != BASKER_SUCCESS) {

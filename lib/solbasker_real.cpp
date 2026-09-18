@@ -6,6 +6,20 @@
 // the Basker backend is enabled.
 
 #include <cstdlib>
+#include <iostream>
+
+// Enables Basker's internal Kokkos::Timer instrumentation (BASKER_TIMER /
+// BASKER_TIMER_FINE in shylubasker_types.hpp), which prints per-phase timing
+// (order, sfactor, factor_notoken, domain/separator factor, ...) to stdout.
+// Diagnostic only - noisy, remove once the ND scaling question is settled.
+// #define BASKER_TIME
+
+// That BASKER_TIMER debug code (shylubasker_tree.hpp) uses unqualified cout/ios
+// instead of std::cout/std::ios - a latent bug that only surfaces once this
+// normally-dead code path is compiled. Bring the names into scope rather than
+// patch vendored Trilinos headers.
+// using std::cout;
+// using std::ios;
 
 #include <Kokkos_Core.hpp>
 #include <shylubasker_decl.hpp>
