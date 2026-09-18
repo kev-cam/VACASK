@@ -62,6 +62,9 @@ from runtest import *
 import numpy as np
 import sys
 
+# absdelay is only described by OSDI 0.5 modules, an older compiler drops it
+skipUnlessOsdi(5, "vdelay.osdi", "absdelay")
+
 tests = []
 
 td = 1e-3

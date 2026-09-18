@@ -41,6 +41,30 @@ macro(prepare_netlist_test simfile)
     )
 endmacro()
 
+# A netlist test whose postprocessing may ask to be skipped, e.g. because the
+# compiler cannot describe what the test needs (absdelay requires OSDI 0.5).
+# runtest.skipUnlessOsdi() prints "SKIP: ..." and exits with 77, which the
+# simulator reports as a failed postprocessing step. run_skippable.py turns that
+# back into exit code 77, and SKIP_RETURN_CODE makes ctest report "skipped".
+macro(prepare_skippable_netlist_test simfile)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${simfile}")
+    foreach(item IN ITEMS ${TEST_DEPENDENCIES})
+        file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/${item} DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/${simfile}")
+    endforeach()
+    add_test(NAME "${simfile}"
+        COMMAND ${Python_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/run_skippable.py"
+            $<TARGET_FILE:sim> "${CMAKE_CURRENT_SOURCE_DIR}/${simfile}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${simfile}"
+    )
+    set_tests_properties(
+        "${simfile}" PROPERTIES
+        ENVIRONMENT
+        "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR};SIM_TEST=yes"
+        TIMEOUT 20
+        SKIP_RETURN_CODE 77
+    )
+endmacro()
+
 macro(prepare_failure_test simfile expected_error)
     file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${simfile}")
     add_test(NAME "${simfile}"
@@ -226,7 +250,7 @@ if(CADNIP_PARSERS)
 
 endif()
 prepare_netlist_test(test_behavexpr.sim)
-prepare_netlist_test(test_delay.sim)
-prepare_netlist_test(test_delayvar.sim)
-prepare_netlist_test(test_delayhb.sim)
-prepare_netlist_test(test_delayhbac.sim)
+prepare_skippable_netlist_test(test_delay.sim)
+prepare_skippable_netlist_test(test_delayvar.sim)
+prepare_skippable_netlist_test(test_delayhb.sim)
+prepare_skippable_netlist_test(test_delayhbac.sim)

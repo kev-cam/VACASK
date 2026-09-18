@@ -110,6 +110,9 @@ from runtest import *
 import numpy as np
 import sys
 
+# absdelay is only described by OSDI 0.5 modules, an older compiler drops it
+skipUnlessOsdi(5, "vdelay.osdi", "absdelay")
+
 tests = []
 
 # Must match dly1 td and the excitation in the netlist
