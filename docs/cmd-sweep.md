@@ -50,6 +50,17 @@ sweep s instance="vgs" parameter="dc" from=1k to=1g mode="oct" points=3
 sweep s variable="corner" values=["tt", "ff", "ss"]
 ```
 
+## One sweep, one analysis
+
+A sweep applies to the single `analysis` statement that follows it. Indentation is not significant, so a second `analysis` written below the first one is not part of the sweep: it runs once, after the sweep has finished, with the swept parameter left at its last value, and it writes a plain (unswept) output file. To sweep two analyses over the same range, write the sweep twice:
+
+```text
+sweep a_lo instance="vlo" parameter="ampl" from=1m to=1 mode="dec" points=6
+  analysis hbac1 hbac freq=[f_lo] nharm=9 outspur=[0] values=[2G]
+sweep a_lo_n instance="vlo" parameter="ampl" from=1m to=1 mode="dec" points=6
+  analysis hbnoise1 hbnoise freq=[f_lo] nharm=9 in="vrf" out="out" values=[2G]
+```
+
 ## Nested sweeps
 
 Multiple `sweep` lines before a single `analysis` produce a multidimensional sweep. The last `sweep` is the inner (fastest) loop:
