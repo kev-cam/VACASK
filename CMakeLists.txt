@@ -20,6 +20,14 @@ enable_testing()
 # vacask binary. Flip the default below to change the out-of-the-box behavior.
 option(CADNIP_PARSERS "Build with Cadnip parsers, requires a Rust toolchain)" OFF)
 
+# Corrosion is needed when using Cadnip parsers,
+# there are three different ways of adding Corrosion;
+# CORROSION_USE_SYSTEM: Uses find_package() to use system-level installed Corrosion
+# CORROSION_DIR: Uses a local path to add Corrosion
+# DEFAULT: Get Corrosion using FetchContent
+option(CORROSION_USE_SYSTEM "Use system-level Corrosion" OFF)
+set(CORROSION_DIR "" CACHE PATH "Path to local Corrosion source checkout")
+
 if(CADNIP_PARSERS)
     find_program(CARGO_EXECUTABLE cargo)
     if(NOT CARGO_EXECUTABLE)
@@ -28,13 +36,33 @@ if(CADNIP_PARSERS)
             "Install Rust (https://rustup.rs) or reconfigure with -DCADNIP_PARSERS=OFF.")
     endif()
 
+    # Needed for both the Corrosion or NetlistParseRs fallbacks (defaults)
     include(FetchContent)
-    FetchContent_Declare(
-        Corrosion
-        GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-        GIT_TAG v0.5.1
-    )
-    FetchContent_MakeAvailable(Corrosion)
+
+    if(CORROSION_USE_SYSTEM AND CORROSION_DIR)
+        message(FATAL_ERROR
+            "CORROSION_USE_SYSTEM and CORROSION_DIR are mutually exclusive; set only one."
+        )
+    elseif(CORROSION_USE_SYSTEM)
+        find_package(Corrosion CONFIG REQUIRED)
+        message(STATUS "Corrosion: using system package (v${Corrosion_VERSION})")
+    elseif(CORROSION_DIR)
+        if(NOT EXISTS "${CORROSION_DIR}/cmake/Corrosion.cmake")
+            message(FATAL_ERROR
+                "CORROSION_DIR='${CORROSION_DIR}' "
+                "does not contain a valid Corrosion checkout (cmake/Corrosion.cmake not found)."
+            )
+        endif()
+        add_subdirectory("${CORROSION_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/corrosion-build")
+        message(STATUS "Corrosion: using local checkout ${CORROSION_DIR}")
+    else()
+        FetchContent_Declare(
+            Corrosion
+            GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
+            GIT_TAG v0.5.1
+        )
+        FetchContent_MakeAvailable(Corrosion)
+    endif()
 
     # By default the parser is fetched at a known-compatible revision. Pass
     # -DNETLIST_RS_DIR=/path/to/NetlistParse.rs to use a local checkout.
