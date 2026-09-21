@@ -36,7 +36,7 @@ The small-signal analyses that start with an operating point (`ac`, `acxf`, `acs
 `noise`, `dcinc`, and `dcxf`) can linearize the circuit at a stored solution without solving 
 for it. Set `opsolve=0` and let `nodeset` name the solution slot. The circuit is evaluated at 
 the stored values, so the result is meaningful only if the stored solution is a solution 
-of the circuit being analyzed. Unknowns missing from the stored solution are evaluated at 0. 
+of the circuit being analyzed. The stored solution must have a value for every unknown of the circuit. Otherwise the analysis stops with an error, or, if `strictforce` is 0, prints a warning and evaluates the missing unknowns at 0. 
 The solution is not stored in this case. With `writeop=1` the operating point output file 
 contains the stored solution and the instance outputs evaluated at it.
 

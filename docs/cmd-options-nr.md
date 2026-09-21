@@ -9,7 +9,7 @@
 | `nr_residualcheck` | boolean | 1 | 0, 1 | Also check residual (not only solution change) for convergence. |
 | `nr_force` | real | 1e5 | >0 | Forcing factor for initial condition constraints. |
 | `nr_nsforce` | real | 10 | >0 | Forcing factor for nodeset and continuation constraints. |
-| `strictforce` | int | 1 | 0, 1 | How to handle conflicting nodeset/ic constraints. 0 = warn and continue, 1 = abort. |
+| `strictforce` | int | 1 | 0, 1 | How to handle conflicting nodeset/ic constraints, and a stored solution that lacks a value for an unknown when linearizing with `opsolve=0` or `hbsolve=0`. 0 = warn and continue, 1 = abort. |
 
 ## Instance bypass
 

@@ -64,4 +64,4 @@ Small-signal analyses can also linearize the circuit at a stored solution instea
 | Operating point | `ac`, `acxf`, `acsp`, `acstb`, `noise`, `dcinc`, `dcxf` | `opsolve=0` | `op` |
 | Harmonic balance | `hbac`, `hbnoise` | `hbsolve=0` | `hb` |
 
-The circuit is evaluated at the stored values, so the result is meaningful only if the stored solution is a solution of the circuit being analyzed. `nodeset` must be a stored solution name (not a list). See [Operating Point Analysis](cmd-analysis-op.md) and [(Quasi)Periodic Small-Signal Analysis (hbac)](cmd-analysis-hbac.md).
+The circuit is evaluated at the stored values, so the result is meaningful only if the stored solution is a solution of the circuit being analyzed. `nodeset` must be a stored solution name (not a list). It must have a value for every unknown of the circuit. Otherwise the analysis stops with an error, or, with `strictforce=0`, prints a warning and evaluates the missing unknowns at 0. See [Operating Point Analysis](cmd-analysis-op.md) and [(Quasi)Periodic Small-Signal Analysis (hbac)](cmd-analysis-hbac.md).

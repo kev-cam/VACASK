@@ -333,8 +333,24 @@ bool HBCore::evaluate(bool atNodeset, bool noiseModulation, ErrorConsumer& error
         nrSolver.evalSetup().evaluateNoise = true;
     }
 
+    bool nodesetOk = true;
+
     // if evaluating at nodeset, copy nodeset to solution. 
     if (atNodeset) {
+        // Unknowns missing from the stored solution (DC entry not forced) are an error with strictforce, otherwise a warning
+        auto& forced = nrSolver.forces(1).unknownForced_;
+        for(decltype(n) u=1; u<=n; u++) {
+            if (!forced[u*nt]) {
+                HbNodesetIncomplete err{circuit.reprNode(u)->name()};
+                if (options.strictforce) {
+                    errors.push(std::move(err));
+                    nodesetOk = false;
+                } else {
+                    Simulator::wrn() << "Warning, " << err.format() << "\n";
+                }
+                break;
+            }
+        }
         // Copy from forces slot 1 to solution vector.
         // solution and the slot-1 force vector both carry an nt-wide bucket.
         solution.upsize(2, (n+1)*nt);
@@ -346,8 +362,12 @@ bool HBCore::evaluate(bool atNodeset, bool noiseModulation, ErrorConsumer& error
     
     bool isOk = true;
 
+    if (!nodesetOk) {
+        isOk = false;
+    }
+    
     // Rebuild NR solver structures
-    if (!nrSolver.rebuild(n*nt, errors)) {
+    if (isOk && !nrSolver.rebuild(n*nt, errors)) {
         errors.push(HbSolverBuildFailed{});
         isOk = false;
     }

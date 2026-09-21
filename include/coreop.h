@@ -77,6 +77,14 @@ SIMPLE_ERRORCLASS(OpSolveNodesetType, "Nodeset must be a string when the operati
 
 SIMPLE_ERRORCLASS(OpNodesetNotFound, "Stored operating point solution given by nodeset not found.");
 
+ERRORCLASS(OpNodesetIncomplete)
+    Id node;
+    OpNodesetIncomplete(Id node) : node(node) {}
+    std::string format() const {
+        return "Stored operating point solution given by nodeset has no value for node '" + std::string(node) + "'.";
+    }
+END_ERRORCLASS(OpNodesetIncomplete);
+
 SIMPLE_ERRORCLASS(OpEvaluationFailed, "Evaluation at given nodeset failed.");
 
 SIMPLE_ERRORCLASS(OpNodesetPreprocessFailed, "Failed to preprocess nodesets.");

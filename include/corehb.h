@@ -114,6 +114,14 @@ SIMPLE_ERRORCLASS(HbForwardTransformFailed, "Failed to compute forward transform
 
 SIMPLE_ERRORCLASS(HbNodesetNotFound, "Nodeset not found.");
 
+ERRORCLASS(HbNodesetIncomplete)
+    Id node;
+    HbNodesetIncomplete(Id node) : node(node) {}
+    std::string format() const {
+        return "Stored harmonic balance solution given by nodeset has no value for node '" + std::string(node) + "'.";
+    }
+END_ERRORCLASS(HbNodesetIncomplete);
+
 SIMPLE_ERRORCLASS(HbVariableDelayUnsupported, "HB solver cannot handle circuits with variable delay.");
 
 SIMPLE_ERRORCLASS(HbBindFailed, "Failed to bind the HB Jacobian.");

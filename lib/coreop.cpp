@@ -422,6 +422,19 @@ bool OperatingPointCore::evaluate(bool atNodeset, ErrorConsumer& errors) {
             errors.push(OpNodesetNotFound{});
             return false;
         }
+        // Unknowns missing from the stored solution are an error with strictforce, otherwise a warning
+        auto& forced = nrSolver.forces(1).unknownForced_;
+        for(decltype(n) u=1; u<=n; u++) {
+            if (!forced[u]) {
+                OpNodesetIncomplete err{circuit.reprNode(u)->name()};
+                if (circuit.simulatorOptions().core().strictforce) {
+                    errors.push(std::move(err));
+                    return false;
+                }
+                Simulator::wrn() << "Warning, " << err.format() << "\n";
+                break;
+            }
+        }
         solution.vector() = values;
     }
 
