@@ -48,6 +48,8 @@ Several analyses can save their computed solution under a name (the `store` para
 
 Because the namespace is shared and keyed by name, the same name can be used by different analyses, but it refers to one slot. Storing under a name that already exists overwrites the previous contents, regardless of which analysis wrote it. Pick distinct names when you need to keep several solutions available at once.
 
+For the operating point analysis and the small-signal analyses that build on it, a solution is stored when the analysis finishes. If the analysis is swept, only the solution at the last sweep point is stored. The nodeset is read when the analysis starts, so all sweep points use the same one. Storing a result therefore never changes the nodeset used by the sweep that produces it.
+
 Each stored solution carries a type tag identifying the analysis family that produced it, and an analysis accepts a stored solution only when the tag matches what it expects:
 
 - Time- and DC-domain analyses (operating point, transient, and the small-signal analyses that build on an operating point) produce and consume `op`-tagged solutions.

@@ -35,7 +35,7 @@ of its own.
 |-----------|------|---------|-------------|
 | `nodeset` | string or list | `""` | Initial guess for the operating point. Can be a stored solution name or explicit node voltages. |
 | `store` | string | `""` | Save the computed operating point under the given name. |
-| `opsolve` | boolean | `1` | Solve the operating point. Set to `0` to linearize at the stored solution named by `nodeset` without solving. `nodeset` must then be a string, and `writeop` and `store` have no effect. |
+| `opsolve` | boolean | `1` | Solve the operating point. Set to `0` to linearize at the stored solution named by `nodeset` without solving. `nodeset` must then be a string. `writeop` writes the evaluation at the stored solution, and `store` has no effect. |
 | `write` | boolean | `1` | Whether to write the incremental analysis results to a file. |
 | `writeop` | boolean | `0` | Additionally write the operating point results to `<analysis>.op.*` output file. |
 | `solver` | string | `""` | Linear solver for this analysis, overriding the `tdsolver` option. See [Linear Solver Selection](cmd-options-solver.md). |

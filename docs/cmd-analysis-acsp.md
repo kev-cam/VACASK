@@ -38,7 +38,7 @@ Port impedances may differ between ports.
 | `ports` | string list | `""` | Alternating list of voltage source and series resistor names defining the ports: `["vsrc1", "rser1", "vsrc2", "rser2", ...]`. |
 | `nodeset` | string or list | `""` | Initial guess for the operating point. See [Operating Point Analysis](cmd-analysis-op.md). |
 | `store` | string | `""` | Save the computed operating point under the given name. See [Operating Point Analysis](cmd-analysis-op.md). |
-| `opsolve` | boolean | `1` | Solve the operating point. Set to `0` to linearize at the stored solution named by `nodeset` without solving. `nodeset` must then be a string, and `writeop` and `store` have no effect. |
+| `opsolve` | boolean | `1` | Solve the operating point. Set to `0` to linearize at the stored solution named by `nodeset` without solving. `nodeset` must then be a string. `writeop` writes the evaluation at the stored solution, and `store` has no effect. |
 | `from` | real | `0` | Start frequency (Hz) for stepped or mode-based sweeps. |
 | `to` | real | `0` | Stop frequency (Hz) for stepped or mode-based sweeps. |
 | `step` | real | `0` | Frequency step size (Hz) for a linear stepped sweep. |

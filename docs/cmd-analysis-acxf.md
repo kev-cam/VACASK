@@ -33,7 +33,7 @@ analysis name acxf [parameters]
 | `out` | string or string vector | `""` | Output node or node pair. A single string specifies a node to ground; a two-element vector specifies a node pair. |
 | `nodeset` | string or list | `""` | Initial guess for the operating point. See [Operating Point Analysis](cmd-analysis-op.md) for syntax. |
 | `store` | string | `""` | Save the computed operating point under the given name. See [Operating Point Analysis](cmd-analysis-op.md). |
-| `opsolve` | boolean | `1` | Solve the operating point. Set to `0` to linearize at the stored solution named by `nodeset` without solving. `nodeset` must then be a string, and `writeop` and `store` have no effect. |
+| `opsolve` | boolean | `1` | Solve the operating point. Set to `0` to linearize at the stored solution named by `nodeset` without solving. `nodeset` must then be a string. `writeop` writes the evaluation at the stored solution, and `store` has no effect. |
 | `from` | real | `0` | Start frequency (Hz). |
 | `to` | real | `0` | Stop frequency (Hz). |
 | `step` | real | `0` | Frequency step size (Hz) for a stepped linear sweep. |

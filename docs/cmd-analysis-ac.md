@@ -37,7 +37,7 @@ AC analysis exposes the operating point parameters and adds sweep and output con
 |-----------|------|---------|-------------|
 | `nodeset` | string or list | `""` | Initial guess for the operating point. Can be a stored solution name or explicit node voltages. See [Operating Point Analysis](cmd-analysis-op.md) for syntax. |
 | `store` | string | `""` | Save the computed operating point under the given name. See [Operating Point Analysis](cmd-analysis-op.md). |
-| `opsolve` | boolean | `1` | Solve the operating point. Set to `0` to linearize at the stored solution named by `nodeset` without solving. `nodeset` must then be a string, and `writeop` and `store` have no effect. |
+| `opsolve` | boolean | `1` | Solve the operating point. Set to `0` to linearize at the stored solution named by `nodeset` without solving. `nodeset` must then be a string. `writeop` writes the evaluation at the stored solution, and `store` has no effect. |
 | `from` | real | `0` | Start frequency (Hz) for stepped or mode-based sweeps. |
 | `to` | real | `0` | Stop frequency (Hz) for stepped or mode-based sweeps. |
 | `step` | real | `0` | Frequency step size (Hz) for a linear stepped sweep. |
