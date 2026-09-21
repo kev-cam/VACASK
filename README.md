@@ -207,7 +207,11 @@ for details.
 This feature is experimental and off by default. Enable it with the
 `CADNIP_PARSERS` CMake option (`-DCADNIP_PARSERS=ON`). The parsers are written in
 Rust, so a Rust toolchain (`cargo`) must be on `PATH`; the parser crate is
-fetched automatically during configuration. When built with the option off (the
+fetched automatically during configuration. When using `CADNIP_PARSERS`,
+[Corrosion](https://github.com/corrosion-rs/corrosion) is also needed.
+Corrosion can be automatically fetched (default), via system package (`-DCORROSION_USE_SYSTEM`),
+or a local directory (`-DCORROSION_DIR=/path`). NOTE: `CORROSION_USE_SYSTEM` and `CORROSION_DIR`
+are mutually exclusive. When built with the option off (the
 default), no Rust toolchain is needed and including a foreign-format file reports
 an error asking you to rebuild with it enabled.
 
