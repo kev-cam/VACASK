@@ -10,7 +10,7 @@ model isource isource
 // Modulated flicker noise - same device/parameters as test_trannoise4.sim,
 // but computed directly with hbnoise instead of transient noise + manual
 // sideband folding.
-r1 (1 0) resistor r=1k pf=1e-20 ef=1
+r1 (1 0) resistor r=1k pf=1e-20 ef=1.5
 i1 (0 1) isource type="sine" sinedc=0.0 ampl=ampl freq=fmod
 
 // Noiseless twin of r1/i1 - same large-signal drive, no device noise -

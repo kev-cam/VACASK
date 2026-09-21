@@ -47,7 +47,10 @@ analysis name hbnoise [parameters]
 5. Contributions are accumulated per instance and summed into the total output noise.
 6. Steps 3-5 are repeated across the offset frequency sweep.
 
-An offset frequency that is an exact multiple of the pump frequency puts one spur at zero frequency, where the 1/f shape of a flicker source is undefined. That spur's flicker contribution is left out at such a point and a warning names the offset frequency. Choose a sweep grid that does not land on pump harmonics if the flicker skirt around a harmonic matters.
+If the sum of the offset frequency and a spur frequency is zero the 1/f shape of 
+a flicker source is undefined. That spur's flicker contribution is left out at 
+such a point and a warning names the offset frequency. Choose a sweep grid that 
+does not land on pump harmonics if the flicker skirt around a harmonic matters.
 
 ## Parameters
 

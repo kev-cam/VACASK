@@ -165,7 +165,10 @@ public:
     // Bind circuit to jacColoc and evaluate at current solution
     bool evaluateAtNodeset(bool noiseModulation, ErrorConsumer& errors);
     bool getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, const Spurs& prunedSpurs, Vector<Complex>* noiseModulationSpec=nullptr);
-
+    // Flicker exponents of the modulated noise sources, one per modulation
+    // slot, filled by evaluateAtNodeset(true, ...)
+    const Vector<double>& noiseExponents() const { return noiseExponent; };
+    
     void dump(std::ostream& os) const;
 
     static Id truncateBox;
@@ -178,10 +181,6 @@ public:
     static bool test();
 
     Spurs& spurs() { return spurs_; };
-
-    // Flicker exponents of the modulated noise sources, one per modulation
-    // slot, filled by evaluateAtNodeset(true, ...)
-    const Vector<double>& noiseExponents() const { return noiseExponent; };
 
     static Id solutionTag;
 
