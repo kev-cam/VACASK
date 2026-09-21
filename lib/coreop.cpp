@@ -167,6 +167,11 @@ std::tuple<bool, bool> OperatingPointCore::preMapping(ErrorConsumer& errors) {
     // No need to check unknowns part because diagonal entries are
     // always allocated by Circuit.
     auto& nsParam = params.nodeset;
+    if (!params.solve && nsParam.type()!=Value::Type::String) {
+        // Evaluating at a stored solution requires its name
+        errors.push(OpSolveNodesetType{});
+        return std::make_tuple(false, false);
+    }
     if (nsParam.type()==Value::Type::String) {
         // It is a string.
         // Will retrieve DC solution and set it as nodeset.
@@ -263,6 +268,10 @@ bool OperatingPointCore::rebuild(ErrorConsumer& errors) {
             // Get solution from repository
             auto solPtr = circuit.storedSolution(solutionName);
             if (!solPtr || solPtr->typeTag()!=solutionTag) {
+                if (!params.solve) {
+                    errors.push(OpNodesetNotFound{});
+                    return false;
+                }
                 // No nodesets
                 nrSolver.forces(1).clear();
                 Simulator::wrn() << "Warning, solution '"+solutionName+"' not found. No user nodesets applied.\n";
@@ -276,6 +285,10 @@ bool OperatingPointCore::rebuild(ErrorConsumer& errors) {
                 }
             }
         } else {
+            if (!params.solve) {
+                errors.push(OpNodesetNotFound{});
+                return false;
+            }
             // No nodesets, clear slot
             nrSolver.forces(1).clear();
         }
@@ -389,6 +402,38 @@ std::tuple<bool, bool> OperatingPointCore::runSolver(bool continuePrevious, Erro
     auto converged = nrSolver.run(runInContinueMode, errors);
     auto abort = nrSolver.checkFlags(OpNRSolver::Flags::Abort);
     return std::make_tuple(converged, abort);
+}
+
+// Called after rebuild()
+bool OperatingPointCore::evaluate(bool atNodeset, ErrorConsumer& errors) {
+    // Set time to 0
+    nrSolver.evalSetup().time = 0.0;
+
+    // Make sure repositories are large enough
+    auto n = circuit.unknownCount();
+    solution.upsize(2, n+1);
+    states.upsize(2, circuit.statesCount());
+
+    // If evaluating at nodeset, copy nodeset to solution
+    if (atNodeset) {
+        // Copy from forces slot 1 to solution vector
+        auto& values = nrSolver.forces(1).unknownValue_;
+        if (values.size()!=n+1) {
+            errors.push(OpNodesetNotFound{});
+            return false;
+        }
+        solution.vector() = values;
+    }
+
+    // Disable forces
+    nrSolver.enableForces(0, false);
+    nrSolver.enableForces(1, false);
+
+    if (!nrSolver.evaluate(errors)) {
+        errors.push(OpEvaluationFailed{});
+        return false;
+    }
+    return true;
 }
 
 Int OperatingPointCore::iterations() const {

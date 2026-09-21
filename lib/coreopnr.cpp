@@ -646,7 +646,7 @@ void OpNRSolver::setNodesetAndIcFlags(bool continuePrevious) {
     // Nodesets are enabled in iterations 1..op_nsiter 
     // if continuePrevious is false. 
     // They are also enabled if slot 1 (user nodesets) is active. 
-    evalSetup_.nodesetEnabled = (iteration<=nsiter) && (continuePrevious==false);
+    evalSetup_.nodesetEnabled = !evaluateOnly_ && (iteration<=nsiter) && (continuePrevious==false);
     
     // Set icEnabled flag in esSystem
     // Slot 2 holds permanent forces for computing initial conditions
@@ -754,6 +754,44 @@ std::tuple<bool, bool> OpNRSolver::buildSystem(bool continuePrevious, ErrorConsu
 
     // Prevent convergence if limiting was applied
     return std::make_tuple(true, evalSetup_.limitingApplied); 
+}
+
+bool OpNRSolver::evaluate(ErrorConsumer& errors) {
+    jac.setAccounting(acct);
+
+    if (!initialize(false, errors)) {
+        return false;
+    }
+
+    // One pass of the run() loop body at the current solution, no update
+    iteration = 1;
+    highPrecision = true;
+    jac.zero();
+    solution.zeroFuture();
+    zero(delta);
+    if (!preIteration(false)) {
+        return false;
+    }
+
+    // Limiting is off (as in small-signal analyses), models must not see nodesets
+    evaluateOnly_ = true;
+    evalSetup_.enableLimiting = false;
+    auto [buildOk, _] = buildSystem(false, errors);
+    evalSetup_.enableLimiting = true;
+    evaluateOnly_ = false;
+    if (!buildOk) {
+        errors.push(NrEvalLoadError{});
+        return false;
+    }
+
+    if (settings.matrixCheck && !jac.isFinite(true, true, errors)) {
+        return false;
+    }
+
+    // Current states belong to the current solution
+    states.rotate();
+
+    return true;
 }
 
 bool OpNRSolver::loadForces(bool loadJacobian) {

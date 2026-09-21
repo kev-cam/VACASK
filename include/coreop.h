@@ -33,6 +33,10 @@ namespace NAMESPACE {
 // with 2 or 3 values
 // - single node nodesets (...; "<node>"; value; ...)
 // - differential nodeset (...; "<node1>"; "<node2>"; value; ...)
+//
+// If solve is 0 the circuit is not solved by the analyses that use this core. 
+// They call evaluate() instead, which evaluates the circuit at the stored solution 
+// named by nodeset (must be a string) so they can linearize at that point. 
 
 typedef struct OperatingPointParameters {
     Value nodeset {Value("")}; // String specifying stored solution slot to read or
@@ -40,6 +44,8 @@ typedef struct OperatingPointParameters {
     String store {""};         // Name of stored solution slot to write
     Int write {1};             // Write the results to a file
     Id solver {};              // Linear solver to use, overrides tdsolver option
+    Int solve {1};             // If true, solves the circuit, if false evaluates at the stored solution 
+                               // given by nodeset. Not exposed to user. 
 
     OperatingPointParameters();
 } OperatingPointParameters;
@@ -66,6 +72,12 @@ END_ERRORCLASS(OpHomotopyFailed);
 SIMPLE_ERRORCLASS(OpNoAlgorithm, "No operating point algorithm tried.");
 
 SIMPLE_ERRORCLASS(OpNodesetType, "Nodeset must be a list or a string.");
+
+SIMPLE_ERRORCLASS(OpSolveNodesetType, "Nodeset must be a string when the operating point is not solved.");
+
+SIMPLE_ERRORCLASS(OpNodesetNotFound, "Stored operating point solution given by nodeset not found.");
+
+SIMPLE_ERRORCLASS(OpEvaluationFailed, "Evaluation at given nodeset failed.");
 
 SIMPLE_ERRORCLASS(OpNodesetPreprocessFailed, "Failed to preprocess nodesets.");
 
@@ -116,6 +128,11 @@ public:
     virtual bool restoreState(size_t ndx);
     
     virtual std::tuple<bool, bool> runSolver(bool continuePrevious, ErrorConsumer& errors);
+
+    // Evaluate at current solution, or at the stored solution given by nodeset if atNodeset is true
+    // Does not factor the Jacobian, called after rebuild()
+    bool evaluate(bool atNodeset, ErrorConsumer& errors);
+
     virtual Int iterations() const;
     virtual Int iterationLimit(bool continuePrevious) const;
 

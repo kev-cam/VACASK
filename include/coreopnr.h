@@ -188,6 +188,9 @@ public:
     virtual std::tuple<bool, bool> checkResidual() override;
     virtual std::tuple<bool, bool> checkDelta() override;
 
+    // Evaluate at current solution without iterating, does not factor the Jacobian
+    bool evaluate(ErrorConsumer& errors);
+
     // Reset solution maxima and residual maxima
     void resetMaxima();
 
@@ -286,6 +289,9 @@ protected:
     double maxNormDelta;
     Node* maxDeltaNode;
     bool deltaWithinTol;
+
+    // Set while evaluate() runs, disables nodeset flag for models
+    bool evaluateOnly_ {false};
 };
 
 }
