@@ -433,6 +433,11 @@ bool OperatingPointCore::evaluate(bool atNodeset, ErrorConsumer& errors) {
         errors.push(OpEvaluationFailed{});
         return false;
     }
+
+    // Write results at the evaluation point
+    if (outfile && params.write) {
+        outfile->addPoint();
+    }
     return true;
 }
 

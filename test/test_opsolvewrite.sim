@@ -1,0 +1,113 @@
+Operating point output (writeop) of small-signal analyses linearized at a stored solution (opsolve=0)
+
+ground 0
+
+load "resistor.osdi"
+load "capacitor.osdi"
+load "simdio.va"
+
+model resistor resistor noisy=1
+model capacitor capacitor
+model vsource vsource
+model d simdio is=1e-12 n=2 kf=1e-15 af=1.2 ef=1.5 debug=0
+
+v2 (2 0) vsource dc=0.8 mag=1
+r2 (2 3) resistor r=1k
+d2 (3 0) d
+c2 (3 0) capacitor c=1u
+
+control
+  abort always
+
+  options temp=27
+  options rawfile="binary" reltol=1e-14 vntol=1e-12 op_debug=0 smsig_debug=0
+
+  // Operating point output holds node voltages, branch currents, and an instance output variable
+  save opdefault p(d2, gd)
+
+  // Reference results, operating point is solved at 0.8V
+  analysis ac1 ac from=1 to=10 mode="dec" points=1 writeop=1 store="sol"
+  analysis dcinc1 dcinc writeop=1
+
+  // Move the source, the stored solution is no longer a solution of the circuit
+  alter instance("v2") dc=0.4
+
+  // Evaluate at the stored solution, the operating point output must match the reference
+  analysis ac2 ac from=1 to=10 mode="dec" points=1 nodeset="sol" opsolve=0 writeop=1
+  analysis dcinc2 dcinc nodeset="sol" opsolve=0 writeop=1
+
+  // Solve at 0.4V, the operating point output must differ from the opsolve=0 one
+  analysis ac3 ac from=1 to=10 mode="dec" points=1 writeop=1
+
+  // opsolve changes between sweep points, the operating point output must have one point
+  // per sweep point, solved at 0.4V for sv=1 and evaluated at the stored solution for sv=0
+  var sv=1
+  sweep sv variable="sv" values=[1, 0, 1, 0]
+    analysis ac4 ac from=1 to=10 mode="dec" points=1 nodeset="sol" opsolve=sv writeop=1
+
+  postprocess(PYTHON, "runme.py")
+endc
+
+embed "runme.py" <<<FILE
+from rawfile import rawread
+from runtest import *
+import numpy as np
+import sys
+
+tests = []
+
+def load(name):
+    return rawread(name).get()
+
+# Point i2 of res must match point i1 of ref in all variables of ref
+def check(tests, what, ref, i1, res, i2, tol):
+    a = load(ref)
+    b = load(res)
+    status = True
+    for n in a.names:
+        if n not in b.names:
+            print(res, "is missing", n)
+            status = False
+            continue
+        # Missing points would make the comparison of empty slices succeed
+        if len(a[n][i1:i1+1])!=1 or len(b[n][i2:i2+1])!=1:
+            print(res, "or", ref, "is missing a point in", n)
+            status = False
+            continue
+        if not (relDiff(a[n][i1:i1+1], b[n][i2:i2+1], 1e-30) < tol).all():
+            print(res, "point", i2, "differs from", ref, "point", i1, "in", n)
+            status = False
+    print(what, status)
+    tests.append(status)
+
+# An empty file would pass any comparison, so check the number of points
+def count(tests, what, name, expected):
+    r = load(name)
+    n = len(r[r.names[0]])
+    status = (n==expected)
+    print(what, n, "points", status)
+    tests.append(status)
+
+# opsolve=0 output is the stored solution and the instance output variable evaluated at it
+count(tests, "ac opsolve=0 points", 'ac2.op.raw', 1)
+check(tests, "ac opsolve=0 output", 'ac1.op.raw', 0, 'ac2.op.raw', 0, 1e-9)
+count(tests, "dcinc opsolve=0 points", 'dcinc2.op.raw', 1)
+check(tests, "dcinc opsolve=0 output", 'dcinc1.op.raw', 0, 'dcinc2.op.raw', 0, 1e-9)
+
+# Solving at 0.4V must give a different output, otherwise the test above proves nothing
+a = load('ac2.op.raw')
+b = load('ac3.op.raw')
+status = (relDiff(a["3"], b["3"], 1e-30) > 1e-2).all()
+print("opsolve=0 differs from opsolve=1", status)
+tests.append(status)
+
+# Sweep with changing opsolve, points 0 and 2 are solved, points 1 and 3 are evaluated
+count(tests, "sweep points", 'ac4.op.raw', 4)
+check(tests, "sweep point 0 (solved)", 'ac3.op.raw', 0, 'ac4.op.raw', 0, 1e-6)
+check(tests, "sweep point 1 (evaluated)", 'ac1.op.raw', 0, 'ac4.op.raw', 1, 1e-9)
+check(tests, "sweep point 2 (solved)", 'ac3.op.raw', 0, 'ac4.op.raw', 2, 1e-6)
+check(tests, "sweep point 3 (evaluated)", 'ac1.op.raw', 0, 'ac4.op.raw', 3, 1e-9)
+
+if isTest():
+    sys.exit(not all(tests))
+>>>FILE
