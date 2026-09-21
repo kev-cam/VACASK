@@ -1,0 +1,125 @@
+Unmodulated HB noise equals small-signal noise (LTI equivalence)
+
+ground 0
+
+load "rcnoise.va"
+
+model resistor res
+model capacitor cap
+model isource isource
+
+// Noisy resistor with white, shot, and bias-dependent flicker noise, in parallel
+// with a capacitor so the gain depends on frequency. The bias is DC only (the
+// sine has zero amplitude), so the circuit is time invariant and hbnoise must
+// give the same result as plain small-signal noise at the same physical
+// frequency. $mfactor checks that the modulation function carries the same
+// scaling as the noise density used by noise analysis.
+r1 (1 0) resistor r=1k pw0=1e-18 pw1=3 pf=1e-9 ef=1.2 $mfactor=3
+c1 (1 0) capacitor c=100n $mfactor=2
+i1 (0 1) isource type="sine" sinedc=1m ampl=0 freq=1k
+
+control
+  abort always
+
+  options rawfile="binary" strictsave=1
+
+  save full
+
+  // Output and input at DC spur, physical frequency equals offset frequency
+  analysis hbn0 hbnoise freq=[1k] nharm=3 in="i1" out="1" values=[10, 100, 300, 2500]
+  analysis noise0 noise in="i1" out="1" values=[10, 100, 300, 2500]
+
+  // Output and input at the +1 spur, physical frequency is offset + 1000
+  analysis hbnp hbnoise freq=[1k] nharm=3 in="i1" out="1" outspur=[1] inspur=[1] values=[10, 100, 300, 2500]
+  analysis noisep noise in="i1" out="1" values=[1010, 1100, 1300, 3500]
+
+  // Output and input at the -1 spur, physical frequency is |offset - 1000|
+  analysis hbnm hbnoise freq=[1k] nharm=3 in="i1" out="1" outspur=[-1] inspur=[-1] values=[10, 100, 300, 2500]
+  analysis noisem noise in="i1" out="1" values=[990, 900, 700, 1500]
+
+  // Solve HB with a nodeset from a solution at a different bias (2mA). The bias
+  // dependent noise sources must be evaluated at the converged 1mA solution,
+  // not at the nodeset, so the result must equal hbn0.
+  alter instance("i1") sinedc=2m
+  elaborate changes
+  analysis hbother hb freq=[1k] nharm=3 store="hbother"
+  alter instance("i1") sinedc=1m
+  elaborate changes
+  analysis hbnn hbnoise freq=[1k] nharm=3 in="i1" out="1" nodeset="hbother" values=[10, 100, 300, 2500]
+
+  postprocess(PYTHON, "runme.py")
+endc
+
+embed "rcnoise.va" <<<FILE
+`include "constants.vams"
+`include "disciplines.vams"
+
+module res(A,B);
+    // Resistor with constant white, shot, and flicker noise
+
+    inout A, B;
+    electrical A,B;
+
+    branch (A,B) br;
+
+    (*desc= "Resistance", type="instance", units = "Ohm"*) parameter real r = 1 from [0:inf];
+    (*desc= "White noise factor (constant)", type="instance", units = ""*)  parameter real pw0 = 0;
+    (*desc= "White noise factor (current)", type="instance", units = ""*)  parameter real pw1 = 0;
+    (*desc= "Flicker noise power", type="instance", units = ""*)  parameter real pf = 0;
+    (*desc= "Flicker noise exponent", type="instance", units = ""*)  parameter real ef = 1.0;
+    (*desc= "Current", units ="A" *) real i;
+
+    analog begin
+        I(br) <+ V(br)/r;
+        i = V(br) / r;
+        I(br) <+ white_noise(pw0, "white_const");
+        I(br) <+ white_noise(pw1*2*`P_Q*i, "white_shot");
+        I(br) <+ flicker_noise((i>=0?1:-1)*pf*pow(abs(i),2), ef, "flicker");
+    end
+endmodule
+
+module cap(A,B);
+    // Linear capacitor
+
+    inout A, B;
+    electrical A,B;
+
+    (*desc= "Capacitance", type="instance", units = "F"*) parameter real c = 1p from [0:inf];
+
+    analog begin
+        I(A,B) <+ ddt(c*V(A,B));
+    end
+endmodule
+
+>>>FILE
+
+embed "runme.py" <<<FILE
+from rawfile import rawread
+from vacaskpp import *
+from runtest import *
+import numpy as np
+import sys
+
+tests=[]
+
+# Quantities to compare, including the contributions of the individual noise sources
+keys = ['onoise', 'gain', 'n(r1)', 'n(r1,white_const)', 'n(r1,white_shot)', 'n(r1,flicker)']
+
+# Compare the keys of an hbnoise result to a noise result, append pass/fail of each to tests
+def compare(label, hbName, refName, keys, tests):
+    hb = rawread(hbName+'.raw').get()
+    ref = rawread(refName+'.raw').get()
+    for k in keys:
+        err = np.abs(hb[k].real/ref[k].real-1).max()
+        status = err<1e-6
+        print(label, k, "max rel err =", err, status)
+        tests.append(status)
+
+compare('dc spur', 'hbn0', 'noise0', keys, tests)
+compare('+1 spur', 'hbnp', 'noisep', keys, tests)
+compare('-1 spur', 'hbnm', 'noisem', keys, tests)
+compare('nodeset', 'hbnn', 'noise0', keys, tests)
+
+if isTest():
+    sys.exit(not all(tests))
+>>>FILE

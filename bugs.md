@@ -18,6 +18,8 @@ the Debug binary built before the last "Cleanup" commit; ctest was not run.
      `test_hbnoise1` only uses `hbsolve=0`.
    - Also corrupts `solution` for the next point of a sweep (docs/cmd-sweep.md sweeps hbnoise).
    - Fix: skip the copy from `forces(1)` when the solution was just solved; keep it for `hbsolve=0`.
+   - Regression test: the nodeset case in test/test_hbnoise3.sim (a stored 2 mA solution used
+     as nodeset with `hbsolve=1` must give the 1 mA result).
 
 ## Minor
 
