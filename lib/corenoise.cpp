@@ -525,6 +525,8 @@ CoreCoroutine NoiseCore::coroutine(bool continuePrevious, ErrorConsumer& errors)
         // For a current source $mfactor actually increases the excitation $mfactor times
         // so the obtained gain is $mfactor times greater compared to the one obtained
         // for $mfactor=1.
+        // Effectively this means the gain is measured from the source's mag value to
+        // the specified output.
         auto tf = inputSource->scaledUnityExcitation() * (acSolution[e1] - acSolution[e2]);
         powerGain = std::abs(tf);
         powerGain *= powerGain;
