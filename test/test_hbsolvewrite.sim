@@ -1,0 +1,133 @@
+HB output (writehb) of small-signal analyses linearized at a stored HB solution (hbsolve=0)
+
+ground 0
+
+load "resistor.osdi"
+load "nl.va"
+
+model resistor resistor noisy=1
+model vsource vsource
+model nl nl
+
+// 1kHz large signal, series resistor is the noise source for hbnoise
+v1 (1 0) vsource dc=0 type="sine" sinedc=0.0 ampl=1 freq=1k tdphase=90 spur={0.0} smag=[1]
+r1 (1 2) resistor r=0.05
+nl1 (2 0) nl a=3 c=5
+
+control
+  abort always
+
+  options reltol=1e-12 rawfile="binary"
+
+  // Reference, HB is solved at ampl=1
+  analysis hb1 hb freq=[1k] nharm=10 store="hbsol"
+
+  // Change the drive, the stored solution is no longer a solution of the circuit
+  alter instance("v1") ampl=2
+
+  // Evaluate at the stored solution, the HB output must match the reference
+  analysis hbac2 hbac nodeset="hbsol" hbsolve=0 outspur={} values=[10.0] writehb=1
+  analysis hbnoise2 hbnoise nodeset="hbsol" hbsolve=0 in="v1" out="2" from=10 to=1k mode="dec" points=2 writehb=1
+
+  // Solve at ampl=2, the HB output must differ from the hbsolve=0 one
+  analysis hbac3 hbac freq=[1k] nharm=10 outspur={} values=[10.0] writehb=1
+
+  // hbsolve changes between sweep points, the HB output must have one set of points
+  // per sweep point, solved at ampl=2 for sv=1 and evaluated at the stored solution for sv=0
+  var sv=1
+  sweep sv variable="sv" values=[1, 0, 1, 0]
+    analysis hbac4 hbac freq=[1k] nharm=10 nodeset="hbsol" hbsolve=sv outspur={} values=[10.0] writehb=1
+
+  postprocess(PYTHON, "runme.py")
+endc
+
+embed "nl.va" <<<FILE
+`include "constants.vams"
+`include "disciplines.vams"
+
+module nl(n1,n2);
+    // Terminals and internal nodes
+    inout n1, n2;
+    electrical n1,n2;
+
+    (* desc = "Resistive a", type = "instance" *) parameter real a = 1;
+    (* desc = "Reactive c", type = "instance" *) parameter real c = 1;
+
+    analog begin
+        I(n1,n2) <+ pow(a*V(n1,n2), 2) + ddt(pow(c*V(n1,n2), 3));
+    end
+endmodule
+>>>FILE
+
+embed "runme.py" <<<FILE
+from rawfile import rawread
+from runtest import *
+import numpy as np
+import sys
+
+tests = []
+
+# Number of points (harmonics) written for one HB solution, nharm=10 gives DC + 10 harmonics
+nh = 11
+
+def load(name):
+    return rawread(name).get()
+
+# Block of count points starting at i2 of res must match the block starting at i1 of ref in all variables of ref
+# floor is the smallest value that counts as nonzero
+def check(tests, what, ref, i1, res, i2, count, floor, tol):
+    a = load(ref)
+    b = load(res)
+    status = True
+    for n in a.names:
+        if n not in b.names:
+            print(res, "is missing", n)
+            status = False
+            continue
+        x = a[n][i1:i1+count]
+        y = b[n][i2:i2+count]
+        # Missing points would make the comparison of empty slices succeed
+        if len(x)!=count or len(y)!=count:
+            print(res, "or", ref, "is missing points in", n)
+            status = False
+            continue
+        if not (relDiff(x, y, floor) < tol).all():
+            print(res, "points", i2, "differ from", ref, "points", i1, "in", n)
+            status = False
+    print(what, status)
+    tests.append(status)
+
+# An empty file would pass any comparison, so check the number of points
+def count(tests, what, name, expected):
+    r = load(name)
+    n = len(r[r.names[0]])
+    status = (n==expected)
+    print(what, n, "points", status)
+    tests.append(status)
+
+# hbsolve=0 output is the stored solution
+count(tests, "hbac hbsolve=0 points", 'hbac2.hb.raw', nh)
+check(tests, "hbac hbsolve=0 output", 'hb1.raw', 0, 'hbac2.hb.raw', 0, nh, 1e-30, 1e-9)
+count(tests, "hbnoise hbsolve=0 points", 'hbnoise2.hb.raw', nh)
+check(tests, "hbnoise hbsolve=0 output", 'hb1.raw', 0, 'hbnoise2.hb.raw', 0, nh, 1e-30, 1e-9)
+
+# Solving at ampl=2 must give a different output, otherwise the test above proves nothing
+a = load('hbac2.hb.raw')
+b = load('hbac3.hb.raw')
+status = False
+for n in a.names:
+    if n in b.names and (relDiff(a[n], b[n], 1e-9) > 1e-2).any():
+        status = True
+print("hbsolve=0 differs from hbsolve=1", status)
+tests.append(status)
+
+# Sweep with changing hbsolve, blocks 0 and 2 are solved, blocks 1 and 3 are evaluated
+count(tests, "sweep points", 'hbac4.hb.raw', 4*nh)
+check(tests, "sweep block 0 (solved)", 'hbac3.hb.raw', 0, 'hbac4.hb.raw', 0, nh, 1e-6, 1e-6)
+check(tests, "sweep block 1 (evaluated)", 'hb1.raw', 0, 'hbac4.hb.raw', nh, nh, 1e-30, 1e-9)
+check(tests, "sweep block 2 (solved)", 'hbac3.hb.raw', 0, 'hbac4.hb.raw', 2*nh, nh, 1e-6, 1e-6)
+check(tests, "sweep block 3 (evaluated)", 'hb1.raw', 0, 'hbac4.hb.raw', 3*nh, nh, 1e-30, 1e-9)
+
+if isTest():
+    sys.exit(not all(tests))
+>>>FILE

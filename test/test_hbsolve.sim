@@ -1,0 +1,107 @@
+HB small-signal analyses linearized at a stored HB solution (hbsolve=0)
+
+ground 0
+
+load "resistor.osdi"
+load "nl.va"
+
+model resistor resistor noisy=1
+model vsource vsource
+model nl nl
+
+// 1kHz large signal, series resistor is the noise source for hbnoise
+v1 (1 0) vsource dc=0 type="sine" sinedc=0.0 ampl=1 freq=1k tdphase=90 spur={0.0} smag=[1]
+r1 (1 2) resistor r=0.05
+nl1 (2 0) nl a=3 c=5
+
+control
+  abort always
+
+  options reltol=1e-12 rawfile="binary"
+
+  // Reference results, HB is solved at ampl=1
+  analysis hb1 hb freq=[1k] nharm=10 store="hbsol"
+  analysis hbac1 hbac freq=[1k] nharm=10 outspur={} values=[10.0]
+  analysis hbnoise1 hbnoise freq=[1k] nharm=10 in="v1" out="2" from=10 to=1k mode="dec" points=2
+
+  // Change the drive, the stored solution is no longer a solution of the circuit
+  alter instance("v1") ampl=2
+
+  // Linearize at the stored solution, results must match the reference
+  analysis hbac2 hbac nodeset="hbsol" hbsolve=0 outspur={} values=[10.0]
+  analysis hbnoise2 hbnoise nodeset="hbsol" hbsolve=0 in="v1" out="2" from=10 to=1k mode="dec" points=2
+
+  // Solve at ampl=2 (hbsolve=1 is the default), results must differ from the hbsolve=0 ones
+  analysis hbac3 hbac freq=[1k] nharm=10 outspur={} values=[10.0]
+  analysis hbnoise3 hbnoise freq=[1k] nharm=10 in="v1" out="2" from=10 to=1k mode="dec" points=2
+
+  postprocess(PYTHON, "runme.py")
+endc
+
+embed "nl.va" <<<FILE
+`include "constants.vams"
+`include "disciplines.vams"
+
+module nl(n1,n2);
+    // Terminals and internal nodes
+    inout n1, n2;
+    electrical n1,n2;
+
+    (* desc = "Resistive a", type = "instance" *) parameter real a = 1;
+    (* desc = "Reactive c", type = "instance" *) parameter real c = 1;
+
+    analog begin
+        I(n1,n2) <+ pow(a*V(n1,n2), 2) + ddt(pow(c*V(n1,n2), 3));
+    end
+endmodule
+>>>FILE
+
+embed "runme.py" <<<FILE
+from rawfile import rawread
+from runtest import *
+import numpy as np
+import sys
+
+tests = []
+
+# floor is the smallest value that counts as nonzero, it depends on the scale of the results
+def compare(tests, ref, name1, name2, floor):
+    a = rawread(name1).get()
+    b = rawread(name2).get()
+    status = True
+    for n in a.names:
+        if n not in b.names:
+            print(name2, "is missing", n)
+            status = False
+            continue
+        # Missing points would make the comparison of empty slices succeed
+        if len(a[n])==0 or len(a[n])!=len(b[n]):
+            print(name2, "has", len(b[n]), "points, expected", len(a[n]), "in", n)
+            status = False
+            continue
+        if not (relDiff(a[n], b[n], floor) < 1e-9).all():
+            print(name2, "differs from", name1, "in", n)
+            status = False
+    print(ref, status)
+    tests.append(status)
+
+compare(tests, "hbac", 'hbac1.raw', 'hbac2.raw', 1e-12)
+compare(tests, "hbnoise", 'hbnoise1.raw', 'hbnoise2.raw', 1e-30)
+
+# Solving at ampl=2 must give a different result, otherwise the test above proves nothing
+def differ(tests, ref, name1, name2, floor):
+    a = rawread(name1).get()
+    b = rawread(name2).get()
+    status = False
+    for n in a.names:
+        if n in b.names and (relDiff(a[n], b[n], floor) > 1e-2).any():
+            status = True
+    print(ref, "hbsolve=0 differs from hbsolve=1", status)
+    tests.append(status)
+
+differ(tests, "hbac", 'hbac2.raw', 'hbac3.raw', 1e-12)
+differ(tests, "hbnoise", 'hbnoise2.raw', 'hbnoise3.raw', 1e-30)
+
+if isTest():
+    sys.exit(not all(tests))
+>>>FILE

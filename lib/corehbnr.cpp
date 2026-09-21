@@ -344,25 +344,29 @@ bool HBNRSolver::postIteration(bool continuePrevious) {
 bool HBNRSolver::postRun(bool continuePrevious) {
     if (converged) {
         // If converged, convert solution from TD to FD, store as complex spectrum
-        auto n = circuit.unknownCount();
-        auto nf = spurs_.spectrum().size();
-        auto nt = timepoints.size();
-        solutionFD.resize(n*nf); // no bucket
-        
-        // Data (solution is bucketed: unknown i (0-based here) lives at (i+1)*nt;
-        // solutionFD has no bucket)
-        for(decltype(n) i=0; i<n; i++) {
-            auto srcOrigin = (i+1)*nt;
-            auto destOrigin = i*nf;
-            auto& data = solution.vector();
-            solutionFD[destOrigin] = data[srcOrigin];
-            for(decltype(nf) k=1; k<nf; k++) {
-                auto base = srcOrigin + 1 + (k-1)*2;
-                solutionFD[destOrigin+k] = Complex(data[base], data[base+1]);
-            }
-        }
+        updateSolutionFD();
     }
     return true;
+}
+
+void HBNRSolver::updateSolutionFD() {
+    auto n = circuit.unknownCount();
+    auto nf = spurs_.spectrum().size();
+    auto nt = timepoints.size();
+    solutionFD.resize(n*nf); // no bucket
+
+    // Data (solution is bucketed: unknown i (0-based here) lives at (i+1)*nt;
+    // solutionFD has no bucket)
+    for(decltype(n) i=0; i<n; i++) {
+        auto srcOrigin = (i+1)*nt;
+        auto destOrigin = i*nf;
+        auto& data = solution.vector();
+        solutionFD[destOrigin] = data[srcOrigin];
+        for(decltype(nf) k=1; k<nf; k++) {
+            auto base = srcOrigin + 1 + (k-1)*2;
+            solutionFD[destOrigin+k] = Complex(data[base], data[base+1]);
+        }
+    }
 }
 
 bool HBNRSolver::evalAndLoadWrapper(EvalSetup& evalSetup, LoadSetup& loadSetup, ErrorConsumer& errors) {

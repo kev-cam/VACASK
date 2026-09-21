@@ -279,6 +279,27 @@ bool HBCore::buildGrid(ErrorConsumer& errors) {
     return true;
 }
 
+void HBCore::writeOutputPoints() {
+    auto n = circuit.unknownCount();
+    auto nf = spurs_.spectrum().size();
+
+    // Collect results for one frequency, need a slot for ground
+    outputPhasors.upsize(1, n+1);
+    auto outvec = outputPhasors.data();
+    // Set ground unknown to zero
+    outvec[0] = 0.0;
+    // Go through frequencies
+    VectorView outvecView(outvec, 1, n, 1);
+    for(decltype(nf) k=0; k<nf; k++) {
+        outputFreq = spurs_.spectrum()[k];
+        // Fill outvec entries with column k of solutionFD (n x nf, row-major)
+        VectorView solutionFDColView(solutionFD.data(), k, n, nf);
+        outvecView = solutionFDColView;
+        // Dump values at current frequency to output
+        outfile->addPoint();
+    }
+}
+
 // Called after build
 bool HBCore::evaluate(bool atNodeset, bool noiseModulation, ErrorConsumer& errors) {
 
@@ -341,6 +362,12 @@ bool HBCore::evaluate(bool atNodeset, bool noiseModulation, ErrorConsumer& error
     if (isOk && !nrSolver.evaluate(true, errors)) {
         errors.push(HbEvaluationFailed{});
         isOk = false;
+    }
+
+    // Evaluating instead of solving, write results at the stored solution
+    if (isOk && atNodeset && outfile && params.write) {
+        nrSolver.updateSolutionFD();
+        writeOutputPoints();
     }
 
     // Remove noise modulation founction pointer from load setup
@@ -815,7 +842,6 @@ CoreCoroutine HBCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
     auto debug = options.hb_debug;
     auto n = circuit.unknownCount(); 
     auto nb = timepoints.size();
-    auto nf = spurs_.spectrum().size();
 
     // Make sure structures are large enough (solution carries an nb-wide bucket)
     solution.upsize(2, (n+1)*nb);
@@ -888,23 +914,9 @@ CoreCoroutine HBCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
             // No algorithm tried
             errors.push(HbNoAlgorithm{});
         } else if (converged_) {
-            // Tried and converged, fill solutionFD and outvec, write results
+            // Tried and converged, write results
             if (outfile && params.write) {
-                // Collect results for one frequency, need a slot for ground
-                outputPhasors.upsize(1, n+1);
-                auto outvec = outputPhasors.data();
-                // Set ground unknown to zero
-                outvec[0] = 0.0;
-                // Go through frequencies
-                VectorView outvecView(outvec, 1, n, 1);
-                for(decltype(nf) k=0; k<nf; k++) {
-                    outputFreq = spurs_.spectrum()[k];
-                    // Fill outvec entries with column k of solutionFD (n x nf, row-major)
-                    VectorView solutionFDColView(solutionFD.data(), k, n, nf);
-                    outvecView = solutionFDColView;
-                    // Dump values at current frequency to output
-                    outfile->addPoint();
-                }
+                writeOutputPoints();
             }
         }
     } else {

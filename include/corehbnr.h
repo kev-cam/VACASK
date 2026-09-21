@@ -89,7 +89,10 @@ public:
     virtual bool postRun(bool continuePrevious); 
     
     bool evaluate(bool continuePrevious, ErrorConsumer& errors);
-    
+
+    // Convert the solution vector to a complex spectrum in solutionFD
+    void updateSolutionFD();
+
     virtual std::tuple<bool, bool> buildSystem(bool continuePrevious, ErrorConsumer& errors);
     virtual std::tuple<bool, bool> checkResidual();
     virtual std::tuple<bool, bool> checkDelta();

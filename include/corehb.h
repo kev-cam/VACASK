@@ -207,6 +207,9 @@ protected:
     bool converged_;
     
 private:
+    // Write one output point per frequency from solutionFD
+    void writeOutputPoints();
+
     // Temporary structures for collecting the phasors at a single frequency
     // before they are dumped. This vector has a bucket so that the output
     // source code is the same as with other analyses.
