@@ -57,7 +57,7 @@ The following parameters are specific to `hbac`:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `hbsolve` | boolean | `1` | Solve the HB operating point. Set to `0` to linearize at the nodeset without solving. |
+| `hbsolve` | boolean | `1` | Solve the HB operating point. Set to `0` to linearize at the stored HB solution named by `nodeset` without solving. `writehb` then writes the stored solution, and `store` has no effect. |
 | `outspur` | real, integer vector, or list | `{}` | Output spur(s) to observe. Each list entry is a real frequency (Hz) or an integer tone-weight vector. Default `{}` selects all spurs. |
 | `maxharm` | integer or integer vector | `-1` | Truncate the conversion matrix to spurs whose tone weights satisfy $\lvert k_j \rvert \le \text{maxharm}_j$ for all $j$. Scalar applies to all tones. Negative: no truncation (use all spurs from the HB spectrum). |
 | `maxfreq` | real | `-1` | Truncate the conversion matrix to spurs whose absolute frequency does not exceed `maxfreq` (Hz). Negative: no truncation. |

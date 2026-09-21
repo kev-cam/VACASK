@@ -30,7 +30,7 @@ Nodesets are hnints to the solver specifying what the expected solution should b
 (approximately). You can think of them as starting points for the Newton-Raphson algorithm. 
 The results can be used as nodesets or initial conditions for subsequent analyses like 
 AC, transient, or noise. For that purpose you can store them in a solution slot. The name of 
-the solution slot is specified by the `write` parameter.
+the solution slot is specified by the `store` parameter.
 
 The small-signal analyses that start with an operating point (`ac`, `acxf`, `acsp`, `acstb`, 
 `noise`, `dcinc`, and `dcxf`) can linearize the circuit at a stored solution without solving 

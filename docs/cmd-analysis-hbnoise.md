@@ -74,7 +74,7 @@ The following parameters are specific to `hbnoise`:
 | `inspur` | real or integer vector | `0.0` (DC) | Input spur at which the equivalent input excitation for the power-gain computation is placed. |
 | `maxharm` | integer or integer vector | `-1` | Truncate the small-signal spectrum to spurs whose tone weights satisfy $\lvert k_j \rvert \le \text{maxharm}_j$ for all $j$. Scalar applies to all tones. Negative: no truncation. |
 | `maxfreq` | real | `-1` | Truncate the small-signal spectrum to spurs whose absolute frequency does not exceed `maxfreq` (Hz). Negative: no truncation. |
-| `hbsolve` | boolean | `1` | Solve the HB operating point. Set to `0` to linearize at the `nodeset` without solving. |
+| `hbsolve` | boolean | `1` | Solve the HB operating point. Set to `0` to linearize at the stored HB solution named by `nodeset` without solving. `writehb` then writes the stored solution, and `store` has no effect. |
 | `from` | real | `0` | Start offset frequency (Hz). |
 | `to` | real | `0` | Stop offset frequency (Hz). |
 | `step` | real | `0` | Offset frequency step size (Hz) for a stepped linear sweep. |
