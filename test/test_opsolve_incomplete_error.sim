@@ -1,0 +1,37 @@
+Stored operating point solution missing an unknown, opsolve=0 must fail with strictforce=1
+
+ground 0
+
+load "resistor.osdi"
+load "capacitor.osdi"
+
+model resistor resistor
+model capacitor capacitor
+model vsource vsource
+
+subckt a()
+  v2 (2 0) vsource dc=0.8 mag=1
+  r2 (2 3) resistor r=1k
+  c2 (3 0) capacitor c=1u
+ends
+
+// Same circuit plus node 5, which the stored solution knows nothing about
+subckt b()
+  v2 (2 0) vsource dc=0.8 mag=1
+  r2 (2 3) resistor r=1k
+  c2 (3 0) capacitor c=1u
+  r3 (3 5) resistor r=1k
+  r4 (5 0) resistor r=1k
+ends
+
+control
+  abort always
+
+  options strictforce=1
+
+  elaborate circuit("a")
+  analysis op1 op store="sol"
+
+  elaborate circuit("b")
+  analysis ac2 ac from=1 to=10 mode="dec" points=1 nodeset="sol" opsolve=0
+endc

@@ -1,0 +1,55 @@
+Stored HB solution missing an unknown, hbsolve=0 must fail with strictforce=1
+
+ground 0
+
+load "resistor.osdi"
+load "nl.va"
+
+model resistor resistor
+model vsource vsource
+model nl nl
+
+subckt a()
+  v1 (1 0) vsource dc=0 type="sine" sinedc=0.0 ampl=1 freq=1k tdphase=90 spur={0.0} smag=[1]
+  r1 (1 2) resistor r=0.05
+  nl1 (2 0) nl a=3 c=5
+ends
+
+// Same circuit plus node 5, which the stored solution knows nothing about
+subckt b()
+  v1 (1 0) vsource dc=0 type="sine" sinedc=0.0 ampl=1 freq=1k tdphase=90 spur={0.0} smag=[1]
+  r1 (1 2) resistor r=0.05
+  nl1 (2 0) nl a=3 c=5
+  r3 (2 5) resistor r=1k
+  r4 (5 0) resistor r=1k
+ends
+
+control
+  abort always
+
+  options reltol=1e-12 strictforce=1
+
+  elaborate circuit("a")
+  analysis hb1 hb freq=[1k] nharm=10 store="hbsol"
+
+  elaborate circuit("b")
+  analysis hbac2 hbac nodeset="hbsol" hbsolve=0 outspur={} values=[10.0]
+endc
+
+embed "nl.va" <<<FILE
+`include "constants.vams"
+`include "disciplines.vams"
+
+module nl(n1,n2);
+    // Terminals and internal nodes
+    inout n1, n2;
+    electrical n1,n2;
+
+    (* desc = "Resistive a", type = "instance" *) parameter real a = 1;
+    (* desc = "Reactive c", type = "instance" *) parameter real c = 1;
+
+    analog begin
+        I(n1,n2) <+ pow(a*V(n1,n2), 2) + ddt(pow(c*V(n1,n2), 3));
+    end
+endmodule
+>>>FILE
