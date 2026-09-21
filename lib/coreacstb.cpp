@@ -29,6 +29,7 @@ template<> int Introspection<ACStbParameters>::setup() {
     registerNamedMember(opParams.write, "writeop");
     registerNamedMember(opParams.nodeset, "nodeset");
     registerNamedMember(opParams.store, "store");
+    registerNamedMember(opParams.solve, "opsolve");
     registerNamedMember(opParams.solver, "opsolver");
     
     return 0;
@@ -260,8 +261,8 @@ CoreCoroutine ACStbCore::coroutine(bool continuePrevious, ErrorConsumer& errors)
     // Make space for results at the given frequency
     resultsVector.resize(to_int(StbResult::COUNT));
     
-    // Compute operating point
-    auto opOk = opCore_.run(continuePrevious, errors);
+    // Compute operating point or evaluate at stored solution
+    auto opOk = params.opParams.solve ? opCore_.run(continuePrevious, errors) : opCore_.evaluate(true, errors);
     if (!opOk) {
         errors.push(StbOperatingPointFailed{});
         co_yield CoreState::Aborted;

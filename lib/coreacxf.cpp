@@ -28,6 +28,7 @@ template<> int Introspection<ACXFParameters>::setup() {
     registerNamedMember(opParams.write, "writeop");
     registerNamedMember(opParams.nodeset, "nodeset");
     registerNamedMember(opParams.store, "store");
+    registerNamedMember(opParams.solve, "opsolve");
     registerNamedMember(opParams.solver, "opsolver");
 
     return 0;
@@ -235,8 +236,8 @@ CoreCoroutine ACXFCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         co_yield CoreState::Aborted;
     }
 
-    // Compute operating point
-    auto opOk = opCore_.run(continuePrevious, errors);
+    // Compute operating point or evaluate at stored solution
+    auto opOk = params.opParams.solve ? opCore_.run(continuePrevious, errors) : opCore_.evaluate(true, errors);
     if (!opOk) {
         errors.push(AcxfOperatingPointFailed{});
         co_yield CoreState::Aborted;
