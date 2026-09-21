@@ -11,6 +11,10 @@ if(POLICY CMP0167)
     cmake_policy(SET CMP0167 NEW)
 endif()
 
+if(POLICY CMP0118)
+    cmake_policy(SET CMP0118 NEW)
+endif()
+
 enable_testing()
 
 # --- Rust netlist parser (optional; netlist-cxx via Corrosion) --------------
