@@ -22,13 +22,7 @@ control
 
   options temp=40
   options rawfile="binary" reltol=1e-14 vntol=1e-12 op_debug=0 smsig_debug=0
-  analysis ac1 ac from=1 to=10k mode="dec" points=10 store="sol"
-
-  // Move the source, the stored solution is no longer a solution of the circuit
-  alter instance("v2") dc=0.4
-
-  // Linearize at the stored solution without solving
-  analysis ac2 ac from=1 to=10k mode="dec" points=10 nodeset="sol" opsolve=0
+  analysis ac1 ac from=1 to=10k mode="dec" points=10
 
   postprocess(PYTHON, "runme.py")
 endc
@@ -63,19 +57,6 @@ v3 = ac1['3']
 status = (relDiff(v3, exactv3, 1e-6) < 1e-3).all()
 tests.append(status)
 print("V(3)", status)
-
-# opsolve=0 must linearize at the stored 0.8V solution although the source is now at 0.4V
-ac2 = rawread('ac2.raw').get()
-
-v2os = ac2['2']
-status = (relDiff(v2os, exactv2, 1e-6) < 1e-3).all()
-tests.append(status)
-print("V(2), opsolve=0", status)
-
-v3os = ac2['3']
-status = (relDiff(v3os, exactv3, 1e-6) < 1e-3).all()
-tests.append(status)
-print("V(3), opsolve=0", status)
 
 if isTest():
     sys.exit(not all(tests))

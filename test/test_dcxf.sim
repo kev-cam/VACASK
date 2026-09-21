@@ -21,13 +21,7 @@ control
 
   options temp=27
   options rawfile="binary" reltol=1e-14 vntol=1e-12 op_debug=0
-  analysis dcxf1 dcxf writeop=1 out="2" store="sol"
-
-  // Move the source, the stored solution is no longer a solution of the circuit
-  alter instance("v1") dc=0.4
-
-  // Linearize at the stored solution without solving
-  analysis dcxf2 dcxf out="2" nodeset="sol" opsolve=0
+  analysis dcxf1 dcxf writeop=1 out="2"
   postprocess(PYTHON, "runme.py")
 endc
 
@@ -78,13 +72,6 @@ exactyin = 1/exactzin
 statusyin1 = (relDiff(yin1, exactyin, 1e-15)<1e-6).all()
 tests.append(statusyin1)
 print("yin(v1)", yin1, statusyin1)
-
-# opsolve=0 must linearize at the stored 0.8V solution although v1 is now at 0.4V
-dcxf2 = rawread('dcxf2.raw').get()
-for name in ['tf(v1)', 'tf(v2)', 'zin(v1)', 'zin(v2)', 'yin(v1)']:
-    status = (relDiff(dcxf2[name], dcxf1[name], 1e-15)<1e-9).all()
-    tests.append(status)
-    print(name, "opsolve=0", dcxf2[name], status)
 
 if isTest():
     sys.exit(not all(tests))

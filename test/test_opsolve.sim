@@ -1,0 +1,107 @@
+Small-signal analyses linearized at a stored operating point (opsolve=0)
+
+ground 0
+
+load "resistor.osdi"
+load "capacitor.osdi"
+load "simdio.va"
+
+model resistor resistor noisy=1
+model capacitor capacitor
+model vsource vsource
+model d simdio is=1e-12 n=2 kf=1e-15 af=1.2 ef=1.5 debug=0
+
+v2 (2 0) vsource dc=0.8 mag=1
+r2 (2 3) resistor r=1k
+d2 (3 0) d
+c2 (3 0) capacitor c=1u
+
+control
+  abort always
+
+  options temp=27
+  options rawfile="binary" reltol=1e-14 vntol=1e-12 op_debug=0 smsig_debug=0
+
+  // Reference results, operating point is solved at 0.8V
+  analysis op1 op store="sol"
+  analysis ac1 ac from=1 to=10k mode="dec" points=10
+  save full
+  analysis noise1 noise out="3" in="v2" from=1 to=10k mode="dec" points=10
+  clear saves
+  analysis acxf1 acxf out="3" from=1 to=10k mode="dec" points=10
+  analysis dcinc1 dcinc
+  analysis dcxf1 dcxf out="3"
+
+  // Move the source, the stored solution is no longer a solution of the circuit
+  alter instance("v2") dc=0.4
+
+  // Linearize at the stored solution, results must match the reference
+  analysis ac2 ac from=1 to=10k mode="dec" points=10 nodeset="sol" opsolve=0
+  save full
+  analysis noise2 noise out="3" in="v2" from=1 to=10k mode="dec" points=10 nodeset="sol" opsolve=0
+  clear saves
+  analysis acxf2 acxf out="3" from=1 to=10k mode="dec" points=10 nodeset="sol" opsolve=0
+  analysis dcinc2 dcinc nodeset="sol" opsolve=0
+  analysis dcxf2 dcxf out="3" nodeset="sol" opsolve=0
+
+  // Solve at 0.4V (opsolve=1 is the default), results must differ from the opsolve=0 ones
+  analysis ac3 ac from=1 to=10k mode="dec" points=10
+  save full
+  analysis noise3 noise out="3" in="v2" from=1 to=10k mode="dec" points=10
+  clear saves
+  analysis acxf3 acxf out="3" from=1 to=10k mode="dec" points=10
+  analysis dcinc3 dcinc
+  analysis dcxf3 dcxf out="3"
+
+  postprocess(PYTHON, "runme.py")
+endc
+
+embed "runme.py" <<<FILE
+from rawfile import rawread
+from runtest import *
+import numpy as np
+import sys
+
+tests = []
+
+def compare(tests, ref, name1, name2):
+    a = rawread(name1).get()
+    b = rawread(name2).get()
+    status = True
+    for n in a.names:
+        if n not in b.names:
+            print(name2, "is missing", n)
+            status = False
+            continue
+        if not (relDiff(a[n], b[n], 1e-30) < 1e-9).all():
+            print(name2, "differs from", name1, "in", n)
+            status = False
+    print(ref, status)
+    tests.append(status)
+
+compare(tests, "ac", 'ac1.raw', 'ac2.raw')
+compare(tests, "noise", 'noise1.raw', 'noise2.raw')
+compare(tests, "acxf", 'acxf1.raw', 'acxf2.raw')
+compare(tests, "dcinc", 'dcinc1.raw', 'dcinc2.raw')
+compare(tests, "dcxf", 'dcxf1.raw', 'dcxf2.raw')
+
+# Solving at 0.4V must give a different result, otherwise the test above proves nothing
+def differ(tests, ref, name1, name2):
+    a = rawread(name1).get()
+    b = rawread(name2).get()
+    status = False
+    for n in a.names:
+        if n in b.names and (relDiff(a[n], b[n], 1e-30) > 1e-2).any():
+            status = True
+    print(ref, "opsolve=0 differs from opsolve=1", status)
+    tests.append(status)
+
+differ(tests, "ac", 'ac2.raw', 'ac3.raw')
+differ(tests, "noise", 'noise2.raw', 'noise3.raw')
+differ(tests, "acxf", 'acxf2.raw', 'acxf3.raw')
+differ(tests, "dcinc", 'dcinc2.raw', 'dcinc3.raw')
+differ(tests, "dcxf", 'dcxf2.raw', 'dcxf3.raw')
+
+if isTest():
+    sys.exit(not all(tests))
+>>>FILE
