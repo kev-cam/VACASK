@@ -28,14 +28,14 @@ control
 
   // Transient noise frequency range (independent of the hbnoise offset
   // sweep below) - same values as test_trannoise4.sim.
-  var noisefmin=20.0
-  var noisefmax=10k
+  var noisefmin=10.0
+  var noisefmax=5k
 
   // Offset frequency range. outspur defaults to 0 (DC), so the physical
   // output frequency equals the offset frequency directly - one sweep from
   // near-DC up past fmod shows both the near-DC 1/f skirt and the
   // upconverted skirt around the fmod carrier.
-  var fmin=1.0
+  var fmin=10.0
   var fmax=5000.0
 
   options rawfile="binary" strictsave=1
@@ -108,7 +108,6 @@ hbn = rawread('hbnoise1.raw').get()
 f = hbn['frequency'].real
 onoise = hbn['onoise'].real
 nr1 = hbn['n(r1)'].real
-print(nr1)
 
 noise = rawread('noise1.raw').get()
 reff = noise['frequency'].real
@@ -171,6 +170,27 @@ ftr, Pxx = welch(
     scaling='density',
     average='mean'
 )
+
+# Compare the hbnoise result to the Welch estimate of the transient noise.
+# Transient noise is generated only from noisefmin up and the Welch window
+# (resolution noisefmin/2, hann main lobe of +-2 bins) smears the steep skirt
+# around the carrier, so the estimate is biased low close to it. Stay 3*noisefmin
+# away from the carrier and start at noisefmin. The remaining deviation is the
+# scatter of the Welch estimate.
+guard = 3*noisefmin
+mLt = (f>=noisefmin)*(f<=f0-guard)
+ferrLt, errLt = errorWrtRef(f[mLt], onoise[mLt], ftr, Pxx, mode='db10')
+diff = np.abs(errLt).max()
+status = diff<3
+print("max lf err vs transient noise [dB] =", diff, status)
+tests.append(status)
+
+mHt = (f>=f0+guard)*(f<=fmax)
+ferrHt, errHt = errorWrtRef(f[mHt], onoise[mHt], ftr, Pxx, mode='db10')
+diff = np.abs(errHt).max()
+status = diff<3
+print("max hf err vs transient noise [dB] =", diff, status)
+tests.append(status)
 
 if isTest():
     sys.exit(not all(tests))

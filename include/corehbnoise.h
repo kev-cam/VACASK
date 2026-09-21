@@ -77,15 +77,9 @@ END_ERRORCLASS(HbNoiseContribNotFound);
 
 SIMPLE_ERRORCLASS(HbNoiseHbFailed, "HB analysis failed.");
 
-SIMPLE_ERRORCLASS(HbNoiseSpurPruneFailed, "Failed to prune the HB spur set.");
-
-SIMPLE_ERRORCLASS(HbNoiseMixingMapFailed, "Failed to build the HB mixing map.");
-
 SIMPLE_ERRORCLASS(HbNoiseOutspurNotFound, "Output spur not found.");
 
 SIMPLE_ERRORCLASS(HbNoiseInspurNotFound, "Input spur not found.");
-
-SIMPLE_ERRORCLASS(HbNoiseDelayBindFailed, "Failed to bind delay lines to the HBNOISE matrix.");
 
 SIMPLE_ERRORCLASS(HbNoiseSweepSetupFailed, "Failed to set up the HBNOISE frequency sweep.");
 

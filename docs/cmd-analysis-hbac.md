@@ -86,7 +86,6 @@ operating point results and are written to `<analysis>.hb.*` when `writehb=1`.
 | `hbfull` | Save all HB unknowns (even those belonging to collapsed nodes). |
 | `v(node)` | Save the HB phasor at the given node. |
 | `i(instance)` | Save the HB branch flow phasor through the given instance. Only instances that introduce a current variable in the MNA system are valid (e.g. voltage sources, inductors). |
-| `p(instance,outvar)` | Save the HB output variable `outvar` of the given instance. |
 
 ## Output
 

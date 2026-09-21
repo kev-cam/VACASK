@@ -80,7 +80,7 @@ SIMPLE_ERRORCLASS(HbAcSpurPruneFailed, "Failed to prune the HB spur set.");
 
 SIMPLE_ERRORCLASS(HbAcMixingMapFailed, "Failed to build the HB mixing map.");
 
-SIMPLE_ERRORCLASS(HbAcDelayBindFailed, "Failed to bind delay lines to the HBAC matrix.");
+SIMPLE_ERRORCLASS(HbAcDelayBindFailed, "Failed to bind delay lines to the small-signal conversion matrix.");
 
 ERRORCLASS(HbAcMagLength)
     Id instance;
@@ -338,7 +338,7 @@ bool HBACCore::rebuildCore(
     // Bind delay lines to acMatrix blocks. delayLines is shared with the
     // driving HBCore and already sized by its own rebuild(), run before
     // this by the owning analysis; delay values are filled during the HB
-    // solve / evaluateAtNodeset() in the caller's coroutine(). The
+    // solve / evaluate() in the caller's coroutine(). The
     // (out,in) and (out,out) blocks must exist in the sparsity map
     // (absdelay declares the Jacobian entry), so this only fails on a
     // genuine topology error.

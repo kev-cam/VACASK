@@ -129,7 +129,7 @@ constant operating point gives the same `n(instance,contrib)` from either analys
 **Basic hbnoise analysis, output and input both at DC (outspur/inspur default):**
 
 ```text
-v1 (in 0) vsource dc=0.8 type="sine" ampl=0.2 freq=1k spur={0} smag=[1]
+v1 (in 0) vsource dc=0.8 type="sine" ampl=0.2 freq=1k
 r1 (in out) resistor r=1k noisy=1
 d1 (out 0) d is=1e-12 n=2 kf=1e-15 af=1.2
 c1 (out 0) capacitor c=1u

@@ -125,7 +125,7 @@ ERRORCLASS(TranTableNoiseNotSupported)
     Id srcName;
     TranTableNoiseNotSupported(Id instance, Id srcName) : instance(instance), srcName(srcName) {}
     std::string format() const {
-        return "OSDI table noise not supported in instance '" + std::to_string(instance) + "', source '" + std::string(srcName) + "'.'";
+        return "OSDI table noise not supported in instance '" + std::to_string(instance) + "', source '" + std::string(srcName) + "'.";
     }
 END_ERRORCLASS(TranTableNoiseNotSupported);
 

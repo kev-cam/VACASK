@@ -16,7 +16,7 @@ ERRORCLASS(OsdiUnsupportedTranJacOffs)
     Id instance;
     OsdiUnsupportedTranJacOffs(Id instance) : instance(instance) {}
     std::string format() const {
-        return "OSDI unsupported transient Jacobian load with offset in instace '" + std::to_string(instance) + "'.'";
+        return "OSDI unsupported transient Jacobian load with offset in instance '" + std::to_string(instance) + "'.";
     }
 END_ERRORCLASS(OsdiUnsupportedTranJacOffs);
 
@@ -24,7 +24,7 @@ ERRORCLASS(OsdiEvalFailed)
     Id instance;
     OsdiEvalFailed(Id instance) : instance(instance) {}
     std::string format() const {
-        return "OSDI evaluation failed for instance '" + std::to_string(instance) + "'.'";
+        return "OSDI evaluation failed for instance '" + std::to_string(instance) + "'.";
     }
 END_ERRORCLASS(OsdiEvalFailed);
 
@@ -32,7 +32,7 @@ ERRORCLASS(OsdiLoadFailed)
     Id instance;
     OsdiLoadFailed(Id instance) : instance(instance) {}
     std::string format() const {
-        return "OSDI load failed for instance '" + std::to_string(instance) + "'.'";
+        return "OSDI load failed for instance '" + std::to_string(instance) + "'.";
     }
 END_ERRORCLASS(OsdiLoadFailed);
 
@@ -40,7 +40,7 @@ ERRORCLASS(OsdiDelayChangeDetected)
     Id instance;
     OsdiDelayChangeDetected(Id instance) : instance(instance) {}
     std::string format() const {
-        return "OSDI delay change detected in instance '" + std::to_string(instance) + "'.'";
+        return "OSDI delay change detected in instance '" + std::to_string(instance) + "'.";
     }
 END_ERRORCLASS(OsdiDelayChangeDetected);
 
@@ -49,7 +49,7 @@ ERRORCLASS(OsdiNoiseExponentChangeDetected)
     Id srcName;
     OsdiNoiseExponentChangeDetected(Id instance, Id srcName) : instance(instance), srcName(srcName) {}
     std::string format() const {
-        return "OSDI noise exponent change detected in instance '" + std::to_string(instance) + "', source '" + std::string(srcName) + "'.'";
+        return "OSDI noise exponent change detected in instance '" + std::to_string(instance) + "', source '" + std::string(srcName) + "'.";
     }
 END_ERRORCLASS(OsdiNoiseExponentChangeDetected);
 

@@ -492,7 +492,7 @@ CoreCoroutine HBACCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         }
     } else {
         // Evaluate HB at nodeset, we don't need noise modulation function values
-        if (!hbCore_.evaluateAtNodeset(false, errors)) {
+        if (!hbCore_.evaluate(true, false, errors)) {
             errors.push(HbAcHbFailed{});
             co_yield CoreState::Aborted;
             co_return;

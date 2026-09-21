@@ -163,10 +163,10 @@ public:
 
     // Set stored solutiuon for evaluation, does not set up Jacobian to save memory
     // Bind circuit to jacColoc and evaluate at current solution
-    bool evaluateAtNodeset(bool noiseModulation, ErrorConsumer& errors);
+    bool evaluate(bool atNodeset, bool noiseModulation, ErrorConsumer& errors);
     bool getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, const Spurs& prunedSpurs, Vector<Complex>* noiseModulationSpec=nullptr);
     // Flicker exponents of the modulated noise sources, one per modulation
-    // slot, filled by evaluateAtNodeset(true, ...)
+    // slot, filled by evaluate(..., true, ...)
     const Vector<double>& noiseExponents() const { return noiseExponent; };
     
     void dump(std::ostream& os) const;

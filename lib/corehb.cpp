@@ -280,7 +280,7 @@ bool HBCore::buildGrid(ErrorConsumer& errors) {
 }
 
 // Called after build
-bool HBCore::evaluateAtNodeset(bool noiseModulation, ErrorConsumer& errors) {
+bool HBCore::evaluate(bool atNodeset, bool noiseModulation, ErrorConsumer& errors) {
 
     // Unlock delays, allow delay change
     delayLines_.clearChanged();
@@ -312,11 +312,13 @@ bool HBCore::evaluateAtNodeset(bool noiseModulation, ErrorConsumer& errors) {
         nrSolver.evalSetup().evaluateNoise = true;
     }
 
-    // Copy from forces slot 1 to solution vector.
-    // solution and the slot-1 force vector both carry an nt-wide bucket.
-    solution.upsize(2, (n+1)*nt);
-    solution.vector() = nrSolver.forces(1).unknownValue_;
-
+    // if evaluating at nodeset, copy nodeset to solution. 
+    if (atNodeset) {
+        // Copy from forces slot 1 to solution vector.
+        // solution and the slot-1 force vector both carry an nt-wide bucket.
+        solution.upsize(2, (n+1)*nt);
+        solution.vector() = nrSolver.forces(1).unknownValue_;
+    }
     // Disable forces
     nrSolver.enableForces(0, false);
     nrSolver.enableForces(1, false);

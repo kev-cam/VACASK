@@ -5,7 +5,7 @@ the Debug binary built before the last "Cleanup" commit; ctest was not run.
 
 ## Bugs
 
-1. [ ] **hbnoise linearizes at the nodeset instead of the converged HB solution when `hbsolve=1`.**
+1. [x] **hbnoise linearizes at the nodeset instead of the converged HB solution when `hbsolve=1`.**
    After `hbCore_.run()`, `HBNoiseCore::coroutine()` always calls `evaluateAtNodeset(true, ...)`
    (lib/corehbnoise.cpp:338). That function starts with
    `solution.vector() = nrSolver.forces(1).unknownValue_` (lib/corehb.cpp:318), which discards
@@ -19,33 +19,35 @@ the Debug binary built before the last "Cleanup" commit; ctest was not run.
    - Also corrupts `solution` for the next point of a sweep (docs/cmd-sweep.md sweeps hbnoise).
    - Fix: skip the copy from `forces(1)` when the solution was just solved; keep it for `hbsolve=0`.
 
-2. [ ] **`p(instance,outvar)` save dropped from hbac in the refactor (712b8fa1).**
-   The old `HBAC::resolveHbSave` had an `idP` branch calling `hbCore.addInstanceOutvar`.
-   `HBSmallSignal::resolveHbSave` (include/anhbsmsig.h:182) declares `idP` but never uses it.
-   - Verified: with `writehb=1`, `save p(v1,v)` produces nothing in `hbac1.hb.raw`, even with
-     `strictsave=1`. docs/cmd-analysis-hbac.md:89 still documents it.
-   - The pre-refactor build was not run, so the removed branch in the diff is the evidence.
-   - May be intentional (`HB` itself never supported `p`, see the TODO in lib/anhb.cpp). If so,
-     remove the hbac doc row and the unused `idP`. Otherwise restore the branch.
-
 ## Minor
 
-3. [ ] **hbnoise doc example uses an invalid spur entry.**
+2. [x] **hbac docs listed a `p(instance,outvar)` save that no longer exists.**
+   The pre-refactor `HBAC::resolveHbSave` had an `idP` branch calling `hbCore.addInstanceOutvar`.
+   It was dropped in 712b8fa1. Not a regression: HB stores no output variables, so the branch
+   could only read whatever the last-evaluated collocation point left in the instance, and `HB`
+   itself never supported `p` (TODO in lib/anhb.cpp). Only the docs were stale.
+   - [x] Removed the row from docs/cmd-analysis-hbac.md and the `p` rows from
+     docs/internals/anhbac.md and docs/internals/anhbnoise.md.
+   - [ ] Delete the unused `idP` in include/anhbsmsig.h:182 (code, not done).
+
+3. [x] **hbnoise doc example uses an invalid spur entry.**
    docs/cmd-analysis-hbnoise.md:132 has `spur={0} smag=[1]`. In hbac an integer scalar entry
    aborts with "Spur #0 ... not found". hbnoise ignores `spur`, so the example runs, but the
    attributes are meaningless. Drop them or use `0.0`.
 
-4. [ ] **`test_hbnoise1.sim` does not assert the transient-noise reference.**
+4. [x] **`test_hbnoise1.sim` does not assert the transient-noise reference.**
    The Welch estimate (`ftr`, `Pxx`, line 164) is only plotted, so the "independent check"
    is never checked. Line 111 also has a leftover `print(nr1)`.
 
-5. [ ] **Dead error classes and misleading messages in hbnoise.**
+5. [x] **Dead error classes in hbnoise.**
    `HbNoiseSpurPruneFailed`, `HbNoiseMixingMapFailed`, `HbNoiseDelayBindFailed`
-   (include/corehbnoise.h:80-88) are never pushed. `HBACCore::rebuildCore` pushes the `HbAc*`
-   errors, so an hbnoise failure reports "HBAC matrix". Push the `HbNoise*` errors from
-   `HBNoiseCore::rebuild()` or drop the dead classes.
+   (include/corehbnoise.h) were never pushed; `HBACCore::rebuildCore` pushes the `HbAc*`
+   errors instead. Removed the three classes.
+   - [x] `HbAcDelayBindFailed` said "HBAC matrix" when an hbnoise run failed to bind delay
+     lines. Reworded to "small-signal conversion matrix" (include/corehbac.h:83).
 
-6. [ ] **Stray trailing quote in new error messages.**
+6. [x] **Stray trailing quote in new error messages.**
    include/osdiinstance.h:52 (`OsdiNoiseExponentChangeDetected`) and include/coretran.h:128
-   (`TranTableNoiseNotSupported`) end in `'.'`. Copies an existing pattern (same in
-   `OsdiDelayChangeDetected` and others), so cosmetic.
+   (`TranTableNoiseNotSupported`) ended in `'.'`. Fixed both.
+   - [x] Four older messages in include/osdiinstance.h (lines 19, 27, 35, 43) had the same
+     stray quote, and "instace" in line 19. Fixed.

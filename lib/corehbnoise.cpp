@@ -334,8 +334,9 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
     }
 
     // Evaluate at the (solved or given) nodeset to obtain the time-domain
-    // noise modulation function values (only computed by evaluateAtNodeset())
-    if (!hbCore_.evaluateAtNodeset(true, errors)) {
+    // noise modulation function values (only computed by evaluate())
+    bool atNodeset = !params.hbParams.solve;
+    if (!hbCore_.evaluate(atNodeset, true, errors)) {
         errors.push(HbNoiseHbFailed{});
         co_yield CoreState::Aborted;
         co_return;
