@@ -18,8 +18,14 @@ control
 
   options temp=27
   options rawfile="binary" reltol=1e-14 vntol=1e-12 op_debug=0
-  analysis dcinc1 dcinc writeop=1
-  
+  analysis dcinc1 dcinc writeop=1 store="sol"
+
+  // Move the source, the stored solution is no longer a solution of the circuit
+  alter instance("v1") dc=0.4
+
+  // Linearize at the stored solution without solving
+  analysis dcinc2 dcinc nodeset="sol" opsolve=0
+
   postprocess(PYTHON, "runme.py")
 endc
 
@@ -47,6 +53,13 @@ v2inc = dcinc1['2']
 statusv2inc = (relDiff(v2inc, exactv2inc, 1e-12)<1e-6).all()
 tests.append(statusv2inc)
 print("v(2) delta", v2inc, statusv2inc)
+
+# opsolve=0 must linearize at the stored 0.8V solution although the source is now at 0.4V
+dcinc2 = rawread('dcinc2.raw').get()
+v2inc2 = dcinc2['2']
+statusv2inc2 = (relDiff(v2inc2, exactv2inc, 1e-12)<1e-6).all()
+tests.append(statusv2inc2)
+print("v(2) delta, opsolve=0", v2inc2, statusv2inc2)
 
 if isTest():
     sys.exit(not all(tests))

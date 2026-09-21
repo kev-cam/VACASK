@@ -18,6 +18,7 @@ template<> int Introspection<DCIncrementalParameters>::setup() {
     registerNamedMember(opParams.write, "writeop");
     registerNamedMember(opParams.nodeset, "nodeset");
     registerNamedMember(opParams.store, "store");
+    registerNamedMember(opParams.solve, "opsolve");
     registerNamedMember(opParams.solver, "solver");
 
     return 0;
@@ -132,7 +133,7 @@ CoreCoroutine DCIncrementalCore::coroutine(bool continuePrevious, ErrorConsumer&
     // Make sure structures are large enough
     incrementalSolution.resize(n+1);
     
-    auto opOk = opCore_.run(continuePrevious, errors);
+    auto opOk = params.opParams.solve ? opCore_.run(continuePrevious, errors) : opCore_.evaluate(true, errors);
     if (!opOk) {
         errors.push(DcIncOperatingPointFailed{});
         co_yield CoreState::Aborted;
@@ -150,7 +151,11 @@ CoreCoroutine DCIncrementalCore::coroutine(bool continuePrevious, ErrorConsumer&
         Simulator::dbg() << "Starting DC incremental analysis.\n";
     }
 
-    // Jacobian is already factored (done by op core)
+    // Jacobian is factored by the op core when it solves, otherwise we factor it
+    if (!params.opParams.solve && !opCore_.solver().linearSolver()->factor(errors)) {
+        errors.push(DcIncMatrixError{});
+        co_yield CoreState::Aborted;
+    }
     
     // Prepare RHS (add excitations given by delta parameter)
     zero(incrementalSolution);
