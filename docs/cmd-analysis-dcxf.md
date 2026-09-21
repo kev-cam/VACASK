@@ -32,6 +32,7 @@ its own parameters:
 |-----------|------|---------|-------------|
 | `nodeset` | string or list | `""` | Initial guess for the operating point solution. |
 | `store` | string | `""` | Store the computed operating point solution for reuse. |
+| `opsolve` | boolean | `1` | Solve the operating point. Set to `0` to linearize at the stored solution named by `nodeset` without solving. `nodeset` must then be a string, and `writeop` and `store` have no effect. |
 | `out` | string/vector | `""` | Output node or node pair used for transfer function evaluation. Specify as a single node name or two node names in a list. |
 | `write` | boolean | `1` | Write analysis results to a file. |
 | `writeop` | boolean | `0` | Also write the underlying operating point results to `<analysis>.op.*`. |

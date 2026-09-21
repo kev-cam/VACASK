@@ -44,6 +44,7 @@ Set the probe's `dc` parameter to `0` so it does not disturb the operating point
 | `localgnd` | string | `""` | Local ground node used as the voltage reference for $U_{1I}$ and $U_{1U}$. Defaults to global ground (node `0`). |
 | `nodeset` | string or list | `""` | Initial guess for the operating point. See [Operating Point Analysis](cmd-analysis-op.md) for syntax. |
 | `store` | string | `""` | Save the computed operating point under the given name. See [Operating Point Analysis](cmd-analysis-op.md). |
+| `opsolve` | boolean | `1` | Solve the operating point. Set to `0` to linearize at the stored solution named by `nodeset` without solving. `nodeset` must then be a string, and `writeop` and `store` have no effect. |
 | `from` | real | `0` | Start frequency (Hz). |
 | `to` | real | `0` | Stop frequency (Hz). |
 | `step` | real | `0` | Frequency step size (Hz) for a stepped linear sweep. |

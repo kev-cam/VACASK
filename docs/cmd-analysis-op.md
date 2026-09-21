@@ -32,6 +32,13 @@ The results can be used as nodesets or initial conditions for subsequent analyse
 AC, transient, or noise. For that purpose you can store them in a solution slot. The name of 
 the solution slot is specified by the `write` parameter.
 
+The small-signal analyses that start with an operating point (`ac`, `acxf`, `acsp`, `acstb`, 
+`noise`, `dcinc`, and `dcxf`) can linearize the circuit at a stored solution without solving 
+for it. Set `opsolve=0` and let `nodeset` name the solution slot. The circuit is evaluated at 
+the stored values, so the result is meaningful only if the stored solution is a solution 
+of the circuit being analyzed. Unknowns missing from the stored solution are evaluated at 0. 
+No operating point results are written or stored in this case.
+
 ## Save Directives
 
 Operating point analysis supports the following save directives to control what data is written to the output file:
