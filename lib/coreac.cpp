@@ -28,6 +28,7 @@ template<> int Introspection<ACParameters>::setup() {
     registerNamedMember(opParams.write, "writeop");
     registerNamedMember(opParams.nodeset, "nodeset");
     registerNamedMember(opParams.store, "store");
+    registerNamedMember(opParams.solve, "opsolve");
     registerNamedMember(opParams.solver, "opsolver");
     
     return 0;
@@ -185,8 +186,8 @@ CoreCoroutine ACCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
     // Make sure structures are large enough
     acSolution.resize(n+1);
     
-    // Compute operating point
-    auto opOk = opCore_.run(continuePrevious, errors);
+    // Compute operating point or evaluate at stored solution
+    auto opOk = params.opParams.solve ? opCore_.run(continuePrevious, errors) : opCore_.evaluate(true, errors);
     if (!opOk) {
         errors.push(AcOperatingPointFailed{});
         co_yield CoreState::Aborted;
