@@ -1022,6 +1022,12 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         // Error was already set in the wrapper
         co_yield CoreState::Aborted;
     }
+
+    // Call onTimeStepAccepted for point at t=0
+    if (!onTimestepAccepted(0.0, 0.0, 1, errors)) {
+        co_yield CoreState::Aborted;
+    }
+
     // First buildNoiseResidual() call just prepares flicker noise coefficients
     // Noise samples are all 0 so the generated residual contribution would also be 0. 
     if (noisefmax) {
@@ -1402,7 +1408,11 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         // tsolve=tk+hk>0 because tk>=0 and hk>0. 
         updateBreakPoint(nextBreakPoint, params.stop, tSolve);
         updateBreakPoint(nextBreakPoint, params.start, tSolve);
-        
+
+        // Call the injectBreakpoint() function
+        auto tInjected = injectBreakpoint(tSolve);
+        updateBreakPoint(nextBreakPoint, tInjected, tSolve);
+
         // Maximal timestep 
         double hmax;
         hmax = params.stop - params.start;
@@ -1625,7 +1635,7 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         // 
 
         // Timestep computation and breakpoint handling
-        
+
         // Origin from which timestep cutting due to break point will take place
         double cutOrigin;
         if (accept) {

@@ -198,188 +198,209 @@ bool PssTranCore::clearTrajectory(ErrorConsumer& errors) {
 
 
 // ----------------------------------------------------------------
+// injectBreakpoint
+// ----------------------------------------------------------------
+double PssTranCore::injectBreakpoint(double tSolve) {
+    // Force the shoot to land exactly on the next time-domain Jacobian sample time
+    if (tdJacPoints<=0 || tdJacPos>=tdJacPoints) {
+        // Inject breakpoint at t=0 (will be ignored)
+        return 0;
+    }
+    return tdJacTime;
+}
+
+// ----------------------------------------------------------------
 // onTimestepAccepted — inline Phi advancement
 // ----------------------------------------------------------------
 bool PssTranCore::onTimestepAccepted(double tSolve, double hk, Int order, ErrorConsumer& errors) {
-    // Read-only for the whole function - every use below (leadingCoeff(),
-    // a(), b(), b1(), aScaled(), bScaled() via differentiate()) only reads
-    // the coefficients TranCore already computed for this step, so a
-    // reference avoids a copy on every accepted step. (computePsiT() is the
-    // only place that ever needs a mutable copy, made once, after the shoot.)
-    const IntegratorCoeffs& integCoeffs = getIntegCoeffs();
-    auto                    n           = circuit.unknownCount();
-    auto                    nnz         = jacobian.nnz();
+    // Monodromy computation, performed for timepoints t>0
+    if (tSolve>0) {
+        // Read-only for the whole function - every use below (leadingCoeff(),
+        // a(), b(), b1(), aScaled(), bScaled() via differentiate()) only reads
+        // the coefficients TranCore already computed for this step, so a
+        // reference avoids a copy on every accepted step. (computePsiT() is the
+        // only place that ever needs a mutable copy, made once, after the shoot.)
+        const IntegratorCoeffs& integCoeffs = getIntegCoeffs();
+        auto                    n           = circuit.unknownCount();
+        auto                    nnz         = jacobian.nnz();
 
-    // First accepted step since clearTrajectory(): capture x1 and h0 for
-    // PssCore's phase-vector estimate alpha ~= (x1-x0)/h0 (pss.md, "Choosing alpha").
-    // phiValid_ is still false here; it is only set true at the end of this
-    // function, so !phiValid_ identifies the first call after a reset.
-    if (!phiValid_) {
-        firstStepH_ = hk;
-        firstStepX_ = solution.vector();
-    }
-
-    // Get Alr = G_k + alpha_k * C_k from the factored NR jacobian
-    std::copy(jacobian.axData(), jacobian.axData() + nnz, lastAlr_.axData());
-    bool forceFullFactorization = false;
-    if (lastAlrSolver_->isFactored()) {
-        // Refactor (if possible). A refactor failure is not fatal here.
-        if (!lastAlrSolver_->refactor(errors)) {
-            // Failed, try again by fully factoring
-            forceFullFactorization = true;
+        // First accepted step since clearTrajectory(): capture x1 and h0 for
+        // PssCore's phase-vector estimate alpha ~= (x1-x0)/h0 (pss.md, "Choosing alpha").
+        // phiValid_ is still false here; it is only set true at the end of this
+        // function, so !phiValid_ identifies the first call after a reset.
+        if (!phiValid_) {
+            firstStepH_ = hk;
+            firstStepX_ = solution.vector();
         }
-    }
-    if (forceFullFactorization || !lastAlrSolver_->isFactored()) {
-        // Full factorization
-        if (!lastAlrSolver_->factor(errors)) {
-            // Failed, give up. lastAlrSolver_->factor() has pushed the error.
-            errors.push(PssTranAlrFactorizationFailed{tSolve});
-            return false;
+
+        // Get Alr = G_k + alpha_k * C_k from the factored NR jacobian
+        std::copy(jacobian.axData(), jacobian.axData() + nnz, lastAlr_.axData());
+        bool forceFullFactorization = false;
+        if (lastAlrSolver_->isFactored()) {
+            // Refactor (if possible). A refactor failure is not fatal here.
+            if (!lastAlrSolver_->refactor(errors)) {
+                // Failed, try again by fully factoring
+                forceFullFactorization = true;
+            }
         }
-        // Full factorization recovered, drop the non-fatal refactor error
-        if (forceFullFactorization) {
-            errors.clear();
-        }
-    }
-
-    // Get the current C_k and q(x_k) by using evalAndLoad. C_k will be saved
-    // to jacobian; q(x_k) is written directly into qHist_'s own future slot
-    // (promoted to current further down, after qdot_k is derived from it) -
-    // no separate temporary.
-    jacobian.zero();
-    EvalSetup es = solver().evalSetup();
-    es.evaluateResistiveJacobian = false;
-    es.evaluateReactiveJacobian  = true;
-    es.evaluateResistiveResidual = false;
-    es.evaluateReactiveResidual  = true;
-    es.storeReactiveState        = true;
-    es.evaluateOutvars           = false;
-    es.allowBypass               = false;
-    // See the C_0/q_0 block above: icEnabled must be false for OpenVAF's
-    // idt(a,b) to compute the correct reactive residual here too.
-    es.icEnabled                 = false;
-
-    LoadSetup ls;
-    ls.loadReactiveJacobian   = true;
-    ls.reactiveJacobianFactor = 1.0;
-    qHist_.zeroFuture();   // load targets accumulate (+=); the ring slot may hold stale data from size_ steps ago
-    ls.reactiveResidual       = qHist_.futureData();
-
-    if (!circuit.evalAndLoad(commons, &es, &ls, nullptr, errors)) {
-        errors.push(PssTranEvalCFailed{tSolve});
-        return false;
-    }
-    // Snapshot current C_k directly into cHistData_'s future slot - no
-    // separate temporary (plain std::copy, not an accumulating load target).
-    std::copy(jacobian.axData(), jacobian.axData() + nnz, cHistData_.futureData());
-    const Vector<double>& cSnap = cHistData_.futureVector();
-
-    double alpha = integCoeffs.leadingCoeff();
-    const Vector<double>& a = integCoeffs.a();
-    const Vector<double>& b = integCoeffs.b();
-
-    // G_k = A_k - alpha_k * C_k (lastAlr_.data() holds A_k; not modified by
-    // refactor), written directly into gHistData_'s future slot.
-    Vector<double>& gSnap = gHistData_.futureVector();
-    for (Int j = 0; j < nnz; j++)
-        gSnap[j] = lastAlr_.axData()[j] - alpha * cSnap[j];
-
-    // gammaC_[p] = alpha * a[p]    — coefficient for the C term
-    // gammaG_[p] = -(b[p] / b1)   — coefficient for the G term (zero for BDF)
-    // Resized (not reallocated when order is unchanged from the last step,
-    // the common case) rather than freshly constructed every call.
-    gammaC_.assign(order, 0.0);
-    gammaG_.assign(order, 0.0);
-    for (int p = 0; !a.empty() && p < std::min(order, (Int)a.size()); p++)
-        gammaC_[p] = alpha * a[p];
-    for (int p = 0; !b.empty() && p < std::min(order, (Int)b.size()); p++)
-        gammaG_[p] = -(b[p] / integCoeffs.b1());
-
-    // Retain this step's size - computePsiT() needs h_{N-1} for whichever
-    // step turns out to be the shoot's last. The coefficients themselves
-    // don't need saving here: TranCore's own integCoeffs member stays valid
-    // for this same step until the next run(), so computePsiT() reads it
-    // fresh via getIntegCoeffs() when it actually needs a mutable copy.
-    lastStepH_ = hk;
-
-    // Build right-hand side: sum_p (gammaC[p]*C_{k-p} + gammaG[p]*G_{k-p}) * Phi_{k-p}
-    // Accumulated directly into phiHist_'s future slot (distinct from every
-    // at(p) read below, p=0..order-1 - see corepsstran.h), so it can be
-    // solved in place and then advance()d straight into the current slot,
-    // with no separate phiCurrent_ member and no snapshot-and-push.
-    DenseMatrix<double>& phiFuture = phiHist_.at(-1);
-    phiFuture.zero();
-    VectorView rhsColBufView(rhs_colbuf);
-    for (int p = 0; p < order; p++) {
-        DenseMatrix<double>& Phi_kmi = phiHist_.at(p);
-
-        // C_{k-p} * Phi_{k-p} contribution
-        std::copy(cHistData_.at(p).begin(), cHistData_.at(p).end(), scratchC_.axData());
-        for (decltype(n) j = 0; j < n; j++) {
-            auto rhs_col = phiFuture.column(j);
-            if (!scratchC_.product(Phi_kmi.column(j), rhs_colbuf, errors)) {
-                errors.push(PssTranCPhiProductFailed{tSolve, j});
+        if (forceFullFactorization || !lastAlrSolver_->isFactored()) {
+            // Full factorization
+            if (!lastAlrSolver_->factor(errors)) {
+                // Failed, give up. lastAlrSolver_->factor() has pushed the error.
+                errors.push(PssTranAlrFactorizationFailed{tSolve});
                 return false;
             }
-            rhs_col.addScaled(rhsColBufView, gammaC_[p]);
+            // Full factorization recovered, drop the non-fatal refactor error
+            if (forceFullFactorization) {
+                errors.clear();
+            }
         }
 
-        // G_{k-p} * Phi_{k-p} contribution (AM methods only; gammaG_[p]==0 for BDF)
-        if (gammaG_[p] != 0.0) {
-            std::copy(gHistData_.at(p).begin(), gHistData_.at(p).end(), scratchC_.axData());
+        // Get the current C_k and q(x_k) by using evalAndLoad. C_k will be saved
+        // to jacobian; q(x_k) is written directly into qHist_'s own future slot
+        // (promoted to current further down, after qdot_k is derived from it) -
+        // no separate temporary.
+        jacobian.zero();
+        EvalSetup es = solver().evalSetup();
+        es.evaluateResistiveJacobian = false;
+        es.evaluateReactiveJacobian  = true;
+        es.evaluateResistiveResidual = false;
+        es.evaluateReactiveResidual  = true;
+        es.storeReactiveState        = true;
+        es.evaluateOutvars           = false;
+        es.allowBypass               = false;
+        // See the C_0/q_0 block above: icEnabled must be false for OpenVAF's
+        // idt(a,b) to compute the correct reactive residual here too.
+        es.icEnabled                 = false;
+
+        LoadSetup ls;
+        ls.loadReactiveJacobian   = true;
+        ls.reactiveJacobianFactor = 1.0;
+        qHist_.zeroFuture();   // load targets accumulate (+=); the ring slot may hold stale data from size_ steps ago
+        ls.reactiveResidual       = qHist_.futureData();
+
+        if (!circuit.evalAndLoad(commons, &es, &ls, nullptr, errors)) {
+            errors.push(PssTranEvalCFailed{tSolve});
+            return false;
+        }
+        // Snapshot current C_k directly into cHistData_'s future slot - no
+        // separate temporary (plain std::copy, not an accumulating load target).
+        std::copy(jacobian.axData(), jacobian.axData() + nnz, cHistData_.futureData());
+        const Vector<double>& cSnap = cHistData_.futureVector();
+
+        double alpha = integCoeffs.leadingCoeff();
+        const Vector<double>& a = integCoeffs.a();
+        const Vector<double>& b = integCoeffs.b();
+
+        // G_k = A_k - alpha_k * C_k (lastAlr_.data() holds A_k; not modified by
+        // refactor), written directly into gHistData_'s future slot.
+        Vector<double>& gSnap = gHistData_.futureVector();
+        for (Int j = 0; j < nnz; j++)
+            gSnap[j] = lastAlr_.axData()[j] - alpha * cSnap[j];
+
+        // gammaC_[p] = alpha * a[p]    — coefficient for the C term
+        // gammaG_[p] = -(b[p] / b1)   — coefficient for the G term (zero for BDF)
+        // Resized (not reallocated when order is unchanged from the last step,
+        // the common case) rather than freshly constructed every call.
+        gammaC_.assign(order, 0.0);
+        gammaG_.assign(order, 0.0);
+        for (int p = 0; !a.empty() && p < std::min(order, (Int)a.size()); p++)
+            gammaC_[p] = alpha * a[p];
+        for (int p = 0; !b.empty() && p < std::min(order, (Int)b.size()); p++)
+            gammaG_[p] = -(b[p] / integCoeffs.b1());
+
+        // Retain this step's size - computePsiT() needs h_{N-1} for whichever
+        // step turns out to be the shoot's last. The coefficients themselves
+        // don't need saving here: TranCore's own integCoeffs member stays valid
+        // for this same step until the next run(), so computePsiT() reads it
+        // fresh via getIntegCoeffs() when it actually needs a mutable copy.
+        lastStepH_ = hk;
+
+        // Build right-hand side: sum_p (gammaC[p]*C_{k-p} + gammaG[p]*G_{k-p}) * Phi_{k-p}
+        // Accumulated directly into phiHist_'s future slot (distinct from every
+        // at(p) read below, p=0..order-1 - see corepsstran.h), so it can be
+        // solved in place and then advance()d straight into the current slot,
+        // with no separate phiCurrent_ member and no snapshot-and-push.
+        DenseMatrix<double>& phiFuture = phiHist_.at(-1);
+        phiFuture.zero();
+        VectorView rhsColBufView(rhs_colbuf);
+        for (int p = 0; p < order; p++) {
+            DenseMatrix<double>& Phi_kmi = phiHist_.at(p);
+
+            // C_{k-p} * Phi_{k-p} contribution
+            std::copy(cHistData_.at(p).begin(), cHistData_.at(p).end(), scratchC_.axData());
             for (decltype(n) j = 0; j < n; j++) {
                 auto rhs_col = phiFuture.column(j);
                 if (!scratchC_.product(Phi_kmi.column(j), rhs_colbuf, errors)) {
-                    errors.push(PssTranGPhiProductFailed{tSolve, j});
+                    errors.push(PssTranCPhiProductFailed{tSolve, j});
                     return false;
                 }
-                rhs_col.addScaled(rhsColBufView, gammaG_[p]);
+                rhs_col.addScaled(rhsColBufView, gammaC_[p]);
+            }
+
+            // G_{k-p} * Phi_{k-p} contribution (AM methods only; gammaG_[p]==0 for BDF)
+            if (gammaG_[p] != 0.0) {
+                std::copy(gHistData_.at(p).begin(), gHistData_.at(p).end(), scratchC_.axData());
+                for (decltype(n) j = 0; j < n; j++) {
+                    auto rhs_col = phiFuture.column(j);
+                    if (!scratchC_.product(Phi_kmi.column(j), rhs_colbuf, errors)) {
+                        errors.push(PssTranGPhiProductFailed{tSolve, j});
+                        return false;
+                    }
+                    rhs_col.addScaled(rhsColBufView, gammaG_[p]);
+                }
             }
         }
+
+        // Solve for Phi_k
+        // Alr * Phi_k = sum_{i=1}^order (gamma_i * C_k-i * Phi_k-i)
+        if (!lastAlrSolver_->solve(phiFuture.data().data(), static_cast<MatrixEntryIndex>(n), errors)) {
+            errors.push(PssTranBlockAlrSolveFailed{tSolve});
+            return false;
+        }
+        phiHist_.advance();   // phiHist_.at(0) now holds PhiT at this step
+
+        // qdot_{k+1} via the standard LMS derivative-form reconstruction
+        // (numint.md, "Derivative at the new timepoint"): needed only for the
+        // final, last-step Psi_T formula (pss.md, "Computing Psi_T"), evaluated
+        // once after the whole shoot finishes by computePsiT(). q_{k+1} was
+        // already written directly into qHist_'s future slot above (the
+        // evalAndLoad target); qdot_{k+1} is written directly into qDotHist_'s
+        // future slot here - no temporaries either way. Both ring buffers are
+        // promoted (old future becomes new current) right after.
+        integCoeffs.differentiate(qHist_, qDotHist_, qDotHist_.futureVector());
+        qHist_.advance();
+        qDotHist_.advance();
+
+        // If trajectory capture is enabled, store data needed for adjoint
+        // integration. rec.cData/gData copy cSnap/gSnap (references into the
+        // ring buffers' future slots); StepRecord needs its own independent
+        // copy regardless, since those slots get reused later in the shoot.
+        if (captureTrajectory_) {
+            StepRecord rec;
+            rec.aData  = Vector<double>(lastAlr_.axData(), lastAlr_.axData() + nnz);
+            rec.cData  = cSnap;
+            rec.gData  = gSnap;
+            rec.gammaC = gammaC_;
+            rec.gammaG = gammaG_;
+            rec.order  = order;
+            trajectory_.push_back(std::move(rec));
+        }
+
+        // Phi/C_k/G_k/q_k/qdot_k were all built directly into their ring
+        // buffers' future slots above; promote C_k/G_k now (the others were
+        // already advance()d where they were produced).
+        cHistData_.advance();
+        gHistData_.advance();
+
+        phiValid_ = true;
     }
 
-    // Solve for Phi_k
-    // Alr * Phi_k = sum_{i=1}^order (gamma_i * C_k-i * Phi_k-i)
-    if (!lastAlrSolver_->solve(phiFuture.data().data(), static_cast<MatrixEntryIndex>(n), errors)) {
-        errors.push(PssTranBlockAlrSolveFailed{tSolve});
-        return false;
+    // Time-domain Jacobian collection
+    if (tdJacPoints>0) {
+        // Are we at a breakpoint where we must collect the Jacobians?
+        
     }
-    phiHist_.advance();   // phiHist_.at(0) now holds PhiT at this step
-
-    // qdot_{k+1} via the standard LMS derivative-form reconstruction
-    // (numint.md, "Derivative at the new timepoint"): needed only for the
-    // final, last-step Psi_T formula (pss.md, "Computing Psi_T"), evaluated
-    // once after the whole shoot finishes by computePsiT(). q_{k+1} was
-    // already written directly into qHist_'s future slot above (the
-    // evalAndLoad target); qdot_{k+1} is written directly into qDotHist_'s
-    // future slot here - no temporaries either way. Both ring buffers are
-    // promoted (old future becomes new current) right after.
-    integCoeffs.differentiate(qHist_, qDotHist_, qDotHist_.futureVector());
-    qHist_.advance();
-    qDotHist_.advance();
-
-    // If trajectory capture is enabled, store data needed for adjoint
-    // integration. rec.cData/gData copy cSnap/gSnap (references into the
-    // ring buffers' future slots); StepRecord needs its own independent
-    // copy regardless, since those slots get reused later in the shoot.
-    if (captureTrajectory_) {
-        StepRecord rec;
-        rec.aData  = Vector<double>(lastAlr_.axData(), lastAlr_.axData() + nnz);
-        rec.cData  = cSnap;
-        rec.gData  = gSnap;
-        rec.gammaC = gammaC_;
-        rec.gammaG = gammaG_;
-        rec.order  = order;
-        trajectory_.push_back(std::move(rec));
-    }
-
-    // Phi/C_k/G_k/q_k/qdot_k were all built directly into their ring
-    // buffers' future slots above; promote C_k/G_k now (the others were
-    // already advance()d where they were produced).
-    cHistData_.advance();
-    gHistData_.advance();
-
-    phiValid_ = true;
     return true;
 }
 
@@ -528,6 +549,18 @@ bool PssTranCore::integrateAdjointMonodromy(DenseMatrix<double>& Omega, ErrorCon
     // Omega_0 is the last computed value
     Omega = omegaHist.front();
     return true;
+}
+
+void PssTranCore::enableTdJacobianCapture(double period, int N) {
+    tdJacPoints = N;
+    if (N>0) {
+        tdJacStep = period/tdJacPoints;
+        tdJacPos = 0;
+        tdJacTime = 0.0;
+        auto nnz = jacobian.nnz();
+        tdJacG.assign(tdJacPoints*nnz, 0);
+        tdJacC.assign(tdJacPoints*nnz, 0);
+    }
 }
 
 void PssTranCore::enableTrajectoryCapture() {

@@ -351,6 +351,98 @@ bool PssCore::runShoot(double T0, ErrorConsumer& errors) {
 
 
 // ----------------------------------------------------------------
+// Evaluate (no stabilisation, no shooting Newton loop)
+// ----------------------------------------------------------------
+
+// Called after rebuild()
+bool PssCore::evaluate(bool atIc, ErrorConsumer& errors) {
+    double T0;
+    if (atIc) {
+        // A list cannot supply a period, so ic must name a stored solution
+        if (params.stabilParams.ic.type()!=Value::Type::String) {
+            errors.push(PssSolveIcType{});
+            return false;
+        }
+        String& solutionName = params.stabilParams.ic.val<String>();
+        auto solPtr = circuit.storedSolution(solutionName);
+        if (!solPtr || solPtr->typeTag()!=OperatingPointCore::solutionTag) {
+            errors.push(PssIcNotFound{});
+            return false;
+        }
+        T0 = solPtr->auxReal();
+        if (T0<=0) {
+            errors.push(PssTperInvalid{});
+            return false;
+        }
+
+        // Map the stored solution onto the current unknowns by name (slot 3,
+        // shared with the continuation IC forces)
+        auto n = circuit.unknownCount();
+        auto& options = circuit.simulatorOptions().core();
+        if (!stabilTran_.solver().setForces(3, *solPtr, options.strictforce, errors)) {
+            if (options.strictforce) {
+                errors.push(PssForcesFailed{});
+                return false;
+            }
+            Simulator::wrn() << "Warning, setting IC forces from stored solution failed.\n";
+        }
+
+        // Unknowns missing from the stored solution are an error with strictforce, otherwise a warning
+        auto& forced = stabilTran_.solver().forces(3).unknownForced_;
+        for(decltype(n) u=1; u<=n; u++) {
+            if (!forced[u]) {
+                PssIcIncomplete err{circuit.reprNode(u)->name()};
+                if (options.strictforce) {
+                    errors.push(std::move(err));
+                    return false;
+                }
+                Simulator::wrn() << "Warning, " << err.format() << "\n";
+                break;
+            }
+        }
+
+        x0 = stabilTran_.solver().forces(3).unknownValue_;
+        stabilTran_.solver().enableForces(3, false);
+        solution.vector() = x0;
+    } else {
+        // Evaluate at the current solution and the last converged period
+        // (e.g. right after a converged run())
+        x0 = solution.vector();
+        T0 = T0_converged_;
+        if (T0<=0) {
+            errors.push(PssTperInvalid{});
+            return false;
+        }
+    }
+
+    // One-period shoot from x0, no Newton iteration
+    pssTran_.setShootIC(x0);
+    if (!pssTran_.clearTrajectory(errors)) {
+        errors.push(PssShootingTranFailed{});
+        return false;
+    }
+    params.shootParams.write = params.write;
+    if (params.adjoint) {
+        pssTran_.enableTrajectoryCapture();
+    }
+    if (!runShoot(T0, errors)) {
+        // runShoot() sets the error code
+        return false;
+    }
+    xT = solution.vector();
+    phiT_ = pssTran_.phiCurrent();
+
+    if (params.adjoint && !pssTran_.integrateAdjointMonodromy(omegaT_, errors)) {
+        errors.push(PssAdjointFailed{});
+        return false;
+    }
+
+    x0_converged_ = x0;
+    T0_converged_ = T0;
+    return true;
+}
+
+// ----------------------------------------------------------------
 // Phase constraint
 // ----------------------------------------------------------------
 

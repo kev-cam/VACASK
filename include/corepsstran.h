@@ -236,6 +236,12 @@ public:
     // Step size h0 of the first accepted step of the shoot (t1-t0).
     double firstStepH() const { return firstStepH_; };
 
+    // Enable time-domain Jacobian capture
+    void enableTdJacobianCapture(double period, int N);
+
+    // Disable time-domain Jacobian capture
+    void disableTdjacobianCapture() { enableTdJacobianCapture(0, 0); };
+
     // Enable trajectory capture for the next shoot (call before final runShoot)
     void enableTrajectoryCapture();
 
@@ -243,6 +249,9 @@ public:
     bool integrateAdjointMonodromy(DenseMatrix<double>& Omega, ErrorConsumer& errors);
 
 protected:
+    // Inject breakpoints where we want to collect time-domain Jacobians
+    virtual double injectBreakpoint(double tSolve) override;
+
     // Called by TranCore at every accepted timestep with jacobian holding
     // the factored Alr_k = G_k + alpha_k * C_k from the NR solve.
     // Evaluates C_k, advances Phi through one BDF LMS step using a block
@@ -341,6 +350,22 @@ private:
 
     // False until prevCData_ has been populated for Adams-Moulton.
     bool prevCValid_;
+
+    // Number of timepoints in time-domain Jacobians, <=0 disables collection
+    int tdJacPoints {0};
+
+    // Time step for collecting time-domain Jacobians
+    double tdJacStep {0.0};
+
+    // Position at which to collect the next time-domain Jacobian point
+    int tdJacPos;
+
+    // Time at which to collect the next time-domain Jacobian point
+    double tdJacTime;
+
+    // Time-domain Jacobian data, timepoint stride equals nnz
+    Vector<double> tdJacG;
+    Vector<double> tdJacC;
 
     // Trajectory buffer populated during final shoot for adjoint monodromy integration
     std::vector<StepRecord> trajectory_;

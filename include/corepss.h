@@ -90,6 +90,8 @@ typedef struct PssParameters {
     String store    {""};   // Name of stored solution slot to write
     Int adjoint     {0};    // Enable adjoint monodromy computation
     Int  write      {1};    // Write output datasets
+    Int  solve      {1};    // If true, shoots for the PSS solution, if false evaluates at the
+                            // stored solution given by nodeset. Not exposed to user.
                             // nodeset is mapped to opParams
                             // ic is mapped to stabilParams
                             // solver is mapped to opParams
@@ -113,6 +115,18 @@ typedef struct PssParameters {
 SIMPLE_ERRORCLASS(PssCircuitUsesUnsupportedFeatures, "Circuit uses features not supported by PSS analysis.");
 
 SIMPLE_ERRORCLASS(PssTperInvalid, "Period should be >0.");
+
+SIMPLE_ERRORCLASS(PssSolveIcType, "Ic must be a string when the PSS is not solved.");
+
+SIMPLE_ERRORCLASS(PssIcNotFound, "Stored PSS solution given by ic not found.");
+
+ERRORCLASS(PssIcIncomplete)
+    Id node;
+    PssIcIncomplete(Id node) : node(node) {}
+    std::string format() const {
+        return "Stored PSS solution given by ic has no value for node '" + std::string(node) + "'.";
+    }
+END_ERRORCLASS(PssIcIncomplete);
 
 SIMPLE_ERRORCLASS(PssForcesFailed, "Failed to set forces.");
 
@@ -165,6 +179,9 @@ public:
     bool initializeOutputs(Id name, ErrorConsumer& errors);
     bool run(bool continuePrevious, ErrorConsumer& errors);
     CoreCoroutine coroutine(bool continuePrevious, ErrorConsumer& errors);
+
+    // Evaluate one period without stabilising or shooting the Newton loop.
+    bool evaluate(bool atIc, ErrorConsumer& errors);
     bool finalizeOutputs(ErrorConsumer& errors);
     bool deleteOutputs(Id name, ErrorConsumer& errors);
 
