@@ -5,13 +5,13 @@
 - `lib/`: source code of the simulator library
 - `simulator/`: source code of the entry point, control block interpreter
 - `config/`: sample simulator TOML config file
-- `test/`: test netlists with embedded Python postprecessing scripts that check the results
+- `test/`: test netlists with embedded Python postprocessing scripts that check the results
 - `benchmark/`: benchmarking system and netlists
 - `demo/`: usage examples
 - `devices/`: source code of devices (Verilog-A)
 - `python/`: Python helper scripts, Ngspice, Xschem, and IHP PDK converters
 - `inc/`: supplied netlist include files
-- `docs/`: documetation
+- `docs/`: documentation
 
 ## Documentation rules
 - Entry file is index.md
@@ -23,7 +23,7 @@
 - Use one H1 only.
 - Use relative links within the repository. Link only to other docs. 
 - Keep examples minimal and runnable.
-- Input file syntax is gven by the flex and bison files in the library. 
+- Input file syntax is given by the flex and bison files in the library. 
 - What the developer redacts in a file must be kept. He knows better. 
 - Do not use weird UTF chars, use ASCII. Exception to this are given names. 
 
@@ -57,7 +57,7 @@
 - Same rules as for user docs
 - The main file index.md has a "Last update" field. On full updates you will update this field with the current timestamp (date, time, and timezone code). 
 - Look at suggested .h files and the corresponding .cpp file
-- Sometimes extra .cpp files are also listed that neeed to be documented
+- Sometimes extra .cpp files are also listed that need to be documented
 
 ## Theory documentation
 - In docs/theory

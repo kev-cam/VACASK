@@ -244,13 +244,14 @@ When a file is included with the `include` netlist directive and the given path 
 
 Models are loaded with the `load` netlist directive. If the given path is absolute VACASK looks for the model only at the given path. If, however, it is relative VACASK first searches for the model in the directory where the netlist invoking the `load` directive is located, followed by the current working directory, and the modules search path. The modules search path is by default set to `<vacask library directory>/mod`. You can override it with the `SIM_MODULE_PATH` environmental variable (same syntax as for `SIM_INCLUDE_PATH`). 
 
-VACASK can compile Verilog-A files on the fly. For that purpose VACASK looks for the OpenVAF-Reloaded compiler in the directory where the VACASK binary is installed and in the system path. You can override this by specifying the path to the OpenVAF-Reloaded compiler in the `SIM_OPENVAF` envirnonmental variable. If a `load` directive specifies a raw Verilog-A file (ending in .va), VACASK will try to compile it. The compiled model is placed in the current working directory and then loaded. 
+VACASK can compile Verilog-A files on the fly. For that purpose VACASK looks for the OpenVAF-Reloaded compiler in the directory where the VACASK binary is installed and in the system path. You can override this by specifying the path to the OpenVAF-Reloaded compiler in the `SIM_OPENVAF` environmental variable. If a `load` directive specifies a raw Verilog-A file (ending in .va), VACASK will try to compile it. The compiled model is placed in the current working directory and then loaded. 
 
 VACASK can also be configured with a TOML configuration file. Take a look at [config/vacaskrc-sample.toml](config/vacaskrc-sample.toml). 
 
 # Building VACASK
 As VACASK grows the list of dependencies is getting longer. Currently VACASK depends on
 - C++20 compiler and the standard C++ library
+- OpenMP support in compiler (optional; libgomp1 under Linux)
 - Bison (version 3.3 or newer) and Flex (version 2.6.4 or newer)
 - Boost (version 1.88)
 - toml++ (version 3.4)
@@ -259,9 +260,8 @@ As VACASK grows the list of dependencies is getting longer. Currently VACASK dep
 - OpenBLAS (the OpenMP version) - VACASK links it for both BLAS and LAPACK and
   calls its `openblas_set_num_threads()` directly, so OpenBLAS (not reference
   Netlib BLAS/LAPACK) must be the provider the build finds
-- OpenMP support in compiler (optional; libgomp1 under Linux)
  
-All these components come as pre-built packages for [Debian](https://www.debian.org) (and other Linux distributions). You will also need a working Python3 installation (for the system tests and demos) with the following libraries
+Most of these components come as pre-built packages for [Debian](https://www.debian.org) (and other Linux distributions). You will also need a working Python3 installation (for the system tests and demos) with the following libraries
 - NumPy 2
 - SciPy
 - Scikit-rf
@@ -297,7 +297,7 @@ tools/build/b2 --with-filesystem --with-process --with-asio link=static toolset=
 ```
 Now Boost libraries are installed under `boost_1_88_0/stage` while the include files are in `boost_1_88_0`. 
 
-You will also have to build SuperLU_MT from the sources. Do not use SuperLU_dist, it won't work well. You can download the original package from [https://portal.nersc.gov/project/sparse/superlu/](https://portal.nersc.gov/project/sparse/superlu/), but you will have to edit the `Makefile` and create the `lib` directory manually. Make sure you build the OpenMP version. To save you the trouble, we prepared a version of the soudces where everything is ready for compiling [https://fides.fe.uni-lj.si/vacask/superlu_mt-4.0.0.tar.gz](https://fides.fe.uni-lj.si/vacask/superlu_mt-4.0.0.tar.gz). 
+You will also have to build SuperLU_MT from the sources. Do not use SuperLU_dist, it won't work well. You can download the original package from [https://portal.nersc.gov/project/sparse/superlu/](https://portal.nersc.gov/project/sparse/superlu/), but you will have to edit the `Makefile` and create the `lib` directory manually. Make sure you build the OpenMP version. To save you the trouble, we prepared a version of the sources where everything is ready for compiling [https://fides.fe.uni-lj.si/vacask/superlu_mt-4.0.0.tar.gz](https://fides.fe.uni-lj.si/vacask/superlu_mt-4.0.0.tar.gz). 
 Unpack the sources and run
 ```
 make
@@ -447,7 +447,7 @@ cmake --install . --prefix e:/build/installation
 
 The `-j 8` option enables parallel building with 8 processors. Since OpenBLAS is big, this will save you some time. In the end OpenBLAS will be installed in `e:\build\installation`. 
 
-Finally, download [SuiteSparse](https://people.engr.tamu.edu/davis/suitesparse.html) from [GitHub](https://github.com/DrTimothyAldenDavis/SuiteSparse/releases). Get the latest release source code (at the time of writing 7.10.3). Unpack it in `e:\build`. In the sources directory type
+Next, download [SuiteSparse](https://people.engr.tamu.edu/davis/suitesparse.html) from [GitHub](https://github.com/DrTimothyAldenDavis/SuiteSparse/releases). Get the latest release source code (at the time of writing 7.10.3). Unpack it in `e:\build`. In the sources directory type
 ```
 mkdir build
 cd build
@@ -461,12 +461,12 @@ If you want SuperLU_MT support you wll have to download its sources (see the Lin
 make
 ```
 
-You probably built OpenVAF-Reloaded so you have the `x86_64-pc-windows-msvc` Rust toolchain. For Cadnip parsers support make sure you also have the `stable-x86_64-pc-windows-gnu` toolchain. So type 
+For Cadnip parsers support make sure you have the `stable-x86_64-pc-windows-gnu` toolchain. You probably built OpenVAF-Reloaded so you have only the `x86_64-pc-windows-msvc` Rust toolchain. So type 
 ```
 rustup toolchain install stable-x86_64-pc-windows-gnu
 ```
 
-Replace the `e:\...` paths with your own, if needed. In the end OpenBLAS will be installed in `e:\build\installation`. 
+Replace the `e:\...` paths with your own, if needed. 
 
 ### Building the simulator
 Unpack the sources, create a build directory, and type. 
@@ -511,6 +511,10 @@ code .
 ```
 
 In Windows select the MinGW64 toolchain. In Linux select GCC. Configure the project with Ctrl+Shift+P 'CMake: Delete Cache and Reconfigure', followed by building with Ctrl+Shift+P 'CMake: Build'. A full debugging setup is available in [`launch.json`](.vscode/launch.json). System tests are located in [`test`](test) and can be run via CMake/CTest. The path to the built debug version (relative to the sources) is `../build.VACASK/Debug`. The release version is built under `../build.VACASK/Release`. 
+
+# Use of generative AI
+
+Development of VACASK relies on generative AI (GenAI) primarily for mathematical background preparation, bug audits, debugging, testing, and documentation. Contributors using GenAI should thoroughly review the code they contribute. Before merging contributions into the core simulator they will be subject to strict human review. Low quality and vibe-coded contributions will be rejected. 
 
 # Publications mentioning VACASK
 * Á. Bűrmen, ["VACASK: a Verilog-A Circuit Analysis Kernel"](https://wiki.f-si.org/index.php?title=VACASK:_a_Verilog-A_Circuit_Analysis_Kernel), Free Silicon Conference 2024, Paris, June 2024.
