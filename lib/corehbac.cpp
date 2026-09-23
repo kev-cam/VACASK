@@ -255,19 +255,21 @@ void HBACCore::fillMatrix(
     DelayLines& delayLines, DelayMatrixBindings<DenseMatrixView<Complex>>& delayBindings
 ) {
     acMatrix.zero();
-    for(auto& [pos, flags] : circuit.sparsityMap().positions()) {
+    auto& positions = circuit.sparsityMap().positions();
+    for (MatrixEntryIndex nzIndex = 0; nzIndex < positions.size(); nzIndex++) {
+        auto& [pos, flags] = positions[nzIndex];
         // Delay only blocks are skipped, we load only nonlinear resistive/reactive Jacobian blocks
         if ((flags & EntryFlags::EntryType) == EntryFlags::Delay) {
             continue;
         }
 
         // Jacobian spectrum block, column 1 is G, column 2 is C
-        auto [jacSpecBlock, found1] = jacSpec.block(pos);
+        auto [jacSpecBlock, jacSpecPos, jacSpecFlags] = jacSpec.blockFromIndex(nzIndex);
         auto G = jacSpecBlock.column(0);
         auto C = jacSpecBlock.column(1);
 
         // Get AC matrix block
-        auto [block, found2] = acMatrix.block(pos);
+        auto [block, blockPos, blockFlags] = acMatrix.blockFromIndex(nzIndex);
 
         // Fill block
         fillDenseBlock(spurs, G, C, omega, block);

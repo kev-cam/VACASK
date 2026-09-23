@@ -519,7 +519,9 @@ std::tuple<bool, bool> HBNRSolver::buildSystem(bool continuePrevious, ErrorConsu
     }
 
     // For each Jacobian block (ordered in column major order)
-    for(auto& [pos, flags] : circuit.sparsityMap().positions()) {
+    auto& positions = circuit.sparsityMap().positions();
+    for (MatrixEntryIndex nzIndex = 0; nzIndex < positions.size(); nzIndex++) {
+        auto& [pos, flags] = positions[nzIndex];
         // Delay only blocks are skipped, we load only nonlinear resistive/reactive Jacobian blocks
         if ((flags & EntryFlags::EntryType) == EntryFlags::Delay) {
             continue;
@@ -531,10 +533,10 @@ std::tuple<bool, bool> HBNRSolver::buildSystem(bool continuePrevious, ErrorConsu
         j--;
 
         // Get dense block with Jacobian values at colocation points
-        auto [colocBlock, found1] = jacColoc.block(pos);
+        auto [colocBlock, colocPos, colocFlags] = jacColoc.blockFromIndex(nzIndex);
 
         // Get HB Jacobian dense block
-        auto [block, found2] = bsjac.block(pos);
+        auto [block, blockPos, blockFlags] = bsjac.blockFromIndex(nzIndex);
 
         // Get g_ijk and c_ijk columns from block (column elements are indexed by k)
         auto gCol = colocBlock.column(0);

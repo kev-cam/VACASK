@@ -419,19 +419,21 @@ bool HBCore::getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, c
     Vector<Complex> CFullJac(nfp);
     
     // Go through all dense blocks
-    for(auto& [pos, flags] : circuit.sparsityMap().positions()) {
+    auto& positions = circuit.sparsityMap().positions();
+    for (MatrixEntryIndex nzIndex = 0; nzIndex < positions.size(); nzIndex++) {
+        auto& [pos, flags] = positions[nzIndex];
         // Delay only blocks are skipped, we handle only nonlinear resistive/reactive Jacobian blocks
         if ((flags & EntryFlags::EntryType) == EntryFlags::Delay) {
             continue;
         }
-        
+
         // Get block position (for debugging), make position 0-based
         auto [i, j] = pos;
         i--;
         j--;
 
         // Get dense block with Jacobian values at colocation points
-        auto [colocBlock, found1] = jacColoc.block(pos);
+        auto [colocBlock, colocPos, colocFlags] = jacColoc.blockFromIndex(nzIndex);
         auto gCol = colocBlock.column(0);
         auto cCol = colocBlock.column(1);
 
@@ -490,7 +492,7 @@ bool HBCore::getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, c
         cFullJacView.scale(0.5);
 
         // Get FD Jacobian dense block
-        auto [fdBlock, found2] = jacSpec.block(pos);
+        auto [fdBlock, fdPos, fdFlags] = jacSpec.blockFromIndex(nzIndex);
         auto GCol = fdBlock.column(0);
         auto CCol = fdBlock.column(1);
 

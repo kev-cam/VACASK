@@ -77,15 +77,21 @@ public:
     SparsityMap& operator=(const SparsityMap&)  = delete;
     SparsityMap& operator=(      SparsityMap&&) = delete;
 
+    // Flags are stored with the entry because allocating nnzs also sets flags
     struct Entry {
         MatrixEntryIndex index;
         EntryFlags flags { EntryFlags::NoFlags };
     };
 
     // Type of map from MatrixEntryPosition into a linear array index
+    // This is used for random access through (row,column) pairs (MatrixEntryPosition)
+    // Entry holds the nnz index and flags
     typedef std::unordered_map<MatrixEntryPosition, Entry, MatrixEntryPositionHash> Map;
 
     // Ordered entries type
+    // This is used for sequential access through nnz index. 
+    // Entry holds (row,column) pair and flags. 
+    // Flags are duplicated here to avoid accessing them through a map. 
     typedef std::tuple<MatrixEntryPosition, EntryFlags> OrderedEntry;
 
     // Clear

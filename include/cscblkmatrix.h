@@ -59,22 +59,28 @@ public:
     // column stride nbRow_ - the bucket is contiguous). With a single-scalar
     // bucket every element must alias blockBucket_[0], so both strides are 0.
     std::tuple<DenseMatrixView<ValueType>, bool> block(const MatrixEntryPosition& mep) {
-        auto [nzPosition, found] = elementIndex(mep);
-        if (!found) {
+        auto entry = smap->find(mep);
+        if (!entry) {
             if (largeBucket_) {
                 return std::make_tuple(DenseMatrixView<ValueType>(blockBucket_, nbRow_, nbCol_, 1, nbRow_), false);
             }
             return std::make_tuple(DenseMatrixView<ValueType>(blockBucket_, nbRow_, nbCol_, 0, 0), false);
         }
-        // CSC organizes elements in column major order
-        // row stride is 1, column stride depends on the column of dense blocks
-        // Get 0-based block position
+        auto [view, _, flags] = blockFromIndex(entry->index);
+        return std::make_tuple(view, true);
+    };
+
+    // Same as block(), skips the SparsityMap lookup; also returns positions()[nzIndex] unpacked as (mep, flags).
+    std::tuple<DenseMatrixView<ValueType>, MatrixEntryPosition, EntryFlags> blockFromIndex(MatrixEntryIndex nzIndex) {
+        auto& [mep, flags] = smap->positions()[nzIndex];
+        auto nzPosition = elementIndexFromNzIndex(nzIndex);
         auto [row, col] = mep;
         row--;
         col--;
         return std::make_tuple(
-            DenseMatrixView<ValueType>(Ax.data()+nzPosition, nbRow_, nbCol_, 1, blockColumnStride[col]), 
-            true
+            DenseMatrixView<ValueType>(Ax.data()+nzPosition, nbRow_, nbCol_, 1, blockColumnStride[col]),
+            mep,
+            flags
         );
     };
 
@@ -86,16 +92,11 @@ public:
     bool rebuild(SparsityMap& m, EquationIndex n, EquationIndex nbRow, UnknownIndex nbCol, ErrorConsumer& ec,
                  bool storageOnly=false);
 
-    // Returns the linear nonzero element index coresponding to dense block
-    // at block position mep (0-based), block element position blockMep (1-based). 
-    // If blockMep is not given assumes (0, 0), i.e. block origin. 
-    // Returns index, found. found=true if element exists. 
-    std::tuple<IndexType, bool> elementIndex(const MatrixEntryPosition& mep, const std::optional<MatrixEntryPosition>& blockMep=std::nullopt) const {
-        auto entry = smap->find(mep);
-        if (!entry) {
-            return std::make_tuple(0, false);
-        }
-        
+    // Takes (row,column) block coordinates, nonzero entry index, and options position within block
+    // Returns index of element in raw matrix data corresponding to an element withnin block. 
+    // If blockMep is not given, block origin (0,0) is assumed. 
+    IndexType computeElementIndex(const MatrixEntryPosition& mep, MatrixEntryIndex nzIndex,
+                                              const std::optional<MatrixEntryPosition>& blockMep=std::nullopt) const {
         // Get 0-based block position
         auto [row, col] = mep;
         row--;
@@ -103,7 +104,7 @@ public:
         // Get index of the first dense block in column
         auto firstBlockInColumn = denseColumnBegin[col];
         // Which block in column is this
-        auto blockInColumn = entry->index - firstBlockInColumn;
+        auto blockInColumn = nzIndex - firstBlockInColumn;
         // Compute element index of block origin
         auto nzPosition = blockColumnOrigin[col] + nbRow_*blockInColumn;
 
@@ -114,7 +115,22 @@ public:
             // Compute element position
             nzPosition += bcol * blockColumnStride[col] + brow;
         }
-        return std::make_tuple(nzPosition, true); 
+        return nzPosition;
+    };
+
+    // Looks up nonzero element index in SparsityMap based on given (row,column) position
+    std::tuple<IndexType, bool> elementIndex(const MatrixEntryPosition& mep, const std::optional<MatrixEntryPosition>& blockMep=std::nullopt) const {
+        auto entry = smap->find(mep);
+        if (!entry) {
+            return std::make_tuple(0, false);
+        }
+        return std::make_tuple(computeElementIndex(mep, entry->index, blockMep), true);
+    };
+
+    // Same as above, but takes only nnzIndex; mep is taken from positions()[nnzIndex].
+    IndexType elementIndexFromNzIndex(MatrixEntryIndex nzIndex, const std::optional<MatrixEntryPosition>& blockMep=std::nullopt) const {
+        auto& [mep, flags] = smap->positions()[nzIndex];
+        return computeElementIndex(mep, nzIndex, blockMep);
     };
 
     // Returns a pointer to element (component).
