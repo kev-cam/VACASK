@@ -260,6 +260,7 @@ As VACASK grows the list of dependencies is getting longer. Currently VACASK dep
 - OpenBLAS (the OpenMP version) - VACASK links it for both BLAS and LAPACK and
   calls its `openblas_set_num_threads()` directly, so OpenBLAS (not reference
   Netlib BLAS/LAPACK) must be the provider the build finds
+- FFTW (3.3.10 or newer) 
  
 Most of these components come as pre-built packages for [Debian](https://www.debian.org) (and other Linux distributions). You will also need a working Python3 installation (for the system tests and demos) with the following libraries
 - NumPy 2

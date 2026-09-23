@@ -6,6 +6,7 @@
 #include <cmath>
 #include <sstream>
 #include <iomanip>
+#include <fftw3.h>
 
 namespace NAMESPACE {
 
@@ -482,14 +483,58 @@ bool PssCore::getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, 
         throw std::logic_error("PssCore::getFrequencyDomainJacobians(): nFreq must be <= nPts/2.");
     }
 
-    // Temporary arrays for FFTW
+    // Temporary arrays for FFTW. G and C samples/spectra sit back to back
+    // (offset nPts / nPts/2+1) so a single fftw_plan_many_dft_r2c call
+    // transforms both in one pass.
+    Vector<double> tdSamples(2*nPts);
+    Vector<Complex> fdSamples(2*(nPts/2+1));
+    auto nFd = nPts/2+1;
 
-    // Plan FFT
+    // Plan FFT: 2 transforms of length nPts, consecutive in both arrays
+    int fftLen[] = { static_cast<int>(nPts) };
+    auto fftPlan = fftw_plan_many_dft_r2c(
+        1, // 1D
+        fftLen, 2, // 2 vectors
+        tdSamples.data(), nullptr, 1, nPts, // straightforward array, stride within arrays, array distance, 
+        reinterpret_cast<fftw_complex*>(fdSamples.data()), nullptr, 1, nFd, // same as for input arrays
+        FFTW_ESTIMATE // fast planning
+    );
+
+    // Not yet supported: PssTranCore has no captured time-domain noise modulation source to FFT.
+    if (noiseModulationSpec) {
+        throw std::logic_error("PssCore::getFrequencyDomainJacobians(): noiseModulationSpec not yet supported.");
+    }
 
     // Loop through jacSpec entries, compute FD Jacobians
-    // - copy to a contiguous double array
-    // - FFT, store result in contiguous complex array
-    // - copy to FD Jacobians
+    auto& positions = circuit.sparsityMap().positions();
+    auto nnz = positions.size();
+    for (MatrixEntryIndex nzIndex = 0; nzIndex < positions.size(); nzIndex++) {
+        auto& [pos, flags] = positions[nzIndex];
+        if ((flags & EntryFlags::EntryType) == EntryFlags::Delay) {
+            continue;
+        }
+
+        // Get FD Jacobian dense block, column 0 is G, column 1 is C
+        auto [fdBlock, fdPos, fdFlags] = jacSpec.blockFromIndex(nzIndex);
+        auto GCol = fdBlock.column(0);
+        auto CCol = fdBlock.column(1);
+
+        // Copy resistive and reactive samples, FFT both in one pass
+        for (decltype(nPts) t = 0; t < nPts; t++) {
+            tdSamples[t] = jG[t*nnz + nzIndex];
+            tdSamples[nPts + t] = jC[t*nnz + nzIndex];
+        }
+        fftw_execute(fftPlan);
+
+        // FFTW produces two-sided spectrum (we get only the right side) scaled by N
+        // Normalize (FFTW's r2c is unnormalized) and store
+        for (decltype(nFreq) k = 0; k < nFreq; k++) {
+            GCol[k] = fdSamples[k] / static_cast<double>(nPts);
+            CCol[k] = fdSamples[nFd + k] / static_cast<double>(nPts);
+        }
+    }
+
+    fftw_destroy_plan(fftPlan);
 
     return true;
 }

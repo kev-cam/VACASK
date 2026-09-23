@@ -264,6 +264,36 @@ elseif (${SIM_PLATFORM} STREQUAL "Linux")
     include_directories("/usr/include/openblas")
 endif()
 
+# FFTW3 (used unconditionally by lib/corepss.cpp for PSS's time-domain <->
+# frequency-domain FFT). Located via find_path/find_library rather than
+# find_package(), since FFTW3 does not reliably ship a CMake config package
+# across the platforms this project targets. Pass -DFFTW3_DIR=<prefix> (with
+# <prefix>/include and <prefix>/lib) to override the default search, e.g. for
+# a non-system install.
+if (DEFINED FFTW3_DIR)
+    find_path(SIM_FFTW3_INCLUDE fftw3.h
+        HINTS "${FFTW3_DIR}/include" "${FFTW3_DIR}"
+        NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+    find_library(SIM_FFTW3_LIBRARY NAMES fftw3 libfftw3-3
+        HINTS "${FFTW3_DIR}/lib"
+        NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+elseif (${SIM_PLATFORM} STREQUAL "Darwin")
+    find_path(SIM_FFTW3_INCLUDE fftw3.h HINTS "${BREW_PREFIX}/opt/fftw/include")
+    find_library(SIM_FFTW3_LIBRARY NAMES fftw3 HINTS "${BREW_PREFIX}/opt/fftw/lib")
+else()
+    find_path(SIM_FFTW3_INCLUDE fftw3.h)
+    find_library(SIM_FFTW3_LIBRARY NAMES fftw3 libfftw3-3)
+endif()
+if (NOT SIM_FFTW3_INCLUDE OR NOT SIM_FFTW3_LIBRARY)
+    message(FATAL_ERROR "FFTW3 not found (required by lib/corepss.cpp). "
+        "Install libfftw3-dev (Linux) / fftw (Homebrew, macOS), or pass "
+        "-DFFTW3_DIR=<prefix with include/ and lib/>.")
+endif()
+message(STATUS "FFTW3: found")
+message(STATUS "  headers: ${SIM_FFTW3_INCLUDE}")
+message(STATUS "  library: ${SIM_FFTW3_LIBRARY}")
+include_directories("${SIM_FFTW3_INCLUDE}")
+
 # Bison >= 3.3 is required (matches %require "3.3" in lib/dflparser.y).
 # Flex  >= 2.6.4 is required for the (?:...) non-capturing group syntax used in
 # lib/dfllexer.l (extended patterns landed in the 2.6 series; 2.6.4 is verified).
@@ -432,6 +462,7 @@ if (${SIM_PLATFORM} STREQUAL "Windows")
             ${SuiteSparse_DIR}/lib/libklu_cholmod.a
             ${SuiteSparse_DIR}/lib/libsuitesparseconfig.a
             ${OPENBLAS_DIR}/lib/libopenblas.a
+            ${SIM_FFTW3_LIBRARY}
             # Static GCC runtime so the exe doesn't need libgcc_s_seh-1.dll or
             # libstdc++-6.dll at runtime (no -static-lib<name> driver flag
             # exists for winpthread/dl, so those are forced static further
@@ -449,6 +480,7 @@ elseif (${SIM_PLATFORM} STREQUAL "Darwin")
             Boost::process
             klu amd camd colamd ccolamd btf cholmod suitesparseconfig
             ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES}
+            ${SIM_FFTW3_LIBRARY}
         CACHE STRING "External libraries for creating an executable."
         FORCE
     )
@@ -456,6 +488,7 @@ else()
     set(SIM_EXE_LIBRARIES
             dl m klu amd camd colamd ccolamd btf cholmod suitesparseconfig
             ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES}
+            ${SIM_FFTW3_LIBRARY}
             ${Boost_LIBRARIES}
         CACHE STRING "External libraries for creating an executable."
         FORCE
