@@ -73,6 +73,7 @@
 #include "coreop.h"
 #include "corepsstran.h"
 #include "coretran.h"
+#include "cscblkmatrix.h"
 #include "densematrix.h"
 #include "output.h"
 #include "outrawfile.h"
@@ -181,7 +182,9 @@ public:
     CoreCoroutine coroutine(bool continuePrevious, ErrorConsumer& errors);
 
     // Evaluate one period without stabilising or shooting the Newton loop.
-    bool evaluate(bool atIc, ErrorConsumer& errors);
+    bool evaluate(bool atIc, bool noiseModulation, int nPts, ErrorConsumer& errors);
+    bool getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, int nFreq, Vector<Complex>* noiseModulationSpec=nullptr);
+
     bool finalizeOutputs(ErrorConsumer& errors);
     bool deleteOutputs(Id name, ErrorConsumer& errors);
 

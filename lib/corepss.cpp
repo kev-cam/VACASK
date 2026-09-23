@@ -355,7 +355,7 @@ bool PssCore::runShoot(double T0, ErrorConsumer& errors) {
 // ----------------------------------------------------------------
 
 // Called after rebuild()
-bool PssCore::evaluate(bool atIc, ErrorConsumer& errors) {
+bool PssCore::evaluate(bool atIc, bool noiseModulation, int nPts, ErrorConsumer& errors) {
     double T0;
     if (atIc) {
         // A list cannot supply a period, so ic must name a stored solution
@@ -415,6 +415,9 @@ bool PssCore::evaluate(bool atIc, ErrorConsumer& errors) {
         }
     }
 
+    // Prepare for recording the time-domain Jacobians
+    pssTran_.enableTdJacobianCapture(T0, nPts);
+
     // One-period shoot from x0, no Newton iteration
     pssTran_.setShootIC(x0);
     if (!pssTran_.clearTrajectory(errors)) {
@@ -425,7 +428,13 @@ bool PssCore::evaluate(bool atIc, ErrorConsumer& errors) {
     if (params.adjoint) {
         pssTran_.enableTrajectoryCapture();
     }
-    if (!runShoot(T0, errors)) {
+    auto shootOk = runShoot(T0, errors);
+
+    // Disable recoring 
+    pssTran_.disableTdJacobianCapture();
+
+    // Shoot OK?
+    if (!shootOk) {
         // runShoot() sets the error code
         return false;
     }
@@ -439,6 +448,49 @@ bool PssCore::evaluate(bool atIc, ErrorConsumer& errors) {
 
     x0_converged_ = x0;
     T0_converged_ = T0;
+    return true;
+}
+
+// ----------------------------------------------------------------
+// getFrequencyDomainJacobians
+// ----------------------------------------------------------------
+
+bool PssCore::getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, int nFreq, Vector<Complex>* noiseModulationSpec) {
+    // Get stored Jacobians
+    auto [jG, jC] = pssTran_.capturedJacobians();
+
+    // Extract the number of points
+    auto nPts = pssTran_.jacobianPointCount();
+
+    // Get period
+    auto T0 = T0_converged_;
+
+    // nPts must be even, raise exception if this does not hold
+    if (nPts % 2 != 0) {
+        throw std::logic_error("PssCore::getFrequencyDomainJacobians(): nPts must be even.");
+    }
+
+    // N = 2k = nPts points result in a spectrum with N=2k freq components
+    // For real points X_i = X_{N-1}^*
+    // Therefore X_{N/2} is conjugate to itself, i.e. real. 
+    // Components X_0 .. X_{N/2-1} are the available spectrum
+    // i.e. N/2 spectral components including DC (i=0). 
+    // nFreq must therefore satisfy nFreq<=nPts/2
+    // Caller must check if this holds.
+    // Logic error otherwise
+    if (nFreq > nPts/2) {
+        throw std::logic_error("PssCore::getFrequencyDomainJacobians(): nFreq must be <= nPts/2.");
+    }
+
+    // Temporary arrays for FFTW
+
+    // Plan FFT
+
+    // Loop through jacSpec entries, compute FD Jacobians
+    // - copy to a contiguous double array
+    // - FFT, store result in contiguous complex array
+    // - copy to FD Jacobians
+
     return true;
 }
 

@@ -93,6 +93,18 @@ ERRORCLASS(PssTranEvalCFailed)
     std::string format() const { return "PssTranCore: evalAndLoad(C) failed at t=" + std::to_string(t) + "."; }
 END_ERRORCLASS(PssTranEvalCFailed);
 
+ERRORCLASS(PssTranLoadCFailed)
+    double t;
+    PssTranLoadCFailed(double t) : t(t) {}
+    std::string format() const { return "PssTranCore: reactive Jacobian load failed at t=" + std::to_string(t) + "."; }
+END_ERRORCLASS(PssTranLoadCFailed);
+
+ERRORCLASS(PssTranLoadGFailed)
+    double t;
+    PssTranLoadGFailed(double t) : t(t) {}
+    std::string format() const { return "PssTranCore: resistive Jacobian load failed at t=" + std::to_string(t) + "."; }
+END_ERRORCLASS(PssTranLoadGFailed);
+
 ERRORCLASS(PssTranAlrFactorizationFailed)
     double t;
     PssTranAlrFactorizationFailed(double t) : t(t) {}
@@ -237,10 +249,16 @@ public:
     double firstStepH() const { return firstStepH_; };
 
     // Enable time-domain Jacobian capture
-    void enableTdJacobianCapture(double period, int N);
+    void enableTdJacobianCapture(double period, int N, bool noise=false);
 
     // Disable time-domain Jacobian capture
-    void disableTdjacobianCapture() { enableTdJacobianCapture(0, 0); };
+    void disableTdJacobianCapture() { enableTdJacobianCapture(0, 0); };
+
+    // Retrieve stored Jacobians at timepoints
+    std::tuple<const Vector<double>&, const Vector<double>&> capturedJacobians() { return std::make_tuple(tdJacG, tdJacC); };
+
+    // Retrieve number of points
+    int jacobianPointCount() { return tdJacPoints; };
 
     // Enable trajectory capture for the next shoot (call before final runShoot)
     void enableTrajectoryCapture();
@@ -355,7 +373,10 @@ private:
     int tdJacPoints {0};
 
     // Time step for collecting time-domain Jacobians
-    double tdJacStep {0.0};
+    double tdJacPeriod {0.0};
+
+    // Capture noise
+    bool tdNoise {false};
 
     // Position at which to collect the next time-domain Jacobian point
     int tdJacPos;

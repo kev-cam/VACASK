@@ -261,11 +261,13 @@ bool PssTranCore::onTimestepAccepted(double tSolve, double hk, Int order, ErrorC
         // (promoted to current further down, after qdot_k is derived from it) -
         // no separate temporary.
         jacobian.zero();
+        // Evaluate resistive Jacobian because later on we will need it
         EvalSetup es = solver().evalSetup();
-        es.evaluateResistiveJacobian = false;
+        es.evaluateResistiveJacobian = true;
         es.evaluateReactiveJacobian  = true;
-        es.evaluateResistiveResidual = false;
+        es.evaluateResistiveResidual = true;
         es.evaluateReactiveResidual  = true;
+        es.evaluateNoise             = tdNoise;
         es.storeReactiveState        = true;
         es.evaluateOutvars           = false;
         es.allowBypass               = false;
@@ -397,9 +399,57 @@ bool PssTranCore::onTimestepAccepted(double tSolve, double hk, Int order, ErrorC
     }
 
     // Time-domain Jacobian collection
-    if (tdJacPoints>0) {
-        // Are we at a breakpoint where we must collect the Jacobians?
+    if (
+        (tdJacPoints>0) &&
+        (std::abs(tSolve-tdJacTime)<timeRelativeTolerance*std::max(tSolve, tdJacTime))
+    ) {
+        // At a breakpoint, store Jacobians
+        LoadSetup ls;
+
+        // If this is the first point, eval was performed by coretran
+        // For later points eval was perfromed by monidromy computation
+        // In both cases resistive and reactive Jacobians are computed. 
         
+        // Compute delta between reactive Jacobian CSC matrix data 
+        // and destination data slot 0 in terms of double slots
+        auto offset0 = tdJacC.data() - jacobian.axData();
+
+        // Load reactive Jacobian at this timepoint
+        ls.loadReactiveJacobian   = true;
+        ls.reactiveJacobianFactor = 1.0;
+        ls.jacobianLoadOffset = offset0 + jacobian.nnz()*tdJacPos;
+        if (!circuit.evalAndLoad(commons, nullptr, &ls, nullptr, errors)) {
+            errors.push(PssTranLoadCFailed{tSolve});
+            return false;
+        }
+
+        // Compute delta between resistive Jacobian CSC matrix data
+        // and destination data slot 0 in terms of double slots
+        auto offset1 = tdJacG.data() - jacobian.axData();
+
+        // Load resistive Jacobian at this timepoint
+        ls.loadReactiveJacobian = false;
+        ls.loadResistiveJacobian = true;
+        ls.jacobianLoadOffset = offset1 + jacobian.nnz()*tdJacPos;
+        if (!circuit.evalAndLoad(commons, nullptr, &ls, nullptr, errors)) {
+            errors.push(PssTranLoadGFailed{tSolve});
+            return false;
+        }
+
+        // TODO: noise
+
+        // Advance to next point
+        tdJacPos++;
+        
+        // Finished?
+        if (tdJacPos>=tdJacPoints) {
+            // Finished, reset to start
+            tdJacPos = 0;
+            tdJacTime = 0;
+        } else {
+            // Advance
+            tdJacTime = tdJacPeriod/tdJacPoints*tdJacPos;
+        }
     }
     return true;
 }
@@ -551,10 +601,11 @@ bool PssTranCore::integrateAdjointMonodromy(DenseMatrix<double>& Omega, ErrorCon
     return true;
 }
 
-void PssTranCore::enableTdJacobianCapture(double period, int N) {
+void PssTranCore::enableTdJacobianCapture(double period, int N, bool noise) {
     tdJacPoints = N;
     if (N>0) {
-        tdJacStep = period/tdJacPoints;
+        tdJacPeriod = period;
+        tdNoise = noise;
         tdJacPos = 0;
         tdJacTime = 0.0;
         auto nnz = jacobian.nnz();

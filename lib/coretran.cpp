@@ -988,9 +988,15 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         .nodesetEnabled = false, 
         .icEnabled = false, 
 
+        // Evaluate resistive Jacobian, residual, and noise, 
+        // because PAC and friends need them at first point
+        .evaluateResistiveJacobian = true, 
         .evaluateReactiveJacobian = true, 
+        .evaluateResistiveResidual = true, 
         .evaluateReactiveResidual = true, 
+        .evaluateLinearizedResistiveRhsResidual = true, 
         .evaluateLinearizedReactiveRhsResidual = true, 
+        .evaluateNoise = true, 
         
         .storeReactiveState = true, 
         
