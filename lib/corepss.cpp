@@ -15,7 +15,7 @@ namespace NAMESPACE {
 // ----------------------------------------------------------------
 
 template<> int Introspection<PssParameters>::setup() {
-    registerMember(driven);
+    registerMember(oscillator);
     registerMember(tper);
     registerMember(tstab);
     registerMember(stabstep);
@@ -343,7 +343,7 @@ bool PssCore::runShoot(double T0, ErrorConsumer& errors) {
     // Psi_T (period sensitivity) is only needed for the autonomous phase
     // condition/Jacobian column. Computed once per shoot, here, rather than
     // at every accepted step inside PssTranCore - see pss.md, "Computing Psi_T".
-    if (!params.driven && !pssTran_.computePsiT(errors)) {
+    if (params.oscillator && !pssTran_.computePsiT(errors)) {
         errors.push(PssSensitivityFailed{});
         return false;
     }
@@ -677,7 +677,7 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
             ss << " ]\n" << "\txT=[";
             for (decltype(n) i = 1; i <= n; i++) ss << " " << xT[i];
             ss << " ]\n";
-            if (!params.driven) {
+            if (params.oscillator) {
                 ss << "\tT0=" << T0 << "\n";
             }
             Simulator::dbg() << ss.str();
@@ -698,7 +698,7 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
                 for (decltype(n) j = 0; j < n; j++) ss << tmpPhiT.at(i, j) << " ";
                 ss << "]\n";
             }
-            if(!params.driven) {
+            if(params.oscillator) {
                 auto& tmpPsiT = pssTran_.psiCurrent();
                 ss << "\tPsiT=[ ";
                 for (decltype(n) i = 0; i < n; i++) ss << tmpPsiT[i] << " ";
@@ -721,7 +721,7 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
         jpBlock.diagonal().addScaled(VectorView(ones_), 1.0);
 
         // Compute phase constraint for autonomous circuits
-        if (!params.driven){
+        if (params.oscillator){
             auto& tmpPsiT = pssTran_.psiCurrent();
             computePhaseConstraint(x0, pssTran_.firstStepX(), pssTran_.firstStepH(), alpha);
             if (debug>0){
@@ -742,7 +742,7 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
             Jp.row(n).subVector(0, n) = VectorView(alpha);
         }
         // If the circuit is driven, make sure Jp is not singular by setting the corner to 1
-        Jp.at(n, n) = params.driven ? 1.0 : 0.0;
+        Jp.at(n, n) = !params.oscillator ? 1.0 : 0.0;
 
         // Solve the Newton step
         VectorView rhsView(Fp);
@@ -755,7 +755,7 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
         VectorView(x0, 1, n, 1).addScaled(
             VectorView(Fp, n), -1.0
         );
-        T0 -= params.driven ? 0.0 : rhsView[n];
+        T0 -= !params.oscillator ? 0.0 : rhsView[n];
 
         // Get new xT
         solution.vector() = x0;

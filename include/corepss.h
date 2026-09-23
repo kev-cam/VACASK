@@ -82,7 +82,7 @@
 namespace NAMESPACE {
 
 typedef struct PssParameters {
-    Int  driven     {0};    // Non-autonomous (driven) circuit
+    Int  oscillator {0};    // Autonomous circuit, assume driven by default
     Real tper       {0.0};  // Initial period guess
     Real tstab      {0.0};  // Stabilization transient time
     Real stabstep   {0.0};  // Stabilization transient timestep

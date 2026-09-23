@@ -51,7 +51,7 @@ control
 
     save default
 
-    analysis pss1 pss tper=1.117n tstab=50n writestab=1
+    analysis pss1 pss oscillator=1 tper=1.117n tstab=50n writestab=1
 
     postprocess(PYTHON, "runme.py")
 endc

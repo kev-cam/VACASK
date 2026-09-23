@@ -67,7 +67,7 @@ control
   save default
 
   options pss_tolscale=1e-9
-  analysis pssosc1 pss tper=1.04839n tstab=150n writestab=1
+  analysis pssosc1 pss oscillator=1 tper=1.04839n tstab=150n writestab=1
   analysis tranosc1 tran start=200n stop=300n maxstep=1p step=0.5p
 
   postprocess(PYTHON, "runme.py")

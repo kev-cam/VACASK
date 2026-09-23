@@ -94,6 +94,7 @@ add_library(simlib STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/coretran.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/corepsstran.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/corepss.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/corepac.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/corehb.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/corehbnr.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/corehbac.h
@@ -191,6 +192,9 @@ add_library(simlib STATIC
     coretrancoef.cpp 
     coretrannr.cpp 
     coretran.cpp
+    corepsstran.cpp
+    corepss.cpp
+    corepac.cpp
     corehb.cpp
     corehbcoloc.cpp
     corehbxform.cpp
@@ -210,17 +214,15 @@ add_library(simlib STATIC
     anacsp.cpp 
     annoise.cpp 
     antran.cpp
+    anpss.cpp
     anhb.cpp
+    anhbac.cpp
+    anhbnoise.cpp
     tdnblock.cpp
     tdnzohwhite.cpp
     tdnzohflicker.cpp
     tdnsdewhite.cpp
     tdnsdeflicker.cpp
-    anhbac.cpp
-    anhbnoise.cpp
-    corepsstran.cpp
-    corepss.cpp
-    anpss.cpp
     location.cpp
     "${BISON_dflparser_OUTPUTS}"
     "${FLEX_dfllexer_OUTPUTS}"

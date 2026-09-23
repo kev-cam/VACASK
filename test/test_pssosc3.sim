@@ -87,7 +87,7 @@ control
 
   options pss_tolscale=1e-9
 
-  analysis pss6 pss tper=0.975n tstab=100n writestab=1
+  analysis pss6 pss oscillator=1 tper=0.975n tstab=100n writestab=1
 
   postprocess(PYTHON, "runme.py")
 endc

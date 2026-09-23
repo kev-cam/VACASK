@@ -45,7 +45,7 @@ control
 
   save default
 
-  analysis pss1 pss driven=1 tper=1m tstab=10m writestab=1
+  analysis pss1 pss tper=1m tstab=10m writestab=1
   
   postprocess(PYTHON, "runme.py")
 endc
