@@ -448,12 +448,6 @@ CoreCoroutine PACCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
     auto n = circuit.unknownCount();
     auto nf = 2*maxharm_+1;
 
-    // Collect excitations
-    if (!collectExcitations(errors)) {
-        co_yield CoreState::Aborted;
-        co_return;
-    }
-
     // Make sure structures are large enough
     // One bucket for each sideband
     pacSolution.resize((n+1)*nf);
@@ -481,6 +475,12 @@ CoreCoroutine PACCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
     
     // Collect frequency-domain Jacobians (DC..maxharm_, Toeplitz basis)
     if (!pssCore_.getFrequencyDomainJacobians(jacSpec, maxharm_, nullptr, errors)) {
+        co_yield CoreState::Aborted;
+        co_return;
+    }
+
+    // Collect excitations - we need the period for this so call pss/evaluate first
+    if (!collectExcitations(errors)) {
         co_yield CoreState::Aborted;
         co_return;
     }

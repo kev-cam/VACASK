@@ -316,7 +316,7 @@ std::tuple<bool, double> PssCore::runStabilisation(bool continuePrevious, ErrorC
             return std::make_tuple(false, period);
         }
         // Check parameters
-        if (params.tstab>0 && params.tstab < 10.0 * params.tper) {
+        if (params.oscillator && params.tstab>0 && params.tstab < 10.0 * params.tper) {
             Simulator::wrn() << "PSS: Tstab < 10 * Tper. Oscillator may not have settled.\n";
         }
         params.stabilParams.icmode = params.icmode;
@@ -446,12 +446,13 @@ bool PssCore::evaluate(bool atIc, bool noiseModulation, int nPts, ErrorConsumer&
     prepareShoot(T0);
 
     // If nPts<=0 we compute our own value
+    double nPtsNeeded = nPts;
     if (nPts<=0) {
-        auto nPts = std::ceil(T0/params.shootParams.maxstep);
+        nPtsNeeded = std::ceil(T0/params.shootParams.maxstep);
     }
     
     // Round up to power of 2
-    auto p2 = std::ceil(std::log2(static_cast<double>(nPts)));
+    auto p2 = std::ceil(std::log2(nPtsNeeded));
     if (p2>31) {
         errors.push(PssTooManyShootingPoints{});
         return false;
