@@ -22,16 +22,18 @@ template<> int Introspection<PACParameters>::setup() {
     registerMember(points);
     registerMember(values);
     registerMember(outharm);
-    registerMember(maxharm);
-    registerMember(maxfreq);
+    registerMember(truncharm);
     registerMember(write);
     registerMember(solver);
+    registerNamedMember(pssParams.maxharm, "maxharm");
+    registerNamedMember(pssParams.maxacfreq, "maxacfreq");
     registerNamedMember(pssParams.write, "writepss");
     registerNamedMember(pssParams.oscillator, "oscillator");
     registerNamedMember(pssParams.tper, "tper");
     registerNamedMember(pssParams.tstab, "tstab");
     registerNamedMember(pssParams.stabstep, "stabstep");
     registerNamedMember(pssParams.icmode, "icmode");
+    registerNamedMember(pssParams.maxharm, "maxharm");
     registerNamedMember(pssParams.maxacfreq, "maxacfreq");
     registerNamedMember(pssParams.store, "store");
     registerNamedMember(pssParams.stabilParams.ic, "ic");
@@ -65,6 +67,18 @@ PACCore::PACCore(
 PACCore::~PACCore() {
     delete outfile;
 }
+
+// The methods are called in the following order
+// rebuild()
+// resolveOutputDescriptors()
+// run()
+// 
+// Before run() we don't know trhe period/fundamental frequency. 
+// Therefore we cannot select output harmonics based on the frequency. 
+// PSS determines the period for driven circuit based on the tper 
+// parameter or initial conditions set by the ic parameter. 
+// Therefore the period is not 100% known until PSS runs. 
+// Consequently we can select harmonics only by their index. 
 
 bool PACCore::resolveOutputDescriptors(bool strict, ErrorConsumer& errors) {
     // Clear output sources
@@ -215,6 +229,7 @@ std::tuple<bool, size_t> PACCore::smsigFreqIndex(const Value& v, bool allowFrequ
             return std::make_tuple(true, static_cast<size_t>(hint+maxharm_));
         }
     }
+    errors.push(PacBadSidebandSpec{});
     return std::make_tuple(false, size_t(0));
 }
 
@@ -289,14 +304,17 @@ void PACCore::fillMatrix(
 }
 
 bool PACCore::rebuild(ErrorConsumer& errors) {
-    if (params.maxharm < 0) {
+    maxharm_ = params.truncharm;
+
+    if (maxharm_ < 0) {
         errors.push(PacMaxharmInvalid{});
         return false;
     }
-    maxharm_ = params.maxharm;
-    auto nFreq = maxharm_ + 1;      // jacSpec rows: DC..maxharm (Toeplitz basis)
+ 
+    // We do not have PSS results yet so we dont't know the period
+    auto nFreq = maxharm_ + 1;      // jacSpec rows: DC..truncharm (Toeplitz basis)
     auto nf    = 2*maxharm_ + 1;    // pacMatrix rows/cols: sidebands -maxharm..maxharm
-
+    
     // Jacobian spectral components
     if (!jacSpec.rebuild(circuit.sparsityMap(), circuit.unknownCount(), nFreq, 2, errors, true)) {
         return false;
@@ -315,33 +333,34 @@ bool PACCore::rebuild(ErrorConsumer& errors) {
     // Collect output harmonic sidebands
     std::vector<int> newOutHarmRows;
     if (params.outharm.type() == Value::Type::ValueVec) {
-        // List of sidebands: each element is a signed harmonic or a real frequency
+        // List of sidebands: each element is a signed harmonic
         // Empty list means all sidebands
         if (params.outharm.size()==0) {
-            for(decltype(nf) row=0; row<nf; row++) {
-                newOutHarmRows.push_back(static_cast<int>(row));
+            for(decltype(nf) freqNdx=0; freqNdx<nf; freqNdx++) {
+                newOutHarmRows.push_back(static_cast<int>(freqNdx));
             }
         } else {
             size_t cnt=0;
             for (const auto& v : params.outharm.val<ValueVector>()) {
-                // Allow spur specification by frequency only for driven circuits (default oscillator=0).
-                auto [ok, row] = smsigFreqIndex(v, !params.pssParams.oscillator, errors);
+                // Allow spur specification only by index
+                auto [ok, freqNdx] = smsigFreqIndex(v, false, errors);
                 if (!ok) {
                     errors.push(PacOutharmNotFound{cnt});
                     return false;
                 }
-                newOutHarmRows.push_back(static_cast<int>(row));
+                newOutHarmRows.push_back(static_cast<int>(freqNdx));
                 cnt++;
             }
         }
     } else {
         // Single sideband: scalar signed harmonic or real frequency
-        auto [ok, row] = smsigFreqIndex(params.outharm, !params.pssParams.oscillator, errors);
+        // Allow spur specification only by index
+        auto [ok, freqNdx] = smsigFreqIndex(params.outharm, false, errors);
         if (!ok) {
             errors.push(PacOutharmSingleNotFound{});
             return false;
         }
-        newOutHarmRows.push_back(static_cast<int>(row));
+        newOutHarmRows.push_back(static_cast<int>(freqNdx));
     }
 
     // No output sidebands, error
@@ -397,7 +416,9 @@ bool PACCore::collectExcitations(ErrorConsumer& errors) {
 
                 excitations.push_back(Excitation{inst, {}, {}});
                 for(decltype(nSpurs) i=0; i<nSpurs; i++) {
-                    auto [ok, row] = smsigFreqIndex(spurs[i], true, errors);
+                    // Allow spur specification also by freqeuncy because bny now pss has
+                    // run and the period is known
+                    auto [ok, freqNdx] = smsigFreqIndex(spurs[i], true, errors);
                     if (!ok) {
                         errors.push(PacExcitationHarmNotFound{i, inst->name()});
                         return false;
@@ -408,7 +429,7 @@ bool PACCore::collectExcitations(ErrorConsumer& errors) {
                     double re = mag*std::cos(ph*std::numbers::pi/180);
                     double im = mag*std::sin(ph*std::numbers::pi/180);
 
-                    excitations.back().harm.push_back(row);
+                    excitations.back().harm.push_back(freqNdx);
                     excitations.back().value.push_back(Complex(re, im));
                 }
             }
@@ -447,23 +468,22 @@ CoreCoroutine PACCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
             co_yield CoreState::Aborted;
             co_return;
         }
-    } else {
-        // Evaluate PSS at the stored solution named by ic, sampling enough
-        // points to resolve maxharm_ harmonics (Nyquist: >=2*(maxharm_+1)).
-        auto nPts = std::max(2*(maxharm_+1), static_cast<Int>(options.pss_minpts));
-        if (nPts % 2 != 0) {
-            nPts++;
-        }
-        if (!pssCore_.evaluate(true, false, nPts, errors)) {
-            errors.push(PacPssFailed{});
-            co_yield CoreState::Aborted;
-            co_return;
-        }
+    } 
+    
+    // Evaluate PSS, sampling enough points to satisfy maxacfreq and maxharm. 
+    // We do this always, even if we ran PSS due to solve=1. 
+    // Evaluate at ic if solve=0
+    if (!pssCore_.evaluate(!params.pssParams.solve, false, -1, errors)) {
+        errors.push(PacPssFailed{});
+        co_yield CoreState::Aborted;
+        co_return;
     }
-
+    
     // Collect frequency-domain Jacobians (DC..maxharm_, Toeplitz basis)
-    auto nFreq = maxharm_+1;
-    pssCore_.getFrequencyDomainJacobians(jacSpec, nFreq);
+    if (!pssCore_.getFrequencyDomainJacobians(jacSpec, maxharm_, nullptr, errors)) {
+        co_yield CoreState::Aborted;
+        co_return;
+    }
 
     // Check if the Jacobians are finite
     if (options.matrixcheck && !jacSpec.isFinite(true, true, errors)) {

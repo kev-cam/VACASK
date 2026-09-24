@@ -42,33 +42,27 @@ namespace NAMESPACE {
 typedef struct PACParameters {
     PssParameters pssParams;
 
-    Real from {0};      // Start frequency for step and dec/oct/lin sweep
-    Real to {0};        // Stop frequency for step and dec/oct/lin sweep
-    Real step {0};      // Step size for step sweep
-    Id mode {Id()};     // Mode for dec/oct/lin sweep
-    Int points {0};     // Number of points for dec/oct/lin sweep
-    Value values {0};   // Vector of values for values sweep
-    Value outharm;      // Signed harmonic sideband(s) to observe, relative to
-                         // the swept probe frequency: scalar integer, integer
-                         // vector, or real frequency (matched against h*f0).
-                         // Default is empty list {} (all sidebands).
-    Int maxharm {0};    // Number of harmonics to keep beyond DC. The LPTV
-                         // Jacobian is truncated beyond this order. Response
-                         // has 2*maxharm+1 sidebands per unknown.
-    Real maxfreq {-1};  // TODO: not yet implemented. Intended as a maximal
-                         // absolute harmonic frequency for truncation, like
-                         // HBAC's maxfreq, but T0 (hence f0=1/T0) is only
-                         // known after the PSS solve, while maxharm sizes the
-                         // block-sparse matrices at rebuild() time, before
-                         // the solve. <0 keeps all harmonics up to maxharm.
-    Int write {1};      // Write the results to a file
+    Real from {0};       // Start frequency for step and dec/oct/lin sweep
+    Real to {0};         // Stop frequency for step and dec/oct/lin sweep
+    Real step {0};       // Step size for step sweep
+    Id mode {Id()};      // Mode for dec/oct/lin sweep
+    Int points {0};      // Number of points for dec/oct/lin sweep
+    Value values {0};    // Vector of values for values sweep
+    Value outharm;       // Signed harmonic sideband(s) to observe, relative to
+                         // the swept probe frequency: scalar integer or integer
+                         // vector. Default is empty list {} (all sidebands 
+                         // up to truncharm).
+    Int truncharm {10};  // Number of harmonics to keep beyond DC. The LPTV
+                         // Jacobian is truncated beyond this order. 
+                         // Must always be given. 
+    Int write {1};       // Write the results to a file
                          // writepss is the write parameter of the pss core
                          // nodeset, ic and store parameters of the pss core
                          // are also exposed. solve parameter of the pss core
                          // is exposed as psssolve. The pss core's own linear
                          // solver (op-core solver) is exposed as pssopsolver,
                          // since "solver" here names PAC's own solver.
-    Id solver {};       // Linear solver to use, overrides qpsmsigsolver option
+    Id solver {};        // Linear solver to use, overrides qpsmsigsolver option
 
     PACParameters();
 } PACParameters;
@@ -89,6 +83,8 @@ SIMPLE_ERRORCLASS(PacNoOutharm, "No output harmonic given.");
 SIMPLE_ERRORCLASS(PacOutharmChanged, "Output harmonics are not allowed to change.");
 
 SIMPLE_ERRORCLASS(PacFrequencySidebandNotAllowed, "Frequency-valued sideband/harmonic is not allowed before the PSS period is known.");
+
+SIMPLE_ERRORCLASS(PacBadSidebandSpec, "Sideband/harmonic must be a signed integer harmonic or a matching real frequency.");
 
 SIMPLE_ERRORCLASS(PacPssFailed, "PSS analysis failed.");
 

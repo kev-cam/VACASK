@@ -87,7 +87,8 @@ typedef struct PssParameters {
     Real tstab      {0.0};  // Stabilization transient time
     Real stabstep   {0.0};  // Stabilization transient timestep
     Id   icmode     {Id()}; // IC mode for stabilisation transient (op by default)
-    Real maxacfreq  {0.0};  // Max AC frequency to resolve; limits maxstep to 1/(2*maxacfreq). Clipped to 40/tper if below that.
+    Int maxharm     {0};    // Maximal number of harmonics; limits timestep to period/(2*(maxharm+1))
+    Real maxacfreq  {0.0};  // Max AC frequency to resolve; limits timestep to 1/(2*(maxacfreq+1/period)). Clipped to 40/tper if below that.
     String store    {""};   // Name of stored solution slot to write
     Int adjoint     {0};    // Enable adjoint monodromy computation
     Int  write      {1};    // Write output datasets
@@ -96,7 +97,7 @@ typedef struct PssParameters {
                             // nodeset is mapped to opParams
                             // ic is mapped to stabilParams
                             // solver is mapped to opParams
-
+    
     // Parameters forwarded to subsidiary cores
     OperatingPointParameters opParams;
     TranParameters stabilParams;
@@ -153,6 +154,10 @@ SIMPLE_ERRORCLASS(PssAdjointFailed, "Adjoint monodromy computation failed.");
 
 SIMPLE_ERRORCLASS(PssAdjointDisabled, "Adjoint monodromy was not computed. Set adjoint=1 before running PSS.");
 
+SIMPLE_ERRORCLASS(PssTooManyShootingPoints, "The required number of PSS evaluation points overflows.");
+
+SIMPLE_ERRORCLASS(PssMaxFreqIndexTooLarge, "Insufficient harmonics computed. Increase maxacfreq and maxharm.");
+
 
 class PssCore : public AnalysisCore {
 public:
@@ -181,9 +186,10 @@ public:
     bool run(bool continuePrevious, ErrorConsumer& errors);
     CoreCoroutine coroutine(bool continuePrevious, ErrorConsumer& errors);
 
-    // Evaluate one period without stabilising or shooting the Newton loop.
+    // Evaluate one period without stabilising or shooting the Newton loop
+    // nPts<=0 computes the number of points based on pss_minpts option, maxacfreq, and maxharm
     bool evaluate(bool atIc, bool noiseModulation, int nPts, ErrorConsumer& errors);
-    bool getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, int nFreq, Vector<Complex>* noiseModulationSpec=nullptr);
+    bool getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, int maxFreqIndex, Vector<Complex>* noiseModulationSpec, ErrorConsumer& errors);
 
     bool finalizeOutputs(ErrorConsumer& errors);
     bool deleteOutputs(Id name, ErrorConsumer& errors);
@@ -195,6 +201,9 @@ public:
 
     // Converged period in seconds. Valid after a successful run().
     double convergedPeriod() const { return T0_converged_; }
+
+    // Maximum transient step actually used during the last shoot (after maxacfreq clamping). Valid after runShoot().
+    double maxShootingStep() const { return maxShootingStep_; }
 
     // Converged PSS initial condition vector xs(t0). Valid after a successful run().
     const Vector<double>& convergedInitialCondition() const { return x0_converged_; }
@@ -212,10 +221,10 @@ protected:
     // Prepare stabilisation transient
     void prepareStabilisation(double period);
 
-    // Clamp step/maxstep of tp to respect params.maxacfreq, given the
-    // applicable period (stabilisation period or shoot period T0). Shared
+    // Clamp step/maxstep of tp to respect params.maxacfreq and params.maxharm. 
+    // Based on current period (stabilisation period or shoot period T0). Shared
     // by prepareStabilisation() and runShoot().
-    void clampStepToMaxacfreq(TranParameters& tp, double period) const;
+    void clampStep(TranParameters& tp, double period) const;
 
     CSCRealMatrix& jacobian;            // Resistive Jacobian
     VectorRepository<double>& solution; // Solution history
@@ -224,6 +233,9 @@ protected:
     // Converged results. Populated on successful run().
     double         T0_converged_;
     Vector<double> x0_converged_;
+
+    // Maximum transient step actually used during the last shoot. Set in runShoot(), read by maxShootingStep().
+    double maxShootingStep_;
 
     // Analysis name stored at initializeOutputs() time, used by runStabilisation().
     Id name_;
@@ -259,10 +271,13 @@ private:
     // Return value: ok, period
     std::tuple<bool, double> runStabilisation(bool continuePrevious, ErrorConsumer& errors);
 
+    // Prepare timestep for shoot
+    void prepareShoot(double T0);
+
     // Integrate one period T0 from the initial condition in solution_.vector().
     // On return, solution_.vector() holds xT, the endpoint of the shoot.
     // pssTran_.trajectory() is populated with G(t) and C(t) snapshots.
-    bool runShoot(double T0, ErrorConsumer& errors);
+    bool runShoot(ErrorConsumer& errors);
 
     // Compute the phase constraint vector alpha.
     // alpha fixes the phase of the PSS solution so the (n+1) x (n+1)

@@ -20,6 +20,7 @@ template<> int Introspection<PssParameters>::setup() {
     registerMember(tstab);
     registerMember(stabstep);
     registerMember(icmode);
+    registerMember(maxharm);
     registerMember(maxacfreq);
     registerMember(store);
     registerMember(write);
@@ -50,7 +51,8 @@ PssCore::PssCore(
     opCore_(opCore),
     stabilTran_(stabilTran),
     pssTran_(pssTran),
-    T0_converged_(0.0)
+    T0_converged_(0.0),
+    maxShootingStep_(0.0)
 {
     // Slot 3 is for ICs in continuation mode
     opCore_.solver().resizeForces(4);
@@ -94,6 +96,8 @@ bool PssCore::rebuild(ErrorConsumer& errors) {
     ones_.assign(n, 1.0);
     x0.resize(n+1);
     xT.resize(n+1);
+
+    // Get ic, if it is a stored solution, extract its period
 
     return true;
 }
@@ -170,10 +174,17 @@ bool PssCore::restoreState(size_t ndx) {
 // Both are using the same Jacobian so preMapping()/populateStructutres() 
 // of these two cores will take care of all the reuqired entries. 
 
-void PssCore::clampStepToMaxacfreq(TranParameters& tp, double period) const {
+void PssCore::clampStep(TranParameters& tp, double period) const {
+    // maxacfreq
     if (params.maxacfreq > 0) {
         double effMaxacfreq = std::max(params.maxacfreq, 40.0 / period);
         double hmax = std::min(tp.maxstep, 1.0 / (2.0 * effMaxacfreq));
+        tp.maxstep = hmax;
+        tp.step    = std::min(tp.step, hmax);
+    }
+    // maxharm
+    if (params.maxharm > 0) {
+        double hmax = std::min(tp.maxstep, period/((params.maxharm+1)*2));
         tp.maxstep = hmax;
         tp.step    = std::min(tp.step, hmax);
     }
@@ -192,7 +203,7 @@ void PssCore::prepareStabilisation(double period) {
     params.stabilParams.maxstep = params.stabilParams.step;
     params.stabilParams.start   = 0.0;
 
-    clampStepToMaxacfreq(params.stabilParams, period);
+    clampStep(params.stabilParams, period);
 }
 
 // If we ever allow homotopy, move part of this to runSolver()
@@ -325,16 +336,20 @@ std::tuple<bool, double> PssCore::runStabilisation(bool continuePrevious, ErrorC
 // One-period shoot
 // ----------------------------------------------------------------
 
-bool PssCore::runShoot(double T0, ErrorConsumer& errors) {
+void PssCore::prepareShoot(double T0) {
     auto& options = circuit.simulatorOptions().core();
     params.shootParams.stop    = T0;
     params.shootParams.step    = T0 / options.pss_minpts;
     params.shootParams.maxstep = T0 / options.pss_minpts;
     params.shootParams.start   = 0.0;
 
-    clampStepToMaxacfreq(params.shootParams, T0);
+    // Take into account maxacfreq parameter
+    clampStep(params.shootParams, T0);
 
+    maxShootingStep_ = params.shootParams.maxstep;
+}
 
+bool PssCore::runShoot(ErrorConsumer& errors) {
     if (!pssTran_.run(false, errors)) {
         errors.push(PssShootingTranFailed{});
         return false;
@@ -416,9 +431,6 @@ bool PssCore::evaluate(bool atIc, bool noiseModulation, int nPts, ErrorConsumer&
         }
     }
 
-    // Prepare for recording the time-domain Jacobians
-    pssTran_.enableTdJacobianCapture(T0, nPts);
-
     // One-period shoot from x0, no Newton iteration
     pssTran_.setShootIC(x0);
     if (!pssTran_.clearTrajectory(errors)) {
@@ -429,7 +441,27 @@ bool PssCore::evaluate(bool atIc, bool noiseModulation, int nPts, ErrorConsumer&
     if (params.adjoint) {
         pssTran_.enableTrajectoryCapture();
     }
-    auto shootOk = runShoot(T0, errors);
+
+    // Compute max timestep
+    prepareShoot(T0);
+
+    // If nPts<=0 we compute our own value
+    if (nPts<=0) {
+        auto nPts = std::ceil(T0/params.shootParams.maxstep);
+    }
+    
+    // Round up to power of 2
+    auto p2 = std::ceil(std::log2(static_cast<double>(nPts)));
+    if (p2>31) {
+        errors.push(PssTooManyShootingPoints{});
+        return false;
+    }
+    nPts = static_cast<Int>(1) << static_cast<Int>(p2);
+
+    // Prepare for recording the time-domain Jacobians
+    pssTran_.enableTdJacobianCapture(T0, nPts);
+
+    auto shootOk = runShoot(errors);
 
     // Disable recoring 
     pssTran_.disableTdJacobianCapture();
@@ -456,7 +488,7 @@ bool PssCore::evaluate(bool atIc, bool noiseModulation, int nPts, ErrorConsumer&
 // getFrequencyDomainJacobians
 // ----------------------------------------------------------------
 
-bool PssCore::getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, int nFreq, Vector<Complex>* noiseModulationSpec) {
+bool PssCore::getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, int maxFreqIndex, Vector<Complex>* noiseModulationSpec, ErrorConsumer& errors) {
     // Get stored Jacobians
     auto [jG, jC] = pssTran_.capturedJacobians();
 
@@ -479,8 +511,9 @@ bool PssCore::getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, 
     // nFreq must therefore satisfy nFreq<=nPts/2
     // Caller must check if this holds.
     // Logic error otherwise
-    if (nFreq > nPts/2) {
-        throw std::logic_error("PssCore::getFrequencyDomainJacobians(): nFreq must be <= nPts/2.");
+    if (maxFreqIndex >= nPts/2) {
+        errors.push(PssMaxFreqIndexTooLarge{});
+        return false;
     }
 
     // Temporary arrays for FFTW. G and C samples/spectra sit back to back
@@ -527,8 +560,9 @@ bool PssCore::getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, 
         fftw_execute(fftPlan);
 
         // FFTW produces two-sided spectrum (we get only the right side) scaled by N
-        // Normalize (FFTW's r2c is unnormalized) and store
-        for (decltype(nFreq) k = 0; k < nFreq; k++) {
+        // Normalize (FFTW's r2c is unnormalized) and store the 
+        // nonnegative half of the one-sided spectrum. 
+        for (decltype(maxFreqIndex) k = 0; k <= maxFreqIndex; k++) {
             GCol[k] = fdSamples[k] / static_cast<double>(nPts);
             CCol[k] = fdSamples[nFd + k] / static_cast<double>(nPts);
         }
@@ -660,7 +694,9 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
         errors.push(PssShootingTranFailed{});
         co_yield CoreState::Aborted;
     }
-    if (!runShoot(T0, errors)) {
+    // No external maxHarm and maxFreq requested
+    prepareShoot(T0);
+    if (!runShoot(errors)) {
         // runShoot() sets the error code
         co_yield CoreState::Aborted;
     }
@@ -764,7 +800,8 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
             errors.push(PssShootingTranFailed{});
             co_yield CoreState::Aborted;
         }
-        if (!runShoot(T0, errors)) {
+        prepareShoot(T0);
+        if (!runShoot(errors)) {
             // runShoot() sets the error code
             co_yield CoreState::Aborted;
         }
@@ -835,7 +872,8 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
     if (params.adjoint) {
         pssTran_.enableTrajectoryCapture();
     }
-    if (!runShoot(T0, errors)) {
+    prepareShoot(T0);
+    if (!runShoot(errors)) {
         co_yield CoreState::Aborted;
     }
 
