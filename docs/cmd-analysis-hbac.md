@@ -59,8 +59,8 @@ The following parameters are specific to `hbac`:
 |-----------|------|---------|-------------|
 | `hbsolve` | boolean | `1` | Solve the HB operating point. Set to `0` to linearize at the stored HB solution named by `nodeset` without solving. `writehb` then writes the stored solution, and `store` has no effect. |
 | `outspur` | real, integer vector, or list | `{}` | Output spur(s) to observe. Each list entry is a real frequency (Hz) or an integer tone-weight vector. Default `{}` selects all spurs. |
-| `maxharm` | integer or integer vector | `-1` | Truncate the conversion matrix to spurs whose tone weights satisfy $\lvert k_j \rvert \le \text{maxharm}_j$ for all $j$. Scalar applies to all tones. Negative: no truncation (use all spurs from the HB spectrum). |
-| `maxfreq` | real | `-1` | Truncate the conversion matrix to spurs whose absolute frequency does not exceed `maxfreq` (Hz). Negative: no truncation. |
+| `truncharm` | integer or integer vector | `-1` | Truncate the conversion matrix to spurs whose tone weights satisfy $\lvert k_j \rvert \le \text{truncharm}_j$ for all $j$. Scalar applies to all tones. Negative: no truncation (use all spurs from the HB spectrum). |
+| `truncfreq` | real | `-1` | Truncate the conversion matrix to spurs whose absolute frequency does not exceed `truncfreq` (Hz). Negative: no truncation. |
 | `write` | boolean | `1` | Write the small-signal results to a file. |
 | `writehb` | boolean | `0` | Also write the HB operating point results to `<analysis>.hb.*`. |
 | `solver` | string | `""` | Linear solver for the complex conversion-matrix solve, overriding the `qpsmsigsolver` option. See [Linear Solver Selection](cmd-options-solver.md). |

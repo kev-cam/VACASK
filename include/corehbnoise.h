@@ -44,10 +44,10 @@ typedef struct HBNoiseParameters {
     Value inspur {0.0};  // Input spur where we inject equivalent input noise (DC by default)
                          // - scalar real spur frequency
                          // - integer vector with tone weights defining a spur
-    Value maxharm {-1};  // Maximal absolute tone weight for spectrum truncation.
+    Value truncharm {-1};  // Maximal absolute tone weight for spectrum truncation.
                          // Integer or integer vector, scalar applies to all tones.
                          // <0 keeps all tones computed by hb.
-    Real maxfreq {-1};   // Maximal absolute frequency for spectrum truncation
+    Real truncfreq {-1};   // Maximal absolute frequency for spectrum truncation
                          // <0 keeps all tones.
     Int write {1};       // Write the results to a file
                          // writehb is the write parameter of hb core

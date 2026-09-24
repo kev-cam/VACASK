@@ -39,12 +39,12 @@ control
   options reltol=1e-12
 
   // HBAC with a preceding HB solve
-  analysis hbac1 hbac freq=[1k] nharm=10 outspur={} values=[10.0] maxharm=3
+  analysis hbac1 hbac freq=[1k] nharm=10 outspur={} values=[10.0] truncharm=3
 
   options smsig_debug=0
   analysis hb1 hb freq=[1k] nharm=10 store="hbsol"
   // HBAC evaluating at a stored HB solution
-  analysis hbac2 hbac nodeset="hbsol" hbsolve=0 outspur={} values=[10.0] maxharm=3
+  analysis hbac2 hbac nodeset="hbsol" hbsolve=0 outspur={} values=[10.0] truncharm=3
 
   postprocess(PYTHON, "runme.py")
 endc

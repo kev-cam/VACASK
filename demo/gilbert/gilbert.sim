@@ -82,7 +82,7 @@ control
   // HBAC, turn off vin so it does not disturb the HB periodic operating point
   alter instance("vin") ampl=0
   // Use only first 10 harmonics in HBAC
-  analysis hbac1 hbac freq=[1M] truncate="box" nharm=15 outspur={} from=1 to=500k mode="dec" points=10 maxharm=10 
+  analysis hbac1 hbac freq=[1M] truncate="box" nharm=15 outspur={} from=1 to=500k mode="dec" points=10 truncharm=10 
 
   postprocess(PYTHON, "runme.py")
 endc

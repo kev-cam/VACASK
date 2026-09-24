@@ -22,8 +22,8 @@ template<> int Introspection<HBACParameters>::setup() {
     registerMember(points);
     registerMember(values);
     registerMember(outspur);
-    registerMember(maxharm);
-    registerMember(maxfreq);
+    registerMember(truncharm);
+    registerMember(truncfreq);
     registerMember(write);
     registerMember(solver);
     registerNamedMember(hbParams.write, "writehb");

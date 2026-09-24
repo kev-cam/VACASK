@@ -72,8 +72,8 @@ The following parameters are specific to `hbnoise`:
 | `in` | string | `""` | Instance name of the independent source used as the input reference for power gain. |
 | `outspur` | real or integer vector | `0.0` (DC) | Output spur at which noise/gain is observed: a scalar frequency (Hz) or an integer tone-weight vector. Unlike `hbac`, exactly one spur is selected (no list). |
 | `inspur` | real or integer vector | `0.0` (DC) | Input spur at which the equivalent input excitation for the power-gain computation is placed. |
-| `maxharm` | integer or integer vector | `-1` | Truncate the small-signal spectrum to spurs whose tone weights satisfy $\lvert k_j \rvert \le \text{maxharm}_j$ for all $j$. Scalar applies to all tones. Negative: no truncation. |
-| `maxfreq` | real | `-1` | Truncate the small-signal spectrum to spurs whose absolute frequency does not exceed `maxfreq` (Hz). Negative: no truncation. |
+| `truncharm` | integer or integer vector | `-1` | Truncate the small-signal spectrum to spurs whose tone weights satisfy $\lvert k_j \rvert \le \text{truncharm}_j$ for all $j$. Scalar applies to all tones. Negative: no truncation. |
+| `truncfreq` | real | `-1` | Truncate the small-signal spectrum to spurs whose absolute frequency does not exceed `truncfreq` (Hz). Negative: no truncation. |
 | `hbsolve` | boolean | `1` | Solve the HB operating point. Set to `0` to linearize at the stored HB solution named by `nodeset` without solving. `writehb` then writes the stored solution, and `store` has no effect. |
 | `from` | real | `0` | Start offset frequency (Hz). |
 | `to` | real | `0` | Stop offset frequency (Hz). |

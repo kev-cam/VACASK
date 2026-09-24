@@ -27,8 +27,8 @@ template<> int Introspection<HBNoiseParameters>::setup() {
     registerMember(values);
     registerMember(outspur);
     registerMember(inspur);
-    registerMember(maxharm);
-    registerMember(maxfreq);
+    registerMember(truncharm);
+    registerMember(truncfreq);
     registerMember(write);
     registerMember(solver);
     registerNamedMember(hbParams.write, "writehb");

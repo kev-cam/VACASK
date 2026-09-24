@@ -31,28 +31,28 @@ namespace NAMESPACE {
 typedef struct HBACParameters {
     HBParameters hbParams;
 
-    Real from {0};      // Start frequency for step and dec/oct/lin sweep
-    Real to {0};        // Stop frequency for step and dec/oct/lin sweep
-    Real step {0};      // Step size for step sweep
-    Id mode {Id()};     // Mode for dec/oct/lin sweep
-    Int points {0};     // Number of points for dec/oct/lin sweep
-    Value values {0};   // Vector of values for values sweep
-    Value outspur;      // specifies spurs where small signal response is observed
-                        // - scalar real spur frequency
-                        // - integer vector with tone weights defining a spur
-                        // - list holding reals (frequency), integer vectors (tone weights)
-                        // Default is empty list {} (all spurs). 
-    Value maxharm {-1}; // Maximal absolute tone weight for spectrum truncation. 
-                        // Integer or integer vector, scalar applies to all tones. 
-                        // <0 keeps all tones computed by hb. 
-    Real maxfreq {-1};  // Maximal absolute frequencyfor spectrum truncation
-                        // <0 keeps all tones. 
-    Int write {1};      // Write the results to a file
-                        // writehb is the write parameter of hb core
-                        // nodeset and store parameters of the hb core are also exposed.
-                        // solve parameter of hb core is exposed as hbsolve
-                        // solver parameter of hb core is exposed as hbsolver
-    Id solver {};       // Linear solver to use, overrides qpsmsigsolver option
+    Real from {0};        // Start frequency for step and dec/oct/lin sweep
+    Real to {0};          // Stop frequency for step and dec/oct/lin sweep
+    Real step {0};        // Step size for step sweep
+    Id mode {Id()};       // Mode for dec/oct/lin sweep
+    Int points {0};       // Number of points for dec/oct/lin sweep
+    Value values {0};     // Vector of values for values sweep
+    Value outspur;        // specifies spurs where small signal response is observed
+                          // - scalar real spur frequency
+                          // - integer vector with tone weights defining a spur
+                          // - list holding reals (frequency), integer vectors (tone weights)
+                          // Default is empty list {} (all spurs). 
+    Value truncharm {-1}; // Maximal absolute tone weight for spectrum truncation. 
+                          // Integer or integer vector, scalar applies to all tones. 
+                          // <0 keeps all tones computed by hb. 
+    Real truncfreq {-1};  // Maximal absolute frequency for spectrum truncation
+                          // <0 keeps all tones. 
+    Int write {1};        // Write the results to a file
+                          // writehb is the write parameter of hb core
+                          // nodeset and store parameters of the hb core are also exposed.
+                          // solve parameter of hb core is exposed as hbsolve
+                          // solver parameter of hb core is exposed as hbsolver
+    Id solver {};         // Linear solver to use, overrides qpsmsigsolver option
 
     HBACParameters();
 } HBACParameters;
@@ -288,31 +288,31 @@ bool HBACCore::rebuildCore(
     // Make a local copy of spurs structure
     spurs = Spurs(hbCore.spurs());
 
-    // Get maxharm and maxfreq
-    Vector<Int> maxharm(spurs.fundamentals().size());
-    if (params.maxharm.isVector()) {
-        // Vector maxharm
-        if (params.maxharm.type()!=Value::Type::IntVec) {
+    // Get truncharm and truncfreq
+    Vector<Int> truncharm(spurs.fundamentals().size());
+    if (params.truncharm.isVector()) {
+        // Vector truncharm
+        if (params.truncharm.type()!=Value::Type::IntVec) {
             errors.push(HbAcMaxharmType{});
             return false;
         }
-        if (params.maxharm.size()!=spurs.fundamentals().size()) {
+        if (params.truncharm.size()!=spurs.fundamentals().size()) {
             errors.push(HbAcMaxharmSize{});
             return false;
         }
-        maxharm = params.maxharm.template val<IntVector>();
+        truncharm = params.truncharm.template val<IntVector>();
     } else {
-        // Scalar maxharm
-        if (params.maxharm.type()!=Value::Type::Int) {
+        // Scalar truncharm
+        if (params.truncharm.type()!=Value::Type::Int) {
             errors.push(HbAcMaxharmScalarType{});
             return false;
         }
-        maxharm.assign(spurs.fundamentals().size(), params.maxharm.template val<Int>());
+        truncharm.assign(spurs.fundamentals().size(), params.truncharm.template val<Int>());
     }
-    auto maxfreq = params.maxfreq;
+    auto truncfreq = params.truncfreq;
 
     // Prune spurs
-    if (!spurs.prune(maxharm, maxfreq)) {
+    if (!spurs.prune(truncharm, truncfreq)) {
         errors.push(HbAcSpurPruneFailed{});
         return false;
     }
