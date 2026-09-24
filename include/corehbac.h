@@ -248,9 +248,6 @@ protected:
     CSCBlockSparseComplexMatrix& acMatrix;
     Vector<Complex>& acSolution;
 
-    // Previous HB parameters to check if we need to rebuild()
-    HBACParameters oldParams;
-
     HBACParameters& params;
 
     std::vector<std::string> suffixes;

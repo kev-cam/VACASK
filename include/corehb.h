@@ -228,9 +228,6 @@ private:
     // NR solver resizes this vector. This vector has no bucket.
     Vector<Complex> solutionFD;
 
-    // Previous HB parameters to check if we need to rebuild()
-    HBParameters oldParams;
-    
     // HB parameters
     HBParameters& params;
 
