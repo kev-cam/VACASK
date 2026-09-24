@@ -201,7 +201,7 @@ void PACCore::computeOmega(Real f) {
 // Used in place of Spurs::smsigFreqIndex()
 std::tuple<bool, size_t> PACCore::smsigFreqIndex(const Value& v, bool allowFrequency, ErrorConsumer& errors) const {
     if (v.type()==Value::Type::Int) {
-        auto h = v.val<Int>();
+        auto h = v.val<const Int>();
         if (h < -maxharm_ || h > maxharm_) {
             return std::make_tuple(false, size_t(0));
         }
@@ -220,7 +220,7 @@ std::tuple<bool, size_t> PACCore::smsigFreqIndex(const Value& v, bool allowFrequ
             throw std::logic_error("PACCore::smsigFreqIndex(): PSS period unknown despite allowFrequency=true.");
         }
         auto f0 = 1.0 / T0;
-        auto hReal = v.val<Real>() / f0;
+        auto hReal = v.val<const Real>() / f0;
         auto h = std::round(hReal);
         auto freqtol = 1e-14;
         auto tol = freqtol * std::max(1.0, std::fabs(h));
