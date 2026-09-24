@@ -10,18 +10,18 @@
 
 namespace NAMESPACE {
 
-class Pss : public Analysis {
+class PSS : public Analysis {
 public:
     typedef PssParameters Parameters;
 
     static inline const Id analysisId = Id::createStatic("pss");
 
-    Pss(Id name, Circuit& circuit, PTAnalysis& ptAnalysis);
+    PSS(Id name, Circuit& circuit, PTAnalysis& ptAnalysis);
 
-    Pss           (const Pss&)  = delete;
-    Pss           (      Pss&&) = delete;
-    Pss& operator=(const Pss&)  = delete;
-    Pss& operator=(      Pss&&) = delete;
+    PSS           (const PSS&)  = delete;
+    PSS           (      PSS&&) = delete;
+    PSS& operator=(const PSS&)  = delete;
+    PSS& operator=(      PSS&&) = delete;
 
     virtual void dump(std::ostream& os) const;
 

@@ -126,7 +126,7 @@ bool Simulator::setup(
     ok &= registerAnalysis<HB>(s);
     ok &= registerAnalysis<HBAC>(s);
     ok &= registerAnalysis<HBNoise>(s);
-    ok &= registerAnalysis<Pss>(s);
+    ok &= registerAnalysis<PSS>(s);
     ok &= registerAnalysis<PAC>(s);
 
     // Register real and complex klu solver here

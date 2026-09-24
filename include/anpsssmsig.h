@@ -13,7 +13,7 @@
 namespace NAMESPACE {
 
 // PSS analog of HBSmallSignal (anhbsmsig.h): owns the PSS cores (opCore_, stabilTran_,
-// pssTran_, pssCore_, same as Pss) plus a CoreClass smsigCore (PACCore, ...).
+// pssTran_, pssCore_, same as PSS) plus a CoreClass smsigCore (PACCore, ...).
 // Same DataMixin/explicit-specialization mechanism.
 template<typename CoreClass, typename DataMixin> class PssSmallSignal : public Analysis, public DataMixin {
 public:
