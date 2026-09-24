@@ -1920,10 +1920,15 @@ bool TranCore::run(bool continuePrevious, ErrorConsumer& errors) {
     auto c = coroutine(continuePrevious, errors);
     bool ok = true;
     while (!c.done()) {
-        if (c.resume()==CoreState::Aborted) {
+        auto state = c.resume();
+        if (state==CoreState::Aborted) {
             ok = false;
             break;
-        };
+        }
+        if (state==CoreState::Finished) {
+            break;
+        }
+        // Do not exit on Stopped
     }
     return ok;
 }
