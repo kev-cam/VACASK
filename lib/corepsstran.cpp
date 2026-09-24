@@ -170,6 +170,8 @@ bool PssTranCore::clearTrajectory(ErrorConsumer& errors) {
     // when EnableIntegration is true, which requires icEnabled false here
     // (see the analogous fix in coretran.cpp's esInit).
     es.icEnabled                 = false;
+    es.enableLimiting            = false;
+    es.initializeLimiting        = false;
 
     LoadSetup ls;
     ls.loadReactiveJacobian   = true;
@@ -202,7 +204,7 @@ bool PssTranCore::clearTrajectory(ErrorConsumer& errors) {
 // ----------------------------------------------------------------
 double PssTranCore::injectBreakpoint(double tSolve) {
     // Force the shoot to land exactly on the next time-domain Jacobian sample time
-    if (tdJacPoints<=0 || tdJacPos>=tdJacPoints) {
+    if (!jacSamplesCollectionEnabled || tdJacPos>=tdJacPoints) {
         // Inject breakpoint at t=0 (will be ignored)
         return 0;
     }
@@ -274,6 +276,8 @@ bool PssTranCore::onTimestepAccepted(double tSolve, double hk, Int order, ErrorC
         // See the C_0/q_0 block above: icEnabled must be false for OpenVAF's
         // idt(a,b) to compute the correct reactive residual here too.
         es.icEnabled                 = false;
+        es.enableLimiting            = false;
+        es.initializeLimiting        = false;
 
         LoadSetup ls;
         ls.loadReactiveJacobian   = true;
@@ -399,42 +403,38 @@ bool PssTranCore::onTimestepAccepted(double tSolve, double hk, Int order, ErrorC
     }
 
     // Time-domain Jacobian collection
+    // Use <= because tolerance at t=0 is 0 and the time difference is also 0. 
     if (
-        (tdJacPoints>0) &&
-        (std::abs(tSolve-tdJacTime)<timeRelativeTolerance*std::max(tSolve, tdJacTime))
+        jacSamplesCollectionEnabled &&
+        (std::abs(tSolve-tdJacTime)<=timeRelativeTolerance*std::max(tSolve, tdJacTime))
     ) {
         // At a breakpoint, store Jacobians
         LoadSetup ls;
+        auto nnz = jacobian.nnz();
 
         // If this is the first point, eval was performed by coretran
         // For later points eval was perfromed by monidromy computation
         // In both cases resistive and reactive Jacobians are computed. 
-        
-        // Compute delta between reactive Jacobian CSC matrix data 
-        // and destination data slot 0 in terms of double slots
-        auto offset0 = tdJacC.data() - jacobian.axData();
 
-        // Load reactive Jacobian at this timepoint
+        // Load reactive Jacobian at this timepoint, then copy it to slot tdJacPos
+        jacobian.zero();
         ls.loadReactiveJacobian   = true;
         ls.reactiveJacobianFactor = 1.0;
-        ls.jacobianLoadOffset = offset0 + jacobian.nnz()*tdJacPos;
         if (!circuit.evalAndLoad(commons, nullptr, &ls, nullptr, errors)) {
             errors.push(PssTranLoadCFailed{tSolve});
             return false;
         }
+        std::copy(jacobian.axData(), jacobian.axData() + nnz, tdJacC.data() + nnz*tdJacPos);
 
-        // Compute delta between resistive Jacobian CSC matrix data
-        // and destination data slot 0 in terms of double slots
-        auto offset1 = tdJacG.data() - jacobian.axData();
-
-        // Load resistive Jacobian at this timepoint
+        // Load resistive Jacobian at this timepoint, then copy it to slot tdJacPos
+        jacobian.zero();
         ls.loadReactiveJacobian = false;
         ls.loadResistiveJacobian = true;
-        ls.jacobianLoadOffset = offset1 + jacobian.nnz()*tdJacPos;
         if (!circuit.evalAndLoad(commons, nullptr, &ls, nullptr, errors)) {
             errors.push(PssTranLoadGFailed{tSolve});
             return false;
         }
+        std::copy(jacobian.axData(), jacobian.axData() + nnz, tdJacG.data() + nnz*tdJacPos);
 
         // TODO: noise
 
@@ -611,6 +611,7 @@ void PssTranCore::enableTdJacobianCapture(double period, int N, bool noise) {
         auto nnz = jacobian.nnz();
         tdJacG.assign(tdJacPoints*nnz, 0);
         tdJacC.assign(tdJacPoints*nnz, 0);
+        jacSamplesCollectionEnabled = true;
     }
 }
 

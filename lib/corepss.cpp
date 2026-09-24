@@ -419,6 +419,12 @@ bool PssCore::evaluate(bool atIc, bool noiseModulation, int nPts, ErrorConsumer&
 
         x0 = stabilTran_.solver().forces(3).unknownValue_;
         stabilTran_.solver().enableForces(3, false);
+
+        // No transient has run, so the histories are not allocated yet
+        // clearTrajectory() calls evalAndLoad() which in turn needs these 
+        // vectors. 
+        solution.upsize(2, n+1);
+        states.upsize(2, circuit.statesCount());
         solution.vector() = x0;
     } else {
         // Evaluate at the current solution and the last converged period
@@ -638,6 +644,8 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
 
     auto& options = circuit.simulatorOptions().core();
     auto debug = options.pss_debug;
+
+    initProgress(1, 0);
 
     auto n = circuit.unknownCount();
 
@@ -910,6 +918,7 @@ CoreCoroutine PssCore::coroutine(bool continuePrevious, ErrorConsumer& errors) {
     
     x0_converged_ = x0;
     T0_converged_ = T0;
+    setProgress(1);
     co_yield CoreState::Finished;
     
 }

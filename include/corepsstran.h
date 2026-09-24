@@ -252,10 +252,10 @@ public:
     void enableTdJacobianCapture(double period, int N, bool noise=false);
 
     // Disable time-domain Jacobian capture
-    void disableTdJacobianCapture() { enableTdJacobianCapture(0, 0); };
+    void disableTdJacobianCapture() { jacSamplesCollectionEnabled = false; }; 
 
     // Retrieve stored Jacobians at timepoints
-    std::tuple<const Vector<double>&, const Vector<double>&> capturedJacobians() { return std::make_tuple(tdJacG, tdJacC); };
+    std::tuple<const Vector<double>&, const Vector<double>&> capturedJacobians() { return std::tie(tdJacG, tdJacC); };
 
     // Retrieve number of points
     int jacobianPointCount() { return tdJacPoints; };
@@ -369,7 +369,10 @@ private:
     // False until prevCData_ has been populated for Adams-Moulton.
     bool prevCValid_;
 
-    // Number of timepoints in time-domain Jacobians, <=0 disables collection
+    // Enable Jacobian samples collection
+    bool jacSamplesCollectionEnabled {false}; 
+
+    // Number of timepoints in time-domain Jacobians
     int tdJacPoints {0};
 
     // Time step for collecting time-domain Jacobians
