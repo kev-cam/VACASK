@@ -113,6 +113,8 @@ add_library(simlib STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/annoise.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/antran.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/anpss.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/anpsssmsig.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/anpac.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/anhb.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/anhbsmsig.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/anhbac.h
@@ -215,6 +217,7 @@ add_library(simlib STATIC
     annoise.cpp 
     antran.cpp
     anpss.cpp
+    anpac.cpp
     anhb.cpp
     anhbac.cpp
     anhbnoise.cpp

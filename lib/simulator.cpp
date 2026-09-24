@@ -13,6 +13,7 @@
 #include "anhbac.h"
 #include "anhbnoise.h"
 #include "anpss.h"
+#include "anpac.h"
 #include "solklu.h"
 #ifdef SIM_HAVE_SUPERLU
 #include "solsuperlu.h"
@@ -126,6 +127,7 @@ bool Simulator::setup(
     ok &= registerAnalysis<HBAC>(s);
     ok &= registerAnalysis<HBNoise>(s);
     ok &= registerAnalysis<Pss>(s);
+    ok &= registerAnalysis<PAC>(s);
 
     // Register real and complex klu solver here
     ok &= RealSparseSolver::registerSolver<KluRealSparseSolver>();
