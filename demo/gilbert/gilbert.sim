@@ -67,13 +67,6 @@ control
 
   elaborate circuit("sintest")
   
-  // Gilbert cell with upper quad in switching mode does not work. 
-  // APFT has an odd number of time samples. Therefore odd harmonics 
-  // alias into even harmonics which should be 0. 
-  // Once PAC is implemented, we will try again. 
-  // This should also improve if we switch to FFT. 
-  // elaborate circuit("swtest")
-  
   // Transient, 2-tone HB
   analysis tran1 tran step=1n stop=40u maxstep=2n 
   options reltol=1e-9 abstol=1e-12 vntol=1e-10 hb_debug=0 hb_skipinitial=1
@@ -82,7 +75,22 @@ control
   // HBAC, turn off vin so it does not disturb the HB periodic operating point
   alter instance("vin") ampl=0
   // Use only first 10 harmonics in HBAC
-  analysis hbac1 hbac freq=[1M] truncate="box" nharm=15 outspur={} from=1 to=500k mode="dec" points=10 truncharm=10 
+  analysis hbac1 hbac freq=[1M] truncate="box" nharm=15 truncharm=10 outspur={} from=1 to=500k mode="dec" points=10
+
+  // PAC equivalent to the HBAC above, vin is still turned off
+  analysis pac1 pac tper=1u tstab=10u maxharm=100 truncharm=10 outharm={} from=1 to=500k mode="dec" points=10
+
+  
+  // PAC with the upper quad in switching mode (pulse LO).
+  // Gilbert cell with upper quad in switching mode does not work with HB. 
+  // APFT has an odd number of time samples. Therefore odd harmonics 
+  // alias into even harmonics which should be 0. 
+  // This should also improve if we switch to FFT. 
+  elaborate circuit("swtest")
+  
+  // Turn off vin again so it does not disturb the periodic operating point.
+  alter instance("vin") ampl=0
+  analysis pac2 pac tper=1u tstab=10u truncharm=20 outharm={} from=1 to=500k mode="dec" points=10
 
   postprocess(PYTHON, "runme.py")
 endc
@@ -97,13 +105,19 @@ plot = raw.get()
 for name in plot.names:
   print(name, plot[name])
 
-fig1 = plt.figure(figsize=(8,10), dpi=100)
+fig1 = plt.figure(figsize=(8,7.5), dpi=100)
 # fig1.suptitle('Gilbert cell')
 ax_dict = fig1.subplot_mosaic("""
 AB
 AC
 ED
-FF
+""")
+
+# Second window for HBAC and PAC results
+fig2 = plt.figure(figsize=(8,5), dpi=100)
+ax_dict2 = fig2.subplot_mosaic("""
+F
+G
 """)
 
 ax_dict["A"].set_title('DC response')
@@ -157,20 +171,63 @@ ax_dict["E"].set_yscale('log')
 
 
 hbac1 = rawread('hbac1.raw').get()
+pac1 = rawread('pac1.raw').get()
 f = np.real(hbac1['frequency'])
 
+# HBAC in blue (positive spurs full line, negative spurs dashed), PAC in red (small dots only)
 flo = 1e6
 for spur in range(-10,11):
   out = 20*np.log10(np.abs(hbac1[f'outp;{spur}']-hbac1[f'outn;{spur}']))
   fspur = flo*spur
-  ls = '-' if fspur>=0 else ':'
-  ax_dict["F"].plot(np.abs(fspur+f)/1e6, out, label='spur={}MHz'.format(flo*spur/1e6), linestyle=ls)
+  ls = '-' if fspur>=0 else '--'
+  ax_dict2["F"].plot(np.abs(fspur+f)/1e6, out, label='HBAC spur={}MHz'.format(flo*spur/1e6), linestyle=ls, color='blue')
+  out = 20*np.log10(np.abs(pac1[f'outp;{spur}']-pac1[f'outn;{spur}']))
+  ax_dict2["F"].plot(np.abs(fspur+f)/1e6, out, label='PAC spur={}MHz'.format(flo*spur/1e6), linestyle='none', marker='.', markersize=2, color='red')
+  if abs(spur)==1:
+    mid = len(f)//2
+    ax_dict2["F"].annotate('{:.2f} dB'.format(out[mid]), xy=(np.abs(fspur+f[mid])/1e6, out[mid]), xytext=(0, 6), textcoords='offset points', ha='center', va='bottom')
 
-ax_dict["F"].set_title('HBAC gain from baseband input')
-ax_dict["F"].set_xlabel('f [MHz]')
-ax_dict["F"].set_ylabel('gain [dB]')
+ax_dict2["F"].set_title('HBAC and PAC gain from baseband input, multiplier mode')
+ax_dict2["F"].set_xlabel('f [MHz]')
+ax_dict2["F"].set_ylabel('gain [dB]')
+# Extend the y range to make room for the labels above the curves
+lo, hi = ax_dict2["F"].get_ylim()
+ax_dict2["F"].set_ylim(lo, hi+0.15*(hi-lo))
+
+from matplotlib.lines import Line2D
+ax_dict2["F"].legend(handles=[
+  Line2D([], [], color='blue', linestyle='-', label='HBAC, positive spurs'),
+  Line2D([], [], color='blue', linestyle='--', label='HBAC, negative spurs'),
+  Line2D([], [], color='red', linestyle='none', marker='.', markersize=2, label='PAC'),
+], loc='best')
+
+
+# PAC in switching mode, all spurs
+# Red lines, positive spurs full, negative spurs dashed
+pac2 = rawread('pac2.raw').get()
+f = np.real(pac2['frequency'])
+for spur in range(-10,11):
+  out = 20*np.log10(np.abs(pac2[f'outp;{spur}']-pac2[f'outn;{spur}']))
+  fspur = flo*spur
+  ls = '-' if fspur>=0 else '--'
+  ax_dict2["G"].plot(np.abs(fspur+f)/1e6, out, linestyle=ls, color='red')
+  if abs(spur)==1:
+    mid = len(f)//2
+    ax_dict2["G"].annotate('{:.2f} dB'.format(out[mid]), xy=(np.abs(fspur+f[mid])/1e6, out[mid]), xytext=(0, 6), textcoords='offset points', ha='center', va='bottom')
+
+ax_dict2["G"].set_title('PAC gain from baseband input, switching mode')
+ax_dict2["G"].set_xlabel('f [MHz]')
+ax_dict2["G"].set_ylabel('gain [dB]')
+# Extend the y range to make room for the labels above the curves
+lo, hi = ax_dict2["G"].get_ylim()
+ax_dict2["G"].set_ylim(lo, hi+0.15*(hi-lo))
+ax_dict2["G"].legend(handles=[
+  Line2D([], [], color='red', linestyle='-', label='PAC, positive spurs'),
+  Line2D([], [], color='red', linestyle='--', label='PAC, negative spurs'),
+], loc='lower right')
 
 fig1.tight_layout()
+fig2.tight_layout()
 
 plt.show()
 >>>FILE
