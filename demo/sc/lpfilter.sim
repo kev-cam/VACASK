@@ -13,7 +13,7 @@ model oa opamp
 model r resistor
 model vcvs vcvs
 
-parameters trf=0.1u
+parameters trf=1u
 
 parameters fin=1k
 parameters inmag=0.02
@@ -46,9 +46,9 @@ cf (n out) c c=cf
 
 rx (in out1) r r=1k
 
+// Non-overlapping clocks
 vclk (clk 0)   v type="pulse" val0=-0.6 val1=0.6 delay=0 rise=trf fall=trf width=tclk/2-2*trf period=tclk
-// vclkn (clkn 0) v type="pulse" val0=-0.6 val1=0.6 delay=tclk/2 rise=trf fall=trf width=tclk/2-2*trf period=tclk
-vclkn (clkn 0 clk 0) vcvs gain=-1
+vclkn (clkn 0) v type="pulse" val0=-0.6 val1=0.6 delay=tclk/2 rise=trf fall=trf width=tclk/2-2*trf period=tclk
 
 vdd (vdd 0) v dc=0.6
 vss (vss 0) v dc=-0.6
@@ -56,17 +56,8 @@ vss (vss 0) v dc=-0.6
 control
   var fclk=100k
 
-  // options tolmode="mixed" tolscale=1
-  // print instance("cf")
-  // print device("capacitor")  // print device_files
-  // print device_file("capa")
   print counts
-  // print device_file("Debug")
-  // print tolerances
   print unknowns
-
-  // print device("psp103va")
-  print instance("c1", "c2")
 
   analysis tran1 tran step=0.1u stop=3m
   
@@ -75,15 +66,12 @@ control
   analysis tran2 tran step=0.1u stop=3m
   clear saves
 
-  // For now HBAC does not work. APFT has an odd number of time samples. 
+  // HBAC does not work. APFT has an odd number of time samples. 
   // Therefore even harmonics alias into odd harmonics and vice versa. 
-  // Once PAC is implemented, we will try again. 
   // This should also improve if we switch to FFT. 
-  // // No excitation signal for HB, just clock
-  // alter instance("v1") type="dc" dc=0.01
-  // // save dv(in) dv(out) dv(out1)
-  // options reltol=1e-6 abstol=1e-12 vntol=1e-8
-  // analysis hbac1 hbac freq=[fclk] tstart=4/fclk nharm=50 truncharm=10 from=100 to=20k mode="dec" points=10
+  // PAC analysis of SC filter's response, linearize with only clock as excitation. 
+  alter instance("v1") type="dc" dc=0.01
+  analysis pac1 pac tper=1/fclk maxharm=200 truncharm=60 from=10 to=50k mode="dec" points=5
 
   postprocess(PYTHON, "runme.py")
 endc
@@ -119,26 +107,33 @@ fig1.axes[1].set_ylabel('Vout [V]')
 fig1.tight_layout()
 
 
-# raw = rawread('hbac1.raw')
-# plot = raw.get()
-# f = np.real(plot["frequency"])
-# vout = plot['out;0']
-# 
-# 
-# fig1, ax1 = plt.subplots(2, 1, figsize=(6,6), dpi=100)
-# fig1.suptitle('S-C filter frequency response')
-# 
-# fig1.axes[0].set_title('Magnitude')
-# fig1.axes[0].semilogx(f, 20*np.log10(np.abs(vout)))
-# fig1.axes[0].set_xlabel('f [Hz]')
-# fig1.axes[0].set_ylabel('H [dB]')
-# 
-# 
-# raw = rawread('tran2.raw')
-# plot = raw.get()
-# #fig1.axes[1].plot(plot["time"], plot["xs11:m1:m.gds"], marker=".")
-# fig1.axes[1].plot(plot["time"], plot["clk"])
-# fig1.axes[1].plot(plot["time"], plot["clkn"])
+raw = rawread('pac1.raw')
+plot = raw.get()
+f = np.real(plot["frequency"])
+vout = plot['out;0']
+
+# Ideal inverting one-pole response, values as in the netlist parameters
+gain = 10
+f3db = 1e3
+htheory = -gain/(1+1j*f/f3db)
+
+
+fig1, ax1 = plt.subplots(2, 1, figsize=(6,6), dpi=100)
+fig1.suptitle('S-C filter frequency response')
+
+fig1.axes[0].set_title('Magnitude')
+fig1.axes[0].semilogx(f, 20*np.log10(np.abs(vout)), label='PAC')
+fig1.axes[0].semilogx(f, 20*np.log10(np.abs(htheory)), color='red', linestyle='--', label='theory')
+fig1.axes[0].legend()
+fig1.axes[0].set_xlabel('f [Hz]')
+fig1.axes[0].set_ylabel('H [dB]')
+
+fig1.axes[1].set_title('Phase')
+fig1.axes[1].semilogx(f, np.degrees(np.unwrap(np.angle(vout))), label='PAC')
+fig1.axes[1].semilogx(f, np.degrees(np.unwrap(np.angle(htheory))), color='red', linestyle='--', label='theory')
+fig1.axes[1].legend()
+fig1.axes[1].set_xlabel('f [Hz]')
+fig1.axes[1].set_ylabel('Phase [deg]')
 
 fig1.tight_layout()
 
