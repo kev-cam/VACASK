@@ -63,7 +63,7 @@ tech_files = [
 
     # Standard cells and I/O, non-default destination
     ( "sg13cmos5l_stdcell.spice", 1, None, "../vacask/sg13cmos5l_stdcell.inc" ), 
-    ( "sg13cmos5l_io.spi", 1, None, "../vacask/sg13cmos5l_io.inc" ), 
+    ( "sg13cmos5l_io.spice", 1, None, "../vacask/sg13cmos5l_io.inc" ), 
 ]
 
 def patch_dig(line):
@@ -485,7 +485,13 @@ module_path_prefix = [ "$(PDK_ROOT)/$(PDK)/libs.tech/vacask/osdi" ]
         print(" ", link_path, "->", target)
         if os.path.lexists(link_path):
             os.remove(link_path)
-        os.symlink(target, link_path)
+        try:
+            os.symlink(target, link_path)
+        except OSError:
+            # Symlinks on Windows require admin rights or Developer Mode, copy instead
+            src = os.path.normpath(os.path.join(mdir, target))
+            print("    symlink failed, copying", src)
+            shutil.copy2(src, link_path)
         osdi_files.add(fn)
 
     #

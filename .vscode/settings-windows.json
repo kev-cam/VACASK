@@ -4,6 +4,10 @@
     "cmake.parallelJobs": 0, 
     "cmake.ctest.parallelJobs": 0, 
     "cmake.ctest.allowParallelJobs": true,
+    "cmake.environment": {
+        "PDK_ROOT": "e:/sim/IHP-Open-PDK",
+        "PDK": "ihp-sg13g2"
+    },
     "cmake.buildEnvironment": {
         "VERBOSE": "1"
     },
@@ -20,7 +24,8 @@
         "TOMLPP_DIR": "e:/build/tomlplusplus-3.4.0", 
         "SuperluMT_DIR": "e:/build/superlu_mt-4.0.0",
         "CADNIP_PARSERS": "ON", 
-        "Rust_TOOLCHAIN": "stable-x86_64-pc-windows-gnu"
+        "Rust_TOOLCHAIN": "stable-x86_64-pc-windows-gnu", 
+        "FFTW3_DIR": "e:/build/installation"
         // "OPENVAF_OPTIONS": "--target_cpu generic", 
         // "CMAKE_C_FLAGS": "-march=x86-64-v2"
     }, 
