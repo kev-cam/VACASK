@@ -33,10 +33,13 @@ macro(prepare_netlist_test simfile)
     # PYTHONPATH points to the binary test directory
     # Each test has a subdirectory there
     # Dependencies (.py files like diocalc.py) will be copied there
+    # OPENBLAS_NUM_THREADS=1 stops the OpenBLAS bundled with numpy/scipy from
+    # committing a buffer per CPU (~1.5GB/process on 32 CPUs), which exhausts
+    # the Windows commit limit when tests run in parallel
     set_tests_properties(
         "${simfile}" PROPERTIES 
         ENVIRONMENT 
-        "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR};SIM_TEST=yes"
+        "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR};SIM_TEST=yes;OPENBLAS_NUM_THREADS=1"
         TIMEOUT 20
     )
 endmacro()
@@ -59,7 +62,7 @@ macro(prepare_skippable_netlist_test simfile)
     set_tests_properties(
         "${simfile}" PROPERTIES
         ENVIRONMENT
-        "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR};SIM_TEST=yes"
+        "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR};SIM_TEST=yes;OPENBLAS_NUM_THREADS=1"
         TIMEOUT 20
         SKIP_RETURN_CODE 77
     )
@@ -116,7 +119,7 @@ macro(prepare_binary_test testfile)
     set_tests_properties(
         "${testname}" PROPERTIES
         ENVIRONMENT
-        "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR};SIM_TEST=yes"
+        "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR};SIM_TEST=yes;OPENBLAS_NUM_THREADS=1"
         TIMEOUT 20
     )
 endmacro()
@@ -231,7 +234,7 @@ if(CADNIP_PARSERS)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/check_warning.cmake"
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_spice_bsim4_version.sim")
     set_tests_properties(test_spice_bsim4_unknown_version_warning.sim PROPERTIES
-        ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR};SIM_TEST=yes" TIMEOUT 20 LABELS "warning")
+        ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR};SIM_TEST=yes;OPENBLAS_NUM_THREADS=1" TIMEOUT 20 LABELS "warning")
     set_tests_properties(test_spice_bsim4_version.sim test_spice_bsim4_unknown_version_warning.sim
         PROPERTIES RESOURCE_LOCK spice_bsim4_version)
     prepare_netlist_test(test_spice_binned_mos.sim)
