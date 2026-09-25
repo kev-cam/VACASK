@@ -11,7 +11,7 @@ sparse solver). Builds compiled with the SuperLU_MT backend also provide
 | `tdsolver` | string | `""` | `klu`, `superlu`, `""` | Solver for the real Jacobian: operating point, `dcinc`, `dcxf`, transient, and the shooting loop of periodic steady-state analysis. The frequency-domain small-signal analyses also use it for the operating-point solve they run first. |
 | `smsigsolver` | string | `""` | `klu`, `superlu`, `""` | Solver for the complex Jacobian of the frequency-domain small-signal analyses: `ac`, `acxf`, `acstb`, `acsp`, and `noise`. |
 | `hbsolver` | string | `""` | `klu`, `superlu`, `""` | Solver for the real harmonic balance Jacobian, in both `hb` and the large-signal solve of `hbac`. |
-| `qpsmsigsolver` | string | `""` | `klu`, `superlu`, `""` | Solver for the complex conversion-matrix Jacobian of the harmonic-balance-based (quasi)periodic small-signal analysis (`hbac`). |
+| `qpsmsigsolver` | string | `""` | `klu`, `superlu`, `""` | Solver for the complex conversion-matrix Jacobian of the (quasi)periodic small-signal analyses: `hbac` (harmonic-balance-based) and `pac` (shooting-based). |
 
 An empty string selects the built-in default: `klu` for `tdsolver` and
 `smsigsolver`, and `superlu` for `hbsolver` and `qpsmsigsolver` when the

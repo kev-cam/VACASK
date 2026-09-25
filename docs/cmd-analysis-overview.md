@@ -38,6 +38,7 @@ where $x_0$ is the operating point. $J_r$ captures resistive behavior (conductan
 | [Transient](cmd-analysis-tran.md) | `tran` | Integrates the circuit equations over time. |
 | [Transient noise](cmd-analysis-trannoise.md) | `tran` | Integrates the circuit equations over time, takes device noise into account. |
 | [Periodic Steady-State](cmd-analysis-pss.md) | `pss` | Computes the periodic steady-state response in the time domain with the shooting Newton method; for autonomous circuits also finds the oscillation period. |
+| [Periodic Small-Signal (Shooting-based)](cmd-analysis-pac.md) | `pac` | Sweeps frequency and computes the small-signal response around a periodic steady state found with the shooting method. |
 | [Harmonic Balance](cmd-analysis-hb.md) | `hb` | Computes the periodic steady-state response in the frequency domain. |
 | [(Quasi)Periodic Small-Signal (Harmonic Balance-based)](cmd-analysis-hbac.md) | `hbac` | Sweeps frequency and computes the small-signal response around a harmonic balance operating point. |
 | [(Quasi)Periodic Small-Signal Noise (Harmonic Balance-based)](cmd-analysis-hbnoise.md) | `hbnoise` | Computes cyclostationary small-signal noise spectral densities referred to a chosen output, around a harmonic balance operating point. |
@@ -54,6 +55,7 @@ Each stored solution carries a type tag identifying the analysis family that pro
 
 - Time- and DC-domain analyses (operating point, transient, and the small-signal analyses that build on an operating point) produce and consume `op`-tagged solutions.
 - Harmonic balance produces `hb`-tagged solutions, consumed by harmonic balance and the harmonic-balance-based small-signal analysis.
+- Periodic steady-state (shooting) produces `op`-tagged solutions that also carry the period. They are consumed through the `ic` parameter of `pss` and `pac`.
 
 The two families are therefore not interchangeable: a harmonic balance solution cannot be used as the nodeset for an operating point, even if the names match. A name lookup that resolves to a solution with the wrong tag is rejected as if no stored solution were found.
 
@@ -63,5 +65,6 @@ Small-signal analyses can also linearize the circuit at a stored solution instea
 |--------|----------|-----------|---------------------|
 | Operating point | `ac`, `acxf`, `acsp`, `acstb`, `noise`, `dcinc`, `dcxf` | `opsolve=0` | `op` |
 | Harmonic balance | `hbac`, `hbnoise` | `hbsolve=0` | `hb` |
+| Periodic steady-state (shooting) | `pac` | `psssolve=0` (stored solution is given by `ic`) | `op` |
 
 The circuit is evaluated at the stored values, so the result is meaningful only if the stored solution is a solution of the circuit being analyzed. `nodeset` must be a stored solution name (not a list). It must have a value for every unknown of the circuit. Otherwise the analysis stops with an error, or, with `strictforce=0`, prints a warning and evaluates the missing unknowns at 0. See [Operating Point Analysis](cmd-analysis-op.md) and [(Quasi)Periodic Small-Signal Analysis (hbac)](cmd-analysis-hbac.md).

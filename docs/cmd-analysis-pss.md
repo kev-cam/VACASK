@@ -67,6 +67,7 @@ The shooting transient uses an initial and maximum timestep of `T`/`pss_minpts`,
 | `tstab` | real | `0` | Length of the stabilization transient (s). With 0 no stabilization is performed and the operating point (or `ic`) is used directly as the initial guess. |
 | `stabstep` | real | `0` | Timestep of the stabilization transient (s). If 0, `tper`/`pss_minpts` is used. If given, it must be smaller than `tstab`. |
 | `maxacfreq` | real | `0` | Highest frequency to resolve (Hz). Limits the maximum timestep to $1/(2 \cdot \mathrm{maxacfreq})$. Values below 40/`tper` are raised to 40/`tper`. 0 disables the limit. |
+| `maxharm` | integer | `0` | Highest harmonic to resolve. Limits the maximum timestep of both transients to `tper`/$(2 (\mathrm{maxharm}+1))$. 0 disables the limit. [Periodic small-signal analysis](cmd-analysis-pac.md) needs it to record enough time points for its harmonic truncation. |
 | `icmode` | string | `"op"` | Initial condition mode for the stabilization transient: `"op"` solves an operating point first with `ic` applied as forced constraints; `"uic"` skips the operating point and applies `ic` directly. |
 | `ic` | string or list | `""` | Initial conditions for the stabilization transient. A stored solution name or a list of node/value pairs. How the values are applied is governed by `icmode`. When a stored PSS solution name is given, the saved period is used as the initial period estimate, if `tper` is not given. See [Transient Analysis](cmd-analysis-tran.md). |
 | `nodeset` | string or list | `""` | Nodeset for the operating point solve. See [Operating Point Analysis](cmd-analysis-op.md). |
@@ -177,6 +178,7 @@ plt.show()
 
 ## See also
 
+- [Periodic Small-Signal Analysis](cmd-analysis-pac.md) — small-signal response around the periodic steady state.
 - [Harmonic Balance Analysis](cmd-analysis-hb.md) — frequency-domain periodic steady-state analysis.
 - [Transient Analysis](cmd-analysis-tran.md)
 

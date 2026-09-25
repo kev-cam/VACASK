@@ -38,18 +38,21 @@ These parameters set the small-signal excitation for [DC incremental](cmd-analys
 ## (Quasi)Periodic Small-Signal Excitation
 
 These parameters define the small-signal excitation injected by the source in
-[(quasi)periodic small-signal (hbac) analysis](cmd-analysis-hbac.md). They have no
+[(quasi)periodic small-signal (hbac) analysis](cmd-analysis-hbac.md) and in
+[periodic small-signal (pac) analysis](cmd-analysis-pac.md). They have no
 effect in AC or transient analysis.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `spur` | value list | `{}` | List of spurs at which the source injects excitation. Each entry is a real frequency (Hz) or an integer tone-weight vector $[k_1, k_2, \ldots]$. An empty list means no excitation. |
+| `spur` | value list | `{}` | List of spurs at which the source injects excitation. Each entry is a real frequency (Hz) or an integer tone-weight vector $[k_1, k_2, \ldots]$ in `hbac`. In `pac` each entry is a signed integer harmonic number or a real frequency (Hz) equal to an integer multiple of the PSS fundamental frequency. An empty list means no excitation. |
 | `smag` | real vector | `[]` | Excitation magnitudes, one per `spur` entry. If shorter than `spur`, missing entries default to 0. Extra entries are ignored. |
 | `sphase` | real vector | `[]` | Excitation phases in degrees, one per `spur` entry. If shorter than `spur`, missing entries default to 0. Extra entries are ignored. |
 
 For a single-tone circuit with one fundamental $f_1$, the entry `[1]` selects the first harmonic
 (i.e., $f_1$). For a two-tone circuit with fundamentals $f_1$ and $f_2$, the entry `[0,1]` selects
-the spur at $f_2$, and `[1,0]` selects $f_1$.
+the spur at $f_2$, and `[1,0]` selects $f_1$. In `pac` the entry `0` selects the excitation at the
+offset frequency itself, and `1` selects the excitation at the offset frequency shifted by
+the PSS fundamental frequency.
 
 ## Output variables
 

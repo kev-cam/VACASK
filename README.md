@@ -121,6 +121,7 @@ VACASK is written in C++20 and is free software released under the [GNU Affero G
 |noise   |[small-signal noise analysis](docs/cmd-analysis-noise.md) |
 |tran    |[transient (time-domain) analysis](docs/cmd-analysis-tran.md) with optional [time-domain noise](docs/cmd-analysis-trannoise.md) |
 |pss     |[periodic steady-state analysis (Newton shooting method)](docs/cmd-analysis-pss.md) |
+|pac     |[periodic small-signal analysis (shooting-based)](docs/cmd-analysis-pac.md) |
 |hb      |[(multitone) harmonic balance analysis](docs/cmd-analysis-hb.md) |
 |hbac    |[(quasi)periodic small-signal analysis (harmonic balance-based)](docs/cmd-analysis-hbac.md) |
 |hbnoise |[(quasi)periodic small-signal noise analysis (harmonic balance-based)](docs/cmd-analysis-hbnoise.md) |
@@ -515,7 +516,7 @@ In Windows select the MinGW64 toolchain. In Linux select GCC. Configure the proj
 
 # Use of generative AI
 
-Development of VACASK relies on generative AI (GenAI) primarily for mathematical background preparation, bug audits, debugging, testing, and documentation. Contributors using GenAI should thoroughly review the code they contribute. Before merging contributions into the core simulator they will be subject to strict human review. Low quality and vibe-coded contributions will be rejected. 
+Development of VACASK relies on generative AI (GenAI) primarily for mathematical background preparation, bug audits, debugging, testing, build system management, and documentation. Contributors using GenAI should thoroughly review the code they contribute. All contributions will be subject to strict human review before merging into the core simulator. Low quality, vibe-coded, and bloated contributions will be rejected. 
 
 # Publications mentioning VACASK
 * Á. Bűrmen, ["VACASK: a Verilog-A Circuit Analysis Kernel"](https://wiki.f-si.org/index.php?title=VACASK:_a_Verilog-A_Circuit_Analysis_Kernel), Free Silicon Conference 2024, Paris, June 2024.
