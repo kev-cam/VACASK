@@ -52,6 +52,14 @@ a flicker source is undefined. That spur's flicker contribution is left out at
 such a point and a warning names the offset frequency. Choose a sweep grid that 
 does not land on pump harmonics if the flicker skirt around a harmonic matters.
 
+The skirt of upconverted flicker noise around a pump harmonic is only as wide as 
+the flicker corner frequency of the sources (typically kHz to tens of kHz), so a 
+coarse logarithmic sweep usually steps over it. To resolve the skirts, use the 
+`values` parameter with a vector that has dense points close to each harmonic, 
+on both sides. Such a vector can be built with the expression functions 
+(see [Vector construction](expr-functions.md#vector-construction)) and merged 
+with `sort()`. 
+
 ## Parameters
 
 `hbnoise` exposes all HB parameters (with the same defaults and meaning as in
