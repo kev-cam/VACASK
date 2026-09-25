@@ -277,9 +277,9 @@ macOS users must build OpenVAF-Reloaded from sources. Make sure you [install all
 
 ### Prerequisites
 Install gcc, bison, flex, CMake, and GNU make or Ninja for building. Install the
-libraries toml++, KLU (SuiteSparse), and the OpenMP build of OpenBLAS. On Debian
+libraries toml++, KLU (SuiteSparse), FFTW, and the OpenMP build of OpenBLAS. On Debian
 and derivatives these are `bison flex cmake ninja-build libtomlplusplus-dev
-libsuitesparse-dev libopenblas-openmp-dev`.
+libsuitesparse-dev libfftw3-dev libopenblas-openmp-dev`.
 
 VACASK uses OpenBLAS for both BLAS and LAPACK. Make sure it is the active
 alternative so CMake's `find_package(BLAS)` / `find_package(LAPACK)` pick it up
@@ -336,9 +336,9 @@ The packages are created in the `<build directory>`.
 ### Prerequisites
 Install the required dependencies using [Homebrew](https://brew.sh/):
 ```
-brew install llvm@18 cmake ninja bison flex suite-sparse openblas boost tomlplusplus
+brew install llvm@18 cmake ninja bison flex suite-sparse openblas boost tomlplusplus fftw
 ```
-Contrary to Linux you do not have to build Boost yourself because the Homebrew package includes the Process library. CMake locates the Homebrew installations of bison, flex, SuiteSparse, toml++, and Boost on its own, so you do not have to specify their paths.
+Contrary to Linux you do not have to build Boost yourself because the Homebrew package includes the Process library. CMake locates the Homebrew installations of bison, flex, SuiteSparse, toml++, Boost, and FFTW on its own, so you do not have to specify their paths.
 
 The system tests and the demos need Python3 with the libraries listed above. NumPy and SciPy are available as Homebrew packages
 ```
@@ -458,6 +458,15 @@ cmake --build . -j 8
 cmake --install . --prefix e:/build/installation
 ```
 
+You will also need FFTW. For your convenience we prepared a [tar.gz archive](https://fides.fe.uni-lj.si/vacask/fftw-3.3.11.tar.gz) (just changed the allowed CMake version, everything else is the same as in the [upstream file](https://www.fftw.org/fftw-3.3.11.tar.gz)). Unpack it in `e:\build`, enter the directory, and type
+```
+mkdir build
+cd build
+cmake -G Ninja -DCMAKE_TOOLCHAIN_FILE=e:\build\mingw.cmake -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release ..
+cmake --build . -j 8
+cmake --install . --prefix e:/build/installation
+```
+
 If you want SuperLU_MT support you wll have to download its sources (see the Linux section). Unpack them in `e:\build`, enter the unpacked directory, and type
 ```
 make
@@ -473,7 +482,7 @@ Replace the `e:\...` paths with your own, if needed.
 ### Building the simulator
 Unpack the sources, create a build directory, and type. 
 ```
-cmake -G Ninja -S <sources directory> -B <build directory> -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=e:\build\mingw.cmake -DOPENVAF_DIR=<path to the OpenVAF-Reloaded compiler> -DBoost_ROOT=e:/build/boost_1_88_0/stage -DTOMLPP_DIR=e:/build/tomlplusplus-3.4.0 -DSuiteSparse_DIR=e:/build/installation -DTOMLPP_DIR=e:/build/tomlpusplus-3.4.0 -DOPENBLAS_DIR=e:/build/installation
+cmake -G Ninja -S <sources directory> -B <build directory> -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=e:\build\mingw.cmake -DOPENVAF_DIR=<path to the OpenVAF-Reloaded compiler> -DBoost_ROOT=e:/build/boost_1_88_0/stage -DTOMLPP_DIR=e:/build/tomlplusplus-3.4.0 -DSuiteSparse_DIR=e:/build/installation -DTOMLPP_DIR=e:/build/tomlpusplus-3.4.0 -DOPENBLAS_DIR=e:/build/installation -DFFTW3_DIR=e:/build/installation
 cmake --build <build directory>
 ```
 
