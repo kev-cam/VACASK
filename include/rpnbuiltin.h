@@ -470,7 +470,7 @@ template<Value::Type typeCode> inline bool typeConversion(RpnStack& stack, Rpn::
         return true;
     }
     // Destination type code
-    Value::Type destType;
+    Value::Type destType = typeCode;
     if (vp->isVector()) {
         destType = Value::Type(typeCode | Value::Type::VectorBit);
     }
@@ -495,6 +495,9 @@ bool vectorInterleave(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistCont
 
 // Extract a vector holding components indexed n*k+i, where n and i are the second and the third argument
 bool vectorSeparate(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
+
+// Sort a numeric or string vector, ascending if the optional second argument is >=0 (default), descending otherwise
+bool vectorSort(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);
 
 // Pack scalars and vectors in a vector [ 1, 2, 3 ]
 bool vectorPack(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s);

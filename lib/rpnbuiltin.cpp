@@ -1,5 +1,7 @@
 #include "rpnbuiltin.h"
+#include <algorithm>
 #include <cmath>
+#include <functional>
 #include <random>
 #include "common.h"
 
@@ -355,6 +357,65 @@ bool vectorSeparate(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContex
 
     // Pop all but the first argument
     stack.pop(2);
+    return true;
+}
+
+// sort(v[, order]): sort a numeric or string vector. Ascending if order>=0 (default),
+// descending if order<0. The result type matches v. Strings are compared
+// lexicographically (bytewise, case sensitive).
+bool vectorSort(RpnStack& stack, Rpn::Arity argc, RpnEvaluationNetlistContext& ctx, Status& s) {
+    DBGCHECK(stack.size()<argc, "Internal error. Attempt to get value from empty stack.");
+    // Get argument 1 (optional)
+    bool descending = false;
+    if (argc>1) {
+        auto arg1 = stack.get(0);
+        if (arg1->isVector() || !arg1->convertInPlace(Value::Type::Int)) {
+            s.set(Status::BadArguments, std::string("Second argument (order) must be an integer."));
+            return false;
+        }
+        descending = arg1->val<Int>()<0;
+    }
+
+    // Get argument 0
+    auto arg0 = stack.get(argc-1);
+    if (!arg0->isVector() || !(arg0->isNumeric() || arg0->type()==Value::Type::StringVec)) {
+        s.set(Status::BadArguments, std::string("First argument must be a numeric or string vector."));
+        return false;
+    }
+
+    // The argument is a temporary, sort it in place
+    if (arg0->type()==Value::Type::StringVec) {
+        auto& vec = arg0->val<StringVector>();
+        if (descending) {
+            std::sort(vec.begin(), vec.end(), std::greater<String>());
+        } else {
+            std::sort(vec.begin(), vec.end());
+        }
+    } else if (arg0->type()==Value::Type::IntVec) {
+        auto& vec = arg0->val<IntVector>();
+        if (descending) {
+            std::sort(vec.begin(), vec.end(), std::greater<Int>());
+        } else {
+            std::sort(vec.begin(), vec.end());
+        }
+    } else {
+        auto& vec = arg0->val<RealVector>();
+        // NaN does not have a well defined position in the order
+        for(const auto& x : vec) {
+            if (std::isnan(x)) {
+                s.set(Status::BadArguments, std::string("Vector must not contain NaN."));
+                return false;
+            }
+        }
+        if (descending) {
+            std::sort(vec.begin(), vec.end(), std::greater<Real>());
+        } else {
+            std::sort(vec.begin(), vec.end());
+        }
+    }
+
+    // Pop all but the first argument
+    stack.pop(argc-1);
     return true;
 }
 

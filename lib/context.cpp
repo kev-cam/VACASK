@@ -117,7 +117,8 @@ ContextStack::Builtins ContextStack::builtins = {
     
     { Id::createStatic("randunif"),   { 1, 1, false, vectorRandUnif } }, // length   type=real
     { Id::createStatic("interleave"), { 2, Rpn::manyArgs, true, vectorInterleave } }, // vec1, vec2, ..., vecn   type=maxtype(vec1, .. vecn)
-    { Id::createStatic("separate"),   { 3, 3, true, vectorSeparate } }, // vec, n, i   
+    { Id::createStatic("separate"),   { 3, 3, true, vectorSeparate } }, // vec, n, i
+    { Id::createStatic("sort"),       { 1, 2, true, vectorSort } }, // vec[, order]   order>=0 ascending (default), order<0 descending
     
     // List functions
     { Id::createStatic("flatten"),  { 1, 1, true, listFlatten } },
