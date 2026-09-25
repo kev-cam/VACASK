@@ -121,9 +121,8 @@ bool PssCore::deleteOutputs(Id name, ErrorConsumer& errors) {
     }
     // Cannot assume outfile is available
     auto fname = std::string(name)+".raw";
-    if (std::filesystem::exists(fname)) {
-        std::filesystem::remove(fname);
-    }
+    std::error_code ec;
+    std::filesystem::remove(fname, ec);
     return true;
 }
 

@@ -180,15 +180,18 @@ bool ACXFCore::finalizeOutputs(ErrorConsumer& errors) {
 }
 
 bool ACXFCore::deleteOutputs(Id name, ErrorConsumer& errors) {
+    // Close output file (if open), Windows cannot delete an open file
+    delete outfile;
+    outfile = nullptr;
+
     if (!params.write || Simulator::noOutput()) {
         return true;
     }
 
     // Cannot assume outfile is available
     auto fname = std::string(name)+".raw";
-    if (std::filesystem::exists(fname)) {
-        std::filesystem::remove(fname);
-    }
+    std::error_code ec;
+    std::filesystem::remove(fname, ec);
     return true;
 }
     
