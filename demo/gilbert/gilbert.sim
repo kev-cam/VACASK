@@ -75,7 +75,34 @@ control
   // HBAC, turn off vin so it does not disturb the HB periodic operating point
   alter instance("vin") ampl=0
   // Use only first 10 harmonics in HBAC
-  analysis hbac1 hbac freq=[1M] truncate="box" nharm=15 truncharm=10 outspur={} from=1 to=500k mode="dec" points=10
+  analysis hbac1 hbac freq=[1M] truncate="box" nharm=15 truncharm=10 outspur={} from=1 to=500k mode="dec" points=10 store="hbsol"
+
+  // Sweep values (frequencies) for the noise analysis.
+  // Start with a uniform grid from 0 to 15MHz with a step of fnstep=50kHz.
+  // The spurs (0, 1MHz, ..., 15MHz) are at every 20th grid point.
+  // The offset d of a grid point from its nearest spur is elastically compressed
+  // towards the spur:
+  //   d' = fnreach*(d/fnreach)^fnq   for d<fnreach
+  //   d' = d                         for d>=fnreach
+  // fnq is chosen so that the point at fnstep from a spur moves to fnnear from the spur,
+  // the point at offset fnreach stays where it is.
+  // Points exactly at a spur are dropped because the 1/f noise shape is undefined there.
+  // The left sideband of spur 0 (negative frequencies) and the right sideband of spur 15
+  // (above 15MHz) are dropped.
+  var fnstep=50k fnreach=450k fnnear=10 fnspur=1M
+  var fnq=ln(fnnear/fnreach)/ln(fnstep/fnreach)
+  var fnoff=[-9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]*fnstep
+  var fnoffp=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]*fnstep
+  var fnoffl=[-9, -8, -7, -6, -5, -4, -3, -2, -1]*fnstep
+  var fnmap=sgn(fnoff)*(fnreach*(min(abs(fnoff), fnreach)/fnreach)**fnq+max(abs(fnoff)-fnreach, 0))
+  var fnmapp=sgn(fnoffp)*(fnreach*(min(abs(fnoffp), fnreach)/fnreach)**fnq+max(abs(fnoffp)-fnreach, 0))
+  var fnmapl=sgn(fnoffl)*(fnreach*(min(abs(fnoffl), fnreach)/fnreach)**fnq+max(abs(fnoffl)-fnreach, 0))
+  var fnvals=sort([fnmapp, fnmap+1*fnspur, fnmap+2*fnspur, fnmap+3*fnspur, fnmap+4*fnspur, fnmap+5*fnspur, fnmap+6*fnspur, fnmap+7*fnspur, fnmap+8*fnspur, fnmap+9*fnspur, fnmap+10*fnspur, fnmap+11*fnspur, fnmap+12*fnspur, fnmap+13*fnspur, fnmap+14*fnspur, fnmapl+15*fnspur])
+
+  // HBNOISE over the sweep values above, resolves the skirts around the LO harmonics.
+  // It uses the HB solution stored by HBAC, so HB is not run again.
+  // Harmonics up to 15 are needed, so truncharm=15.
+  analysis hbnoise1 hbnoise hbsolve=0 nodeset="hbsol" truncharm=15 in="vin" out=["outp", "outn"] values=fnvals
 
   // PAC equivalent to the HBAC above, vin is still turned off
   analysis pac1 pac tper=1u tstab=10u maxharm=100 truncharm=10 outharm={} from=1 to=500k mode="dec" points=10
@@ -173,6 +200,7 @@ ax_dict["E"].set_yscale('log')
 hbac1 = rawread('hbac1.raw').get()
 pac1 = rawread('pac1.raw').get()
 f = np.real(hbac1['frequency'])
+fpac = np.real(pac1['frequency'])
 
 # HBAC in blue (positive spurs full line, negative spurs dashed), PAC in red (small dots only)
 flo = 1e6
@@ -182,12 +210,12 @@ for spur in range(-10,11):
   ls = '-' if fspur>=0 else '--'
   ax_dict2["F"].plot(np.abs(fspur+f)/1e6, out, label='HBAC spur={}MHz'.format(flo*spur/1e6), linestyle=ls, color='blue')
   out = 20*np.log10(np.abs(pac1[f'outp;{spur}']-pac1[f'outn;{spur}']))
-  ax_dict2["F"].plot(np.abs(fspur+f)/1e6, out, label='PAC spur={}MHz'.format(flo*spur/1e6), linestyle='none', marker='.', markersize=2, color='red')
+  ax_dict2["F"].plot(np.abs(fspur+fpac)/1e6, out, label='PAC spur={}MHz'.format(flo*spur/1e6), linestyle='none', marker='.', markersize=2, color='red')
   if abs(spur)==1:
-    mid = len(f)//2
-    ax_dict2["F"].annotate('{:.2f} dB'.format(out[mid]), xy=(np.abs(fspur+f[mid])/1e6, out[mid]), xytext=(0, 6), textcoords='offset points', ha='center', va='bottom')
+    mid = len(fpac)//2
+    ax_dict2["F"].annotate('{:.2f} dB'.format(out[mid]), xy=(np.abs(fspur+fpac[mid])/1e6, out[mid]), xytext=(0, 6), textcoords='offset points', ha='center', va='bottom')
 
-ax_dict2["F"].set_title('HBAC and PAC gain from baseband input, multiplier mode')
+ax_dict2["F"].set_title('Gain from baseband input, multiplier mode')
 ax_dict2["F"].set_xlabel('f [MHz]')
 ax_dict2["F"].set_ylabel('gain [dB]')
 # Extend the y range to make room for the labels above the curves
@@ -215,7 +243,7 @@ for spur in range(-10,11):
     mid = len(f)//2
     ax_dict2["G"].annotate('{:.2f} dB'.format(out[mid]), xy=(np.abs(fspur+f[mid])/1e6, out[mid]), xytext=(0, 6), textcoords='offset points', ha='center', va='bottom')
 
-ax_dict2["G"].set_title('PAC gain from baseband input, switching mode')
+ax_dict2["G"].set_title('Gain from baseband input, switching mode')
 ax_dict2["G"].set_xlabel('f [MHz]')
 ax_dict2["G"].set_ylabel('gain [dB]')
 # Extend the y range to make room for the labels above the curves
@@ -226,8 +254,20 @@ ax_dict2["G"].legend(handles=[
   Line2D([], [], color='red', linestyle='--', label='PAC, negative spurs'),
 ], loc='lower right')
 
+
+# Third window for HBNOISE results, same size as the HBAC/PAC window
+fig3, ax3 = plt.subplots(1, 1, figsize=(8,5), dpi=100) # 6,4
+hbnoise1 = rawread('hbnoise1.raw').get()
+f = np.real(hbnoise1['frequency'])
+ax3.loglog(f/1e6, np.sqrt(np.real(hbnoise1['onoise'])))
+ax3.set_title('Output noise, multiplier mode')
+ax3.set_xlabel('f [MHz]')
+ax3.set_ylabel('output noise [V/sqrt(Hz)]')
+ax3.grid(True, which='both', alpha=0.3)
+
 fig1.tight_layout()
 fig2.tight_layout()
+fig3.tight_layout()
 
 plt.show()
 >>>FILE
