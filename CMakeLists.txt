@@ -174,6 +174,10 @@ else()
 endif()
 message(STATUS "Platform: ${SIM_PLATFORM}")
 
+if (SKBUILD)
+    set(PROGRAM_LIB_DIR "pyvacask/lib")
+endif()
+
 # Compiler
 if (DEFINED MSVC_VERSION)
 	# Microsoft C, Windows
@@ -215,7 +219,7 @@ set(STAGED_LIBRARY_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${PROGRAM_LIB_DIR}")
 message(STATUS "Staged library directory: ${STAGED_LIBRARY_DIRECTORY}")
 
 # Find Python (needed for tests)
-find_package(Python 3 COMPONENTS Interpreter)
+find_package(Python 3 REQUIRED COMPONENTS Interpreter Development)
 
 # Look for openvaf Verilog-A compiler
 message(CHECK_START "Looking for OpenVAF-Reloaded Verilog-A compiler")
@@ -611,3 +615,24 @@ add_subdirectory(test)
 add_subdirectory(demo/api)
 
 include("packaging.cmake")
+
+# PyBIND11                                                          
+set(PYBIND11_FINDPYTHON ON)                                         
+find_package(pybind11 CONFIG REQUIRED)                              
+pybind11_add_module(_pyvacask                                       
+    pyvacask/csrc/py_module.cpp                                     
+    pyvacask/csrc/py_analysis.cpp                                   
+    pyvacask/csrc/py_circuit.cpp                                    
+    pyvacask/csrc/py_compiler.cpp                                   
+    pyvacask/csrc/py_id.cpp                                         
+    pyvacask/csrc/py_loc.cpp                                        
+    pyvacask/csrc/py_parseroutput.cpp                               
+    pyvacask/csrc/py_simulator.cpp                                  
+    pyvacask/csrc/py_options.cpp                                    
+)                                                                   
+#target_link_options(pyvacask PRIVATE "-Wl,-Bstatic")               
+target_link_libraries(_pyvacask PRIVATE simlib ${SIM_EXE_LIBRARIES})
+install(TARGETS _pyvacask                                           
+        LIBRARY DESTINATION pyvacask                                
+)                                                                   
+

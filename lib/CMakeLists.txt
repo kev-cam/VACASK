@@ -277,3 +277,7 @@ if (SIM_HAVE_SUPERLU)
         COMPILE_DEFINITIONS "__OPENMP"
     )
 endif()
+
+set_target_properties(simlib PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
