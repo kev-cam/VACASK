@@ -887,43 +887,34 @@ void InitParserOutputModule(py::module &m) {
         }),
         py::arg("name"),
         py::arg("terms"))
-        //.def(py::init([](std::string name, 
-        //                 std::list<std::string> terms,
-        //                 sim::Rpn& expr,
-        //                 bool currentSource,
-        //                 std::string& discipline,
-        //                 std::string& potentialAccessor,
-        //                 std::string& flowAccessor) {
-        //    const sim::Loc& loc = sim::Loc::bad;
-        //	sim::PTIdentifierList identifiers;
-        //	for (const auto& term : terms)
-        //    	identifiers.emplace_back(term);
-        //    
-        //    return sim::PTBehavioral(
-        //        sim::Id(name),
-        //        std::move(identifiers),
-        //        std::move(expr),
-        //        currentSource,
-        //        std::move(discipline),
-        //        std::move(potentialAccessor),
-        //        std::move(flowAccessor),
-        //        loc
-        //    );
-        //}),
-        //py::arg("name"),
-        //py::arg("terms"),
-        //py::arg("expr"),
-        //py::arg("currentSource"),
-        //py::arg("discipline"),
-        //py::arg("potentialAccessor"),
-        //py::arg("flowAccessor"))
         .def_property_readonly("name", &sim::PTBehavioral::name)
         .def_property_readonly("connections", &sim::PTBehavioral::connections)
         .def_property_readonly("expr", &sim::PTBehavioral::expr)
-        //.def_property_readonly("current_source", &sim::PTBehavioral::currentSource)
         .def_property_readonly("discipline", &sim::PTBehavioral::discipline)
         .def_property_readonly("potential_accessor", &sim::PTBehavioral::potentialAccessor)
         .def_property_readonly("flow_accessor", &sim::PTBehavioral::flowAccessor)
+        .def("setCurrent", [](sim::PTBehavioral& self, sim::Rpn& expr) {
+            return std::move(self).setCurrent(std::move(expr));
+        },
+        py::arg("expr"))
+        .def("setVoltage", [](sim::PTBehavioral& self, sim::Rpn& expr) {
+            return std::move(self).setVoltage(std::move(expr));
+        },
+        py::arg("expr"))
+        .def("setExpression", [](sim::PTBehavioral& self, sim::Rpn& expr) {
+            return std::move(self).setExpression(std::move(expr));
+        },
+        py::arg("expr"))
+        .def("setDiscipline", [](sim::PTBehavioral& self, std::string& discipline, std::string& potentialAccessor, std::string& flowAccessor){
+            return std::move(self).setDiscipline(
+                std::move(discipline), 
+                std::move(potentialAccessor), 
+                std::move(flowAccessor)
+            );
+        },
+        py::arg("discipline"),
+        py::arg("potentialAccessor"),
+        py::arg("flowAccessor"))
         .def(
             "dump",
             [](const sim::PTBehavioral& self, int indent) {
