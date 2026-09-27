@@ -915,6 +915,21 @@ void InitParserOutputModule(py::module &m) {
         py::arg("discipline"),
         py::arg("potentialAccessor"),
         py::arg("flowAccessor"))
+        .def("setUserDeclarations", [](sim::PTBehavioral& self, std::string& decl){
+            return std::move(self).setUserDeclarations(std::move(decl));
+        })
+        .def("setUserEvaluation", [](sim::PTBehavioral& self, std::string& eval){
+            return std::move(self).setUserEvaluation(std::move(eval));
+        })
+        .def("add", [](sim::PTBehavioral& self, sim::PTParameters& par){
+            return std::move(self).add(std::move(par));
+        })
+        .def("add", [](sim::PTBehavioral& self, sim::PTParameterValue& v){
+            return std::move(self).add(std::move(v));
+        })
+        .def("add", [](sim::PTBehavioral& self, sim::PTParameterExpression& e){
+            return std::move(self).add(std::move(e));
+        })
         .def(
             "dump",
             [](const sim::PTBehavioral& self, int indent) {
