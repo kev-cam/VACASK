@@ -189,7 +189,10 @@ public:
     // Evaluate one period without stabilising or shooting the Newton loop
     // nPts<=0 computes the number of points based on pss_minpts option, maxacfreq, and maxharm
     bool evaluate(bool atIc, bool noiseModulation, int nPts, ErrorConsumer& errors);
+    // noiseModulationSpec: one block of maxFreqIndex+1 components per modulation slot
     bool getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, int maxFreqIndex, Vector<Complex>* noiseModulationSpec, ErrorConsumer& errors);
+    // Flicker exponents per modulation slot, filled by evaluate(..., true, ...)
+    const Vector<double>& noiseExponents() const;
 
     bool finalizeOutputs(ErrorConsumer& errors);
     bool deleteOutputs(Id name, ErrorConsumer& errors);

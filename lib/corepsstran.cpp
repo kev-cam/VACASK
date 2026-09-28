@@ -436,7 +436,18 @@ bool PssTranCore::onTimestepAccepted(double tSolve, double hk, Int order, ErrorC
         }
         std::copy(jacobian.axData(), jacobian.axData() + nnz, tdJacG.data() + nnz*tdJacPos);
 
-        // TODO: noise
+        // Load noise modulation function values at this timepoint
+        if (tdNoise) {
+            LoadSetup noiseLs;
+            noiseLs.noiseModulationFunction = &tdNoiseModulation;
+            noiseLs.noiseSourceStride       = tdJacPoints;
+            noiseLs.noiseExponent           = &tdNoiseExponent;
+            noiseLs.jacobianLoadOffset      = tdJacPos;
+            if (!circuit.evalAndLoad(commons, nullptr, &noiseLs, nullptr, errors)) {
+                errors.push(PssTranLoadNoiseFailed{tSolve});
+                return false;
+            }
+        }
 
         // Advance to next point
         tdJacPos++;
@@ -611,6 +622,11 @@ void PssTranCore::enableTdJacobianCapture(double period, int N, bool noise) {
         auto nnz = jacobian.nnz();
         tdJacG.assign(tdJacPoints*nnz, 0);
         tdJacC.assign(tdJacPoints*nnz, 0);
+        if (noise) {
+            auto nSlots = circuit.noiseModulationSlotsCount();
+            tdNoiseModulation.assign(tdJacPoints*nSlots, 0);
+            tdNoiseExponent.assign(nSlots, 0);
+        }
         jacSamplesCollectionEnabled = true;
     }
 }

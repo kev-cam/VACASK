@@ -66,6 +66,8 @@ typedef struct TranParameters {
 
     Int write {1};            // Write the results to a file
     
+    Int evalnoise {0};        // Internal, not exposed to the user
+    
     TranParameters();
 } TranParameters;
 

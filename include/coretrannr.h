@@ -40,7 +40,7 @@ public:
 
     // Called in the beginning of transient noise analysis
     // Takes ownership of noise blocks
-    void enableNoise(
+    void enableTransientNoise(
         TimeDomainNoiseBlock<std::mt19937_64>& white, 
         TimeDomainNoiseBlock<std::mt19937_64>& flicker, 
         size_t maxNsCount, 
@@ -48,7 +48,7 @@ public:
     );
 
     // Disable noise
-    void disableNoise();
+    void disableTransientNoise();
 
     // Collect noise scaling
     bool collectNoiseScaling(ErrorConsumer& errors);

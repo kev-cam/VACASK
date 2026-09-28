@@ -99,6 +99,12 @@ ERRORCLASS(PssTranLoadCFailed)
     std::string format() const { return "PssTranCore: reactive Jacobian load failed at t=" + std::to_string(t) + "."; }
 END_ERRORCLASS(PssTranLoadCFailed);
 
+ERRORCLASS(PssTranLoadNoiseFailed)
+    double t;
+    PssTranLoadNoiseFailed(double t) : t(t) {}
+    std::string format() const { return "PssTranCore: noise modulation load failed at t=" + std::to_string(t) + "."; }
+END_ERRORCLASS(PssTranLoadNoiseFailed);
+
 ERRORCLASS(PssTranLoadGFailed)
     double t;
     PssTranLoadGFailed(double t) : t(t) {}
@@ -257,6 +263,9 @@ public:
     // Retrieve stored Jacobians at timepoints
     std::tuple<const Vector<double>&, const Vector<double>&> capturedJacobians() { return std::tie(tdJacG, tdJacC); };
 
+    // Retrieve stored noise modulation function values and flicker exponents
+    std::tuple<const Vector<double>&, const Vector<double>&> capturedNoiseModulation() { return std::tie(tdNoiseModulation, tdNoiseExponent); };
+
     // Retrieve number of points
     int jacobianPointCount() { return tdJacPoints; };
 
@@ -390,6 +399,12 @@ private:
     // Time-domain Jacobian data, timepoint stride equals nnz
     Vector<double> tdJacG;
     Vector<double> tdJacC;
+
+    // Time-domain noise modulation values (stride tdJacPoints, one block per slot)
+    Vector<double> tdNoiseModulation;
+
+    // Per-slot flicker exponent
+    Vector<double> tdNoiseExponent;
 
     // Trajectory buffer populated during final shoot for adjoint monodromy integration
     std::vector<StepRecord> trajectory_;

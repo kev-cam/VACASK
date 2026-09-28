@@ -826,10 +826,17 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
             noiselessSolution.resize(n+1);
         }
         // Tell NR solver we want transient noise
-        nrSolver.enableNoise(*whiteBlock.get(), *flickerBlock.get(), maxNsCount, params.noisescale);
+        nrSolver.enableTransientNoise(*whiteBlock.get(), *flickerBlock.get(), maxNsCount, params.noisescale);
     } else {
         // Tell NR solver we don't want transient noise
-        nrSolver.disableNoise();
+        nrSolver.disableTransientNoise();
+    }
+
+    // If evalnoise is set to true, enable noise evaluation is NR solver
+    // But only noise evaluation, nothing else. 
+    // This is used by pnoise for collecting noise modulation. 
+    if (params.evalnoise) {
+        nrSolver.evalSetup().evaluateNoise = true;
     }
     
     if (progressReporter) {
@@ -1007,7 +1014,7 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         .evaluateReactiveResidual = true, 
         .evaluateLinearizedResistiveRhsResidual = true, 
         .evaluateLinearizedReactiveRhsResidual = true, 
-        .evaluateNoise = true, 
+        .evaluateNoise = false, 
         
         .storeReactiveState = true, 
         
@@ -1025,7 +1032,7 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
     };
 
     // Turn on noise evaluation in esInit
-    if (noisefmax) {
+    if (noisefmax || params.evalnoise) {
         esInit.evaluateNoise = true;
     }
 

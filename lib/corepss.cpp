@@ -455,7 +455,7 @@ bool PssCore::evaluate(bool atIc, bool noiseModulation, int nPts, ErrorConsumer&
     if (nPts<=0) {
         nPtsNeeded = std::ceil(T0/params.shootParams.maxstep);
     }
-    
+
     // Round up to power of 2
     auto p2 = std::ceil(std::log2(nPtsNeeded));
     if (p2>31) {
@@ -464,13 +464,18 @@ bool PssCore::evaluate(bool atIc, bool noiseModulation, int nPts, ErrorConsumer&
     }
     nPts = static_cast<Int>(1) << static_cast<Int>(p2);
 
+    // Needed so noise state is fresh at every timepoint, including t=0
+    auto savedEvalnoise = params.shootParams.evalnoise;
+    params.shootParams.evalnoise = noiseModulation;
+
     // Prepare for recording the time-domain Jacobians
-    pssTran_.enableTdJacobianCapture(T0, nPts);
+    pssTran_.enableTdJacobianCapture(T0, nPts, noiseModulation);
 
     auto shootOk = runShoot(errors);
 
-    // Disable recoring 
+    // Disable recoring
     pssTran_.disableTdJacobianCapture();
+    params.shootParams.evalnoise = savedEvalnoise;
 
     // Shoot OK?
     if (!shootOk) {
@@ -488,6 +493,11 @@ bool PssCore::evaluate(bool atIc, bool noiseModulation, int nPts, ErrorConsumer&
     x0_converged_ = x0;
     T0_converged_ = T0;
     return true;
+}
+
+const Vector<double>& PssCore::noiseExponents() const {
+    auto [tdNoiseMod, tdNoiseExp] = pssTran_.capturedNoiseModulation();
+    return tdNoiseExp;
 }
 
 // ----------------------------------------------------------------
@@ -539,9 +549,35 @@ bool PssCore::getFrequencyDomainJacobians(CSCBlockSparseComplexMatrix& jacSpec, 
         FFTW_ESTIMATE // fast planning
     );
 
-    // Not yet supported: PssTranCore has no captured time-domain noise modulation source to FFT.
+    // Noise modulation function spectra, one block of maxFreqIndex+1 components per slot
     if (noiseModulationSpec) {
-        throw std::logic_error("PssCore::getFrequencyDomainJacobians(): noiseModulationSpec not yet supported.");
+        auto [tdNoiseMod, tdNoiseExp] = pssTran_.capturedNoiseModulation();
+        auto nSlots = circuit.noiseModulationSlotsCount();
+        if (tdNoiseMod.size() != static_cast<size_t>(nSlots)*nPts) {
+            throw std::logic_error("PssCore::getFrequencyDomainJacobians(): noise modulation samples not captured, call evaluate() with noiseModulation=true.");
+        }
+
+        Vector<double> noiseTdSamples(nPts);
+        Vector<Complex> noiseFdSamples(nFd);
+        auto noiseFftPlan = fftw_plan_dft_r2c_1d(
+            static_cast<int>(nPts),
+            noiseTdSamples.data(),
+            reinterpret_cast<fftw_complex*>(noiseFdSamples.data()),
+            FFTW_ESTIMATE
+        );
+
+        auto specStride = maxFreqIndex+1;
+        for (decltype(nSlots) slot = 0; slot < nSlots; slot++) {
+            for (decltype(nPts) t = 0; t < nPts; t++) {
+                noiseTdSamples[t] = tdNoiseMod[slot*nPts + t];
+            }
+            fftw_execute(noiseFftPlan);
+            for (decltype(maxFreqIndex) k = 0; k <= maxFreqIndex; k++) {
+                (*noiseModulationSpec)[slot*specStride + k] = noiseFdSamples[k] / static_cast<double>(nPts);
+            }
+        }
+
+        fftw_destroy_plan(noiseFftPlan);
     }
 
     // Loop through jacSpec entries, compute FD Jacobians

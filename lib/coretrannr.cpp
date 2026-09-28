@@ -104,7 +104,7 @@ bool TranNRSolver::initialize(bool continuePrevious, ErrorConsumer& errors) {
     return true;
 }  
 
-void TranNRSolver::enableNoise(
+void TranNRSolver::enableTransientNoise(
     TimeDomainNoiseBlock<std::mt19937_64>& white, 
     TimeDomainNoiseBlock<std::mt19937_64>& flicker, 
     size_t maxNsCount, 
@@ -137,11 +137,11 @@ void TranNRSolver::enableNoise(
     evalSetup_.evaluateNoise = true;
 }
 
-void TranNRSolver::disableNoise() { 
+void TranNRSolver::disableTransientNoise() { 
     whiteBlock = nullptr;
     flickerBlock = nullptr;
     noiseEnabled = false; 
-    evalSetup_.evaluateNoise = true;
+    evalSetup_.evaluateNoise = false;
 };
 
 std::tuple<bool, bool> TranNRSolver::advanceNoise(double time, double h, std::mt19937_64& gen, ErrorConsumer& errors) {
