@@ -122,6 +122,7 @@ VACASK is written in C++20 and is free software released under the [GNU Affero G
 |tran    |[transient (time-domain) analysis](docs/cmd-analysis-tran.md) with optional [time-domain noise](docs/cmd-analysis-trannoise.md) |
 |pss     |[periodic steady-state analysis (Newton shooting method)](docs/cmd-analysis-pss.md) |
 |pac     |[periodic small-signal analysis (shooting-based)](docs/cmd-analysis-pac.md) |
+|pnoise  |[periodic small-signal noise analysis (shooting-based)](docs/cmd-analysis-pnoise.md) |
 |hb      |[(multitone) harmonic balance analysis](docs/cmd-analysis-hb.md) |
 |hbac    |[(quasi)periodic small-signal analysis (harmonic balance-based)](docs/cmd-analysis-hbac.md) |
 |hbnoise |[(quasi)periodic small-signal noise analysis (harmonic balance-based)](docs/cmd-analysis-hbnoise.md) |
