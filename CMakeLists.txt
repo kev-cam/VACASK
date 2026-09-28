@@ -218,9 +218,12 @@ endif()
 set(STAGED_LIBRARY_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${PROGRAM_LIB_DIR}")
 message(STATUS "Staged library directory: ${STAGED_LIBRARY_DIRECTORY}")
 
-# Find Python (needed for tests)
-find_package(Python 3 REQUIRED COMPONENTS Interpreter Development)
-
+# Find Python. For pyvacask get dev version, for others it is needed for tests.
+if (SKBUILD)
+    find_package(Python 3 REQUIRED COMPONENTS Interpreter Development)
+else()
+    find_package(Python 3 COMPONENTS Interpreter)
+endif()
 # Look for openvaf Verilog-A compiler
 message(CHECK_START "Looking for OpenVAF-Reloaded Verilog-A compiler")
 if (DEFINED OPENVAF_DIR)
@@ -616,6 +619,7 @@ add_subdirectory(demo/api)
 
 include("packaging.cmake")
 
+if (SKBUILD)
 # PyBIND11                                                          
 set(PYBIND11_FINDPYTHON ON)                                         
 find_package(pybind11 CONFIG REQUIRED)                              
@@ -635,4 +639,4 @@ target_link_libraries(_pyvacask PRIVATE simlib ${SIM_EXE_LIBRARIES})
 install(TARGETS _pyvacask                                           
         LIBRARY DESTINATION pyvacask                                
 )                                                                   
-
+endif()
