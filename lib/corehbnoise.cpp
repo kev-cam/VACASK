@@ -253,6 +253,25 @@ void HBNoiseCore::computeOmega(Real f) {
     }
 }
 
+// See declaration in corehbnoise.h
+void HBNoiseCore::applyModulationAdjoint(
+    const Spurs& spurs, const VectorView<Complex>& ma, const Vector<Complex>& zr, Vector<Complex>& wr
+) {
+    auto& stencil = spurs.mixingStencil();
+    auto nf = zr.size();
+    for (decltype(nf) m=0; m<nf; m++) {
+        Complex acc(0.0, 0.0);
+        for (decltype(nf) i=0; i<nf; i++) {
+            // Row i, column m, get index of spectral component
+            auto k = stencil.at(i, m);
+            if (k>=0) {
+                acc += std::conj(ma[k]) * std::conj(zr[i]);
+            }
+        }
+        wr[m] = acc;
+    }
+}
+
 // Explicit instantiation for HBNoiseParameters; definition lives in corehbac.h, see there.
 template bool HBACCore::rebuildCore<HBNoiseParameters>(
     HBNoiseParameters& params, HBCore& hbCore, Circuit& circuit,
@@ -625,29 +644,13 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
                         VectorView<Complex> zrView(zr);
                         zrView.vectorPlusScaledVector(e1Spurs, e2Spurs, -1);
 
-                        // Compute wr = M^H zr^conj with nf components
-                        // Conjugate columns of M are rows od M^H.
-                        // Dot product each row with z^conj to get one component wr.
-                        // Do this without assembling M.
+                        // Compute wr = M^H zr^conj with nf components, without assembling M
                         bool isTable = inst->noiseSourceType(ndx)==NoiseType::Table;
                         if (!isTable && modulatedNoiseBase!=SIM_SIZE_T_MAX) {
-                            // Toeplitz M looked up via the same mixing stencil used for H(omega):
-                            // [M]_{i,m} = M_{i-m}, stored in noiseModulationSpec at slot k
-                            auto& stencil = spurs_.mixingStencil();
                             // Slots of size nf, stride 1
                             auto mSlotBase = (modulatedNoiseBase+modulatedNoiseSlot)*nf;
                             VectorView sourceModulationSpectrum(noiseModulationSpec, mSlotBase, nf, 1);
-                            for (decltype(nf) m=0; m<nf; m++) {
-                                Complex acc(0.0, 0.0);
-                                for (decltype(nf) i=0; i<nf; i++) {
-                                    // Row i, column m, get index of spectral component
-                                    auto k = stencil.at(i, m);
-                                    if (k>=0) {
-                                        acc += std::conj(sourceModulationSpectrum[k]) * std::conj(zr[i]);
-                                    }
-                                }
-                                wr[m] = acc;
-                            }
+                            applyModulationAdjoint(spurs_, sourceModulationSpectrum, zr, wr);
                         } else {
                             // No modulation function (Table-type source): M = I
                             for (decltype(nf) m=0; m<nf; m++) {

@@ -170,6 +170,11 @@ protected:
     // Construct omega vector with 2*pi*(f+f_n)
     void computeOmega(Real f);
 
+    // wr = M^H * zr^conj, M[i,m]=ma[stencil.at(i,m)], without assembling M
+    static void applyModulationAdjoint(
+        const Spurs& spurs, const VectorView<Complex>& ma, const Vector<Complex>& zr, Vector<Complex>& wr
+    );
+
     VectorRepository<Complex>& hbSolution;
     CSCBlockSparseComplexMatrix& jacSpec;
     CSCBlockSparseComplexMatrix& acMatrix;
