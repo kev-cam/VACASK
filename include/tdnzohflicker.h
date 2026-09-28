@@ -20,7 +20,7 @@ public:
     VmFlickerCoeffs& operator=(const VmFlickerCoeffs&)  = delete;
     VmFlickerCoeffs& operator=(      VmFlickerCoeffs&&) = delete;
 
-    void reset(int k, double fs, double fmin, double fmax, int ptsPerDecade=10, int ni=100, int ns=5, double lr=0.1);
+    void reset(int k, double fs, double rampFraction, double fmin, double fmax, int ptsPerDecade=10, int ni=100, int ns=5, double lr=0.1);
 
 protected:
     virtual void analyticalCoefficients(double alpha, std::vector<double>& coeffs) override;
@@ -28,6 +28,8 @@ protected:
     virtual double computePsd(const std::vector<double>& wpsd, double f, std::vector<double>& contributions) override;
 
     double fs_;
+    // Ramp transition time as a fraction of sample time, 0 = abrupt step
+    double rampFraction_;
 };
 
 // Zero-order hold flicker noise generator block
@@ -35,7 +37,7 @@ protected:
 template <std::uniform_random_bit_generator URBG> 
 class TimeDomainZohFlickerNoise : public TimeDomainZohNoiseBlock<URBG>, public VmFlickerCoeffs {
 public:
-    TimeDomainZohFlickerNoise() {};
+    TimeDomainZohFlickerNoise(double rampFraction) : TimeDomainZohNoiseBlock<URBG>(rampFraction) {};
     virtual ~TimeDomainZohFlickerNoise() override = default;
 
     TimeDomainZohFlickerNoise           (const TimeDomainZohFlickerNoise&)  = delete;
@@ -44,8 +46,8 @@ public:
     TimeDomainZohFlickerNoise& operator=(      TimeDomainZohFlickerNoise&&) = delete;
 
     void reset(double t0, double timeStep, size_t count, int rollbackDepth, int k);
-    void resetOptimizer(double fs, double fmin, double fmax, int ptsPerDecade=10, int ni=100, int ns=5, double lr=0.1) {
-        VmFlickerCoeffs::reset(k_, fs, fmin, fmax, ptsPerDecade, ni, ns, lr);
+    void resetOptimizer(double fs, double rampFraction, double fmin, double fmax, int ptsPerDecade=10, int ni=100, int ns=5, double lr=0.1) {
+        VmFlickerCoeffs::reset(k_, fs, rampFraction, fmin, fmax, ptsPerDecade, ni, ns, lr);
     }
 
     void setDebug(int debug) { 

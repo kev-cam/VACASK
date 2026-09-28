@@ -24,6 +24,8 @@ All [Transient Analysis](cmd-analysis-tran.md) parameters apply. The following a
 | `oversample` | integer | `6` | Oversampling factor relative to the Nyquist rate at `noisefmax`. Must be >= 1. Higher values improve accuracy. |
 | `noiseseed` | integer | `0` | Seed for the random number generator. Fixing the seed makes the noise sequence reproducible. |
 | `noisescale` | real | `1.0` | Scaling factor applied to all noise source amplitudes. |
+| `rampfrac` | real | `0.1` | ZOH mode only. Fraction of the sample time over which the noise waveform linearly ramps to a new held level, instead of stepping abruptly. `0` gives an abrupt step; `1` ramps across the entire sample interval. |
+| `noisebreak` | integer | `0` | ZOH mode only. When nonzero, forces breakpoints at the start and end of each ramp transition so it is resolved by the integrator regardless of step size. Off by default. |
 
 ## Maximum timestep
 
@@ -44,6 +46,8 @@ In SDE mode the noise sources are driven by stochastic differential equations (S
 ### ZOH mode (default)
 
 In ZOH mode (zero-order hold) noise samples are generated on a uniform time grid with spacing equal to the maximum timestep, and each sample is held constant until the next grid point. White noise draws an independent Gaussian sample at each grid point. Flicker noise uses a Voss-McCartney style algorithm with $k$ rows: at each grid point exactly one row is randomly selected for update and redrawn from a scaled Gaussian, with row $i$ chosen with probability $1/2^{i+1}$ (determined by the trailing-zero count of a random 64-bit integer); with probability $1/2^k$ no row is updated. Each row produces a Lorentzian PSD with a corner frequency that halves from one row to the next. The output sample is the sum of all row values, and the row weights are set analytically and then optimized numerically so that the sum of Lorentzians approximates the target 1/f^alpha PSD. ZOH mode is simpler but the piecewise-constant noise waveform can cause additional LTE-driven step reductions.
+
+By default, each new sample transitions from the previous level with a linear ramp spanning `rampfrac` (`0.1` by default) of the sample time, rather than stepping abruptly; the flicker row-weight optimizer accounts for this ramp so the target PSD still holds. Set `rampfrac=0` for an abrupt step instead. Set `noisebreak` to force the integrator to resolve every ramp with a breakpoint, regardless of the chosen step size.
 
 ## Save directives
 

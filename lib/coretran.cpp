@@ -240,6 +240,8 @@ template<> int Introspection<TranParameters>::setup() {
     registerMember(noisefmin);
     registerMember(noisemode);
     registerMember(oversample);
+    registerMember(rampfrac);
+    registerMember(noisebreak);
     registerNamedMember(opParams.nodeset, "nodeset");
     registerNamedMember(opParams.solver, "opsolver");
     registerMember(ic);
@@ -719,6 +721,12 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
             co_yield CoreState::Aborted;
         }
 
+        // Check rampfrac
+        if (params.rampfrac<0 || params.rampfrac>1) {
+            errors.push(TranRampfracOutOfRange{});
+            co_yield CoreState::Aborted;
+        }
+
         // Noise sample rate is 2*fmax*oversample
         // The fastest row changes on average every 2*noiseStepLimit seconds. 
         auto fsampling = 2*noisefmax*oversampling;
@@ -774,15 +782,15 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
             }
             
             // Initialize time domain white noise block
-            auto wb = new TimeDomainZohWhiteNoise<std::mt19937_64>();
+            auto wb = new TimeDomainZohWhiteNoise<std::mt19937_64>(params.rampfrac);
             wb->reset(0.0, noiseStepLimit, nWhite, 1);
             wb->setDebug(options.tran_noisedebug);
             whiteBlock.reset(wb);
-            
+
             // Initialize time domain flicker noise block
-            auto fb = new TimeDomainZohFlickerNoise<std::mt19937_64>();
+            auto fb = new TimeDomainZohFlickerNoise<std::mt19937_64>(params.rampfrac);
             fb->reset(0.0, noiseStepLimit, nFlicker, 1, k);
-            fb->resetOptimizer(fsampling, noisefmax/std::pow(2, ktune), noisefmax, 10);
+            fb->resetOptimizer(fsampling, params.rampfrac, noisefmax/std::pow(2, ktune), noisefmax, 10);
             fb->setDebug(options.tran_noisedebug);
             flickerBlock.reset(fb);
         } else {
@@ -1421,6 +1429,16 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         // Call the injectBreakpoint() function
         auto tInjected = injectBreakpoint(tSolve);
         updateBreakPoint(nextBreakPoint, tInjected, tSolve);
+
+        // Inject noise breakpoint
+        if (params.noisefmax && params.noisebreak) {
+            // Use white block to determine breakpoint, as good as any other
+            auto tNextBr = whiteBlock->nextBreakpoint(tSolve);
+            // SDE returns 0 (no breakpoint)
+            if (tNextBr) {
+                updateBreakPoint(nextBreakPoint, tNextBr, tSolve);
+            }
+        }
 
         // Maximal timestep 
         double hmax;

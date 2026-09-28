@@ -32,14 +32,24 @@ public:
     TimeDomainNoiseBlock& operator=(      TimeDomainNoiseBlock&&) = delete;
 
     void reset(size_t count, int rollbackDepth) {
+        // Need one extra point of rollback for linear interpolation during ramping
         history.upsize(rollbackDepth+1, count);
         // By default the initial sample is all-zero
-        zero(history.at());
+        for(int i=0; i<rollbackDepth+1; i++) {
+            zero(history.at(i));
+        }
         atHistoric = 0;
     };
 
     // Return values corresponding to entry we are at
     std::vector<double>& values() { return history.at(atHistoric); };
+
+    // Return values corresponding to patricular timepoint
+    // By defaiult just returns the current sample
+    virtual std::vector<double>& values(double time) { return values(); };
+
+    // Next breakpoint (used by ZOH sources)
+    virtual double nextBreakpoint(double time) { return 0.0; };
 
     // Set shape parameters i-th generator (for now p is the exponent of flicker noise)
     // By default this method should never be called
@@ -73,14 +83,17 @@ protected:
 // Noise generation at predetermined timepoints, zero-order hold
 template <std::uniform_random_bit_generator URBG> class TimeDomainZohNoiseBlock : public TimeDomainNoiseBlock<URBG> {
 public:
-    TimeDomainZohNoiseBlock() {};
+    TimeDomainZohNoiseBlock(double rampFraction) : rampFraction_(rampFraction) {};
     virtual ~TimeDomainZohNoiseBlock() override = default;
 
     void reset(double t0, double timeStep, size_t count, int rollbackDepth) {
         TimeDomainNoiseBlock<URBG>::reset(count, rollbackDepth);
+        // Need one more point of history than rollbackDepth+1 for ramp lookback after a revert
+        history.upsize(rollbackDepth+2, count);
         t0_ = t0;
-        timeStep_ = timeStep; 
-        atSample_ = 0; 
+        timeStep_ = timeStep;
+        atSample_ = 0;
+        ramped_.resize(count);
     };
 
     // Compute sample index for ZOH generators
@@ -91,10 +104,13 @@ public:
     virtual bool advance(double time, double h, URBG& gen) override;
     virtual bool revert(double time, double h, URBG& gen) override;
 
-protected: 
+    virtual std::vector<double>& values(double time) override;
+    virtual double nextBreakpoint(double time) override;
+
+protected:
     // Generate new random numbers, construct a sample
     // To be defined in derived classes
-    virtual void generate(URBG&) = 0;  
+    virtual void generate(URBG&) = 0;
 
     // ZOH generator support
     // Index of sample we are curretly at
@@ -103,6 +119,10 @@ protected:
     double timeStep_;
     // Initial time
     double t0_;
+    // Transition time as a fraction of sample time, 0 = abrupt step
+    double rampFraction_;
+    // Scratch storage for values(double)
+    std::vector<double> ramped_;
 
     using TimeDomainNoiseBlock<URBG>::history;
     using TimeDomainNoiseBlock<URBG>::atHistoric;

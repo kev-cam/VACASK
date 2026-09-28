@@ -57,7 +57,10 @@ typedef struct TranParameters {
                               // If noisefmax!=0 should be <noisefmax.
     Id noisemode {};          // Noise mode (ZOH by default)
     Int oversample {6};       // oversampling factor, 6 by default
-                              // The timestep is limited to 0.5/(oversample*noisefmax). 
+                              // The timestep is limited to 0.5/(oversample*noisefmax).
+    Real rampfrac {0.1};      // ZOH noise sample transition time as a fraction of the sample time
+                              // 0 .. abrupt step, 1 .. linear interpolation between samples
+    Int noisebreak {0};       // Gate noise breakpoint injection in ZOH mode, off by default
     String store {""};        // name of stored solution slot to write transient solution to
     // Nodeset parameter of the operating point core is also exposed. 
 
@@ -101,6 +104,8 @@ SIMPLE_ERRORCLASS(TranNoiseModeUnknown, "Unknown transient noise mode.");
 SIMPLE_ERRORCLASS(TranNoisefmaxNegative, "Transient noisefmax must not be negative.");
 
 SIMPLE_ERRORCLASS(TranOversampleTooSmall, "Transient oversample must be >=1.");
+
+SIMPLE_ERRORCLASS(TranRampfracOutOfRange, "Transient rampfrac must be in the range 0..1.");
 
 SIMPLE_ERRORCLASS(TranNoisefminTooHigh, "Transient noisefmin must be below noisefmax.");
 

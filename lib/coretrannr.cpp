@@ -251,8 +251,8 @@ bool TranNRSolver::buildNoiseResidual() {
     size_t atWhite = 0;
     size_t atFlicker = 0;
     
-    auto whiteSamples = whiteBlock->values();
-    auto flickerSamples = flickerBlock->values();
+    auto whiteSamples = whiteBlock->values(evalSetup_.time);
+    auto flickerSamples = flickerBlock->values(evalSetup_.time);
 
     auto ndev = circuit.deviceCount();
     for(decltype(ndev) idev=0; idev<ndev; idev++) {

@@ -1,6 +1,7 @@
 #include "simulator.h"
 #include "tdnblock.h"
 #include "common.h"
+#include "densematrix.h"
 
 namespace NAMESPACE {
 
@@ -34,6 +35,43 @@ template <std::uniform_random_bit_generator URBG> bool TimeDomainZohNoiseBlock<U
         throw std::logic_error("Attempt to advance noise generator by more than one sample.");
     }
     return false;
+}
+
+template <std::uniform_random_bit_generator URBG> std::vector<double>& TimeDomainZohNoiseBlock<URBG>::values(double time) {
+    auto& cur = history.at(atHistoric);
+    if (rampFraction_<=0) {
+        return cur;
+    }
+    auto tStart = t0_ + atSample_*timeStep_;
+    auto trf = rampFraction_*timeStep_;
+    auto f = (time-tStart)/trf;
+    if (f>=1) {
+        return cur;
+    }
+    auto& prev = history.at(atHistoric+1);
+    if (f<=0) {
+        return prev;
+    }
+    VectorView<double> rampedView(ramped_);
+    rampedView.scaledVector(VectorView<double>(prev), 1-f);
+    rampedView.addScaled(VectorView<double>(cur), f);
+    return ramped_;
+}
+
+template <std::uniform_random_bit_generator URBG> double TimeDomainZohNoiseBlock<URBG>::nextBreakpoint(double time) {
+    if (rampFraction_<=0) {
+        return 0.0;
+    }
+    auto index = sampleIndex(time);
+    auto tInPeriod = time - (t0_ + index*timeStep_);
+    auto trf = rampFraction_*timeStep_;
+    if (tInPeriod<trf) {
+        // On ramp
+        return t0_ + index*timeStep_ + rampFraction_*timeStep_;
+    } else {
+        // On flat
+        return t0_ + (index+1)*timeStep_;
+    }
 }
 
 template <std::uniform_random_bit_generator URBG> bool TimeDomainZohNoiseBlock<URBG>::revert(double time, double h, URBG& gen) {

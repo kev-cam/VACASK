@@ -4,9 +4,10 @@
 
 namespace NAMESPACE {
 
-void VmFlickerCoeffs::reset(int k, double fs, double fmin, double fmax, int ptsPerDecade, int ni, int ns, double lr) {
+void VmFlickerCoeffs::reset(int k, double fs, double rampFraction, double fmin, double fmax, int ptsPerDecade, int ni, int ns, double lr) {
     TimeDomainNoiseCoeffs::reset(k, fmin, fmax, ptsPerDecade, ni, ns, lr);
     fs_ = fs;
+    rampFraction_ = rampFraction;
 }
 
 // Randomized Voss-McCartney coefficients used for weighting outputs of rows in time domain. 
@@ -57,8 +58,16 @@ double VmFlickerCoeffs::computePsd(const std::vector<double>& wpsd, double f, st
     // sin(pi f / fs)
     auto s = std::sin(zohArg);
 
-    // Zero-order hold TF
+    // Zero-order hold TF due to sampling
     double zoh = zohArg!=0 ? 1/fs_*s/zohArg : 1/fs_;
+
+    // Zero-order hold due to ramp, an extra sinc() corresponding to width rampFraction/fs
+    if (rampFraction_>0) {
+        auto rfeff = rampFraction_>1.0 ? 1.0 : rampFraction_;
+        auto rampArg = pi*f*rfeff/fs_;
+        auto rampZoh = rampArg!=0 ? std::sin(rampArg)/rampArg : 1.0;
+        zoh *= rampZoh;
+    }
 
     // Compute rows
     auto p = 0.5;
@@ -86,7 +95,10 @@ void TimeDomainZohFlickerNoise<URBG>::reset(double t0, double timeStep, size_t c
     // Coeff index set to SIM_SIZE_T_MAX initially so that we can detect initalization
     std::fill(coeffIndex.begin(), coeffIndex.end(), SIM_SIZE_T_MAX);
     // Generated values
-    history.upsize(rollbackDepth+1, count);
+    history.upsize(rollbackDepth+2, count);
+    for(int i=0; i<rollbackDepth+2; i++) {
+        zero(history.at(i));
+    }
     // Zero all exponents
     zero(exponent);
 

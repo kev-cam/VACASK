@@ -11,8 +11,8 @@ namespace NAMESPACE {
 // Zero-order hold white noise generator block
 template <std::uniform_random_bit_generator URBG> class TimeDomainZohWhiteNoise : public TimeDomainZohNoiseBlock<URBG> {
 public:
-    TimeDomainZohWhiteNoise() = default; 
-    virtual ~TimeDomainZohWhiteNoise() override = default; 
+    TimeDomainZohWhiteNoise(double rampFraction) : TimeDomainZohNoiseBlock<URBG>(rampFraction) {};
+    virtual ~TimeDomainZohWhiteNoise() override = default;
 
     TimeDomainZohWhiteNoise           (const TimeDomainZohWhiteNoise&)  = delete;
     TimeDomainZohWhiteNoise           (      TimeDomainZohWhiteNoise&&) = default;
