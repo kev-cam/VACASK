@@ -203,6 +203,9 @@ prepare_netlist_test(test_behavnoise.sim)
 prepare_netlist_test(test_hbnoise1.sim)
 prepare_netlist_test(test_hbnoise2.sim)
 prepare_netlist_test(test_hbnoise3.sim)
+prepare_netlist_test(test_pnoise1.sim)
+prepare_netlist_test(test_pnoise2.sim)
+prepare_netlist_test(test_pnoise3.sim)
 # Foreign-format include dispatch: a native deck that pulls its devices from a
 # SPICE-dialect file via `include`. Only meaningful when the Rust parser is
 # compiled in.

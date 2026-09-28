@@ -95,6 +95,7 @@ add_library(simlib STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/corepsstran.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/corepss.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/corepac.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/corepnoise.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/corehb.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/corehbnr.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/corehbac.h
@@ -115,6 +116,7 @@ add_library(simlib STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/anpss.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/anpsssmsig.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/anpac.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/anpnoise.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/anhb.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/anhbsmsig.h 
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/anhbac.h
@@ -197,6 +199,7 @@ add_library(simlib STATIC
     corepsstran.cpp
     corepss.cpp
     corepac.cpp
+    corepnoise.cpp
     corehb.cpp
     corehbcoloc.cpp
     corehbxform.cpp
@@ -218,6 +221,7 @@ add_library(simlib STATIC
     antran.cpp
     anpss.cpp
     anpac.cpp
+    anpnoise.cpp
     anhb.cpp
     anhbac.cpp
     anhbnoise.cpp
