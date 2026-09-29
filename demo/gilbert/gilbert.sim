@@ -97,7 +97,6 @@ control
   var fnmap=sgn(fnoff)*(fnreach*(min(abs(fnoff), fnreach)/fnreach)**fnq+max(abs(fnoff)-fnreach, 0))
   var fnmapp=sgn(fnoffp)*(fnreach*(min(abs(fnoffp), fnreach)/fnreach)**fnq+max(abs(fnoffp)-fnreach, 0))
   var fnmapl=sgn(fnoffl)*(fnreach*(min(abs(fnoffl), fnreach)/fnreach)**fnq+max(abs(fnoffl)-fnreach, 0))
-  var fnvals=sort([fnmapp, fnmap+1*fnspur, fnmap+2*fnspur, fnmap+3*fnspur, fnmap+4*fnspur, fnmap+5*fnspur, fnmap+6*fnspur, fnmap+7*fnspur, fnmap+8*fnspur, fnmap+9*fnspur, fnmap+10*fnspur, fnmap+11*fnspur, fnmap+12*fnspur, fnmap+13*fnspur, fnmap+14*fnspur, fnmapl+15*fnspur])
 
   // Same grid, trimmed to the first 10 spurs (0 to 10MHz). Used for the
   // switching-mode PNOISE below, which needs a much higher truncharm to

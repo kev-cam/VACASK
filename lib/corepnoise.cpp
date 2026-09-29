@@ -394,6 +394,7 @@ CoreCoroutine PNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& errors
         co_yield CoreState::Aborted;
         co_return;
     }
+    const Vector<double>& noiseExp = pssCore_.noiseExponents();
 
     // Collect frequency-domain Jacobians and noise modulation function
     // spectra (DC..maxharm_, Toeplitz basis - see PACCore::fillMatrix)
@@ -438,6 +439,10 @@ CoreCoroutine PNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& errors
     ss << std::scientific << std::setprecision(4);
     bool error = false;
     auto f0 = 1.0 / pssCore_.convergedPeriod();
+    const double freqTol = 1e-14;
+    Vector<double> noiseDensity;
+    Vector<Complex> zr(nf);
+    Vector<Complex> wr(nf);
     do {
         // Compute should always succeed
         Value v;
@@ -565,11 +570,6 @@ CoreCoroutine PNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& errors
         powerGain = std::abs(tf);
         powerGain *= powerGain;
 
-        Vector<double> noiseDensity;
-
-        Vector<Complex> zr(nf);
-        Vector<Complex> wr(nf);
-
         // Set total output noise to 0
         outputNoise = 0.0;
 
@@ -603,6 +603,9 @@ CoreCoroutine PNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& errors
                         Simulator::dbg() << "  instance '" << std::string(name) << "'\n";
                     }
 
+                    // Base slot of this instance's modulated noise sources
+                    auto noiseModBase = inst->noiseModulationBase();
+
                     // Loop through all sidebands, evaluate noise at each frequency
                     // Store in a vector with nf slots, one slot per one frequency.
                     // slot size equals number of noise sources.
@@ -623,7 +626,7 @@ CoreCoroutine PNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& errors
                         // The fact that OSDI returns one-sided PSD was compensated in the
                         // modulation function when we absorbed A (see osdiinstance.cpp).
                         // Overwrite white noise with 1 and flicker noise with 1/f^alpha
-                        auto modulatedNoiseSlot = inst->noiseModulationBase();
+                        auto modulatedNoiseSlot = noiseModBase;
                         for (decltype(nSources) ndx=0; ndx<nSources; ndx++) {
                             switch (inst->noiseSourceType(ndx)) {
                                 case NoiseType::White:
@@ -631,13 +634,12 @@ CoreCoroutine PNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& errors
                                     modulatedNoiseSlot++;
                                     break;
                                 case NoiseType::Flicker:
-                                    // 1/f is undefined where a spur lands on DC, i.e. the
-                                    // offset frequency equals a pump harmonic. Leave that
-                                    // spur out and warn below instead of propagating inf
-                                    // (or nan for a source with zero flicker amplitude)
-                                    // into every total.
-                                    if (freqAtSpur>0) {
-                                        auto ef = pssCore_.noiseExponents()[modulatedNoiseSlot];
+                                    // 1/f blows up (or overflows) where a spur lands on
+                                    // or near DC, i.e. the offset frequency equals or
+                                    // nearly equals a pump harmonic. Leave that spur out
+                                    // and warn below instead of propagating inf/nan.
+                                    if (freqAtSpur>freqTol*std::max(1.0, std::fabs(h))*f0) {
+                                        auto ef = noiseExp[modulatedNoiseSlot];
                                         noiseDensity[i*nSources+ndx] = std::pow(freqAtSpur, -ef);
                                     } else {
                                         noiseDensity[i*nSources+ndx] = 0;

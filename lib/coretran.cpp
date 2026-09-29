@@ -1006,8 +1006,7 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         .nodesetEnabled = false, 
         .icEnabled = false, 
 
-        // Evaluate resistive Jacobian, residual, and noise, 
-        // because PAC and friends need them at first point
+        // Resistive Jacobian/residual for PAC and friends; noise only if requested
         .evaluateResistiveJacobian = true, 
         .evaluateReactiveJacobian = true, 
         .evaluateResistiveResidual = true, 

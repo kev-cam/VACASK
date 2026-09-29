@@ -1,6 +1,7 @@
 #include <numbers>
 #include <complex>
 #include <filesystem>
+#include <algorithm>
 #include "corehbnoise.h"
 #include "corehbac.h"
 #include "spurs.h"
@@ -363,6 +364,7 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
         co_yield CoreState::Aborted;
         co_return;
     }
+    const Vector<double>& noiseExp = hbCore_.noiseExponents();
 
     // Collect frequency-domain Jacobians and noise modulation function spectra
     noiseModulationSpec.resize(circuit.noiseModulationSlotsCount()*nf);
@@ -402,6 +404,9 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
     std::stringstream ss;
     ss << std::scientific << std::setprecision(4);
     bool error = false;
+    Vector<double> noiseDensity;
+    Vector<Complex> zr(nf);
+    Vector<Complex> wr(nf);
     do {
         // Compute should always succeed
         Value v;
@@ -529,11 +534,6 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
         powerGain = std::abs(tf);
         powerGain *= powerGain;
 
-        Vector<double> noiseDensity;
-        
-        Vector<Complex> zr(nf);
-        Vector<Complex> wr(nf);
-        
         // Set total output noise to 0
         outputNoise = 0.0;
 
@@ -542,6 +542,9 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
 
         // Set when a flicker source meets a spur at zero frequency
         bool flickerAtDc = false;
+        const double freqTol = 1e-14;
+        auto& fundamentals = spurs_.fundamentals();
+        auto minFundamental = *std::min_element(fundamentals.begin(), fundamentals.end());
 
         // Go through all instances
         auto ndev = circuit.deviceCount();
@@ -566,7 +569,10 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
                     if (debug>1) {
                         Simulator::dbg() << "  instance '" << std::string(name) << "'\n";
                     }
-                    
+
+                    // Base slot of this instance's modulated noise sources
+                    auto noiseModBase = inst->noiseModulationBase();
+
                     // Loop through all frequencies, evaluate noise at each frequency
                     // Store in a vector with nf slots, one slot per one frequency.
                     // slot size equals number of noise sources.
@@ -588,7 +594,7 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
                         // The fact that OSDI returns one-sided PSD was compensated in the 
                         // modulation function when we absorbed A (see corehb.cpp). 
                         // Overwrite white noise with 1 and flicker noise with 1/f^alpha
-                        auto modulatedNoiseSlot = inst->noiseModulationBase();
+                        auto modulatedNoiseSlot = noiseModBase;
                         for (decltype(nSources) ndx=0; ndx<nSources; ndx++) {
                             switch (inst->noiseSourceType(ndx)) {
                                 case NoiseType::White:
@@ -596,13 +602,12 @@ CoreCoroutine HBNoiseCore::coroutine(bool continuePrevious, ErrorConsumer& error
                                     modulatedNoiseSlot++;
                                     break;
                                 case NoiseType::Flicker:
-                                    // 1/f is undefined where a spur lands on DC, i.e. the
-                                    // offset frequency equals a pump harmonic. Leave that
-                                    // spur out and warn below instead of propagating inf
-                                    // (or nan for a source with zero flicker amplitude)
-                                    // into every total.
-                                    if (freqAtSpur>0) {
-                                        auto ef = hbCore_.noiseExponents()[modulatedNoiseSlot];
+                                    // 1/f blows up (or overflows) where a spur lands on
+                                    // or near DC, i.e. the offset frequency equals or
+                                    // nearly equals a pump harmonic. Leave that spur out
+                                    // and warn below instead of propagating inf/nan.
+                                    if (freqAtSpur>freqTol*std::max(minFundamental, std::fabs(smsigFreq[i]))) {
+                                        auto ef = noiseExp[modulatedNoiseSlot];
                                         noiseDensity[i*nSources+ndx] = std::pow(freqAtSpur, -ef);
                                     } else {
                                         noiseDensity[i*nSources+ndx] = 0;
