@@ -48,7 +48,7 @@ ends
 subckt swtest()
   vin (inp inb) v type="sine" sinedc=0 ampl=2m freq=50k spur={0.0} smag=[1] //2m
   ein (inn inb inp inb) vcvs gain=-1
-  vlo (lop lob) v type="pulse" val0=-0.5 val1=0.5 delay=0 rise=10n fall=10n width=1u/2-10n period=1u
+  vlo (lop lob) v type="pulse" val0=-0.5 val1=0.5 delay=0 rise=0.3u fall=0.3u width=(1u-2*0.3u)/2 period=1u
   elo (lon lob lop lob) vcvs gain=-1
 ends
 
@@ -99,13 +99,27 @@ control
   var fnmapl=sgn(fnoffl)*(fnreach*(min(abs(fnoffl), fnreach)/fnreach)**fnq+max(abs(fnoffl)-fnreach, 0))
   var fnvals=sort([fnmapp, fnmap+1*fnspur, fnmap+2*fnspur, fnmap+3*fnspur, fnmap+4*fnspur, fnmap+5*fnspur, fnmap+6*fnspur, fnmap+7*fnspur, fnmap+8*fnspur, fnmap+9*fnspur, fnmap+10*fnspur, fnmap+11*fnspur, fnmap+12*fnspur, fnmap+13*fnspur, fnmap+14*fnspur, fnmapl+15*fnspur])
 
-  // HBNOISE over the sweep values above, resolves the skirts around the LO harmonics.
-  // It uses the HB solution stored by HBAC, so HB is not run again.
-  // Harmonics up to 15 are needed, so truncharm=15.
-  analysis hbnoise1 hbnoise hbsolve=0 nodeset="hbsol" truncharm=15 in="vin" out=["outp", "outn"] values=fnvals
+  // Same grid, trimmed to the first 10 spurs (0 to 10MHz). Used for the
+  // switching-mode PNOISE below, which needs a much higher truncharm to
+  // converge (see pnoise2) - trimming the sweep keeps its runtime reasonable.
+  var fnvals10=sort([fnmapp, fnmap+1*fnspur, fnmap+2*fnspur, fnmap+3*fnspur, fnmap+4*fnspur, fnmap+5*fnspur, fnmap+6*fnspur, fnmap+7*fnspur, fnmap+8*fnspur, fnmap+9*fnspur, fnmapl+10*fnspur])
+
+  // HBNOISE over the unified 10-spur grid (fnvals10), resolves the skirts
+  // around the LO harmonics. It uses the HB solution stored by HBAC, so HB
+  // is not run again. Harmonics up to 15 are needed, so truncharm=15.
+  analysis hbnoise1 hbnoise hbsolve=0 nodeset="hbsol" truncharm=15 in="vin" out=["outp", "outn"] values=fnvals10
 
   // PAC equivalent to the HBAC above, vin is still turned off
   analysis pac1 pac tper=1u tstab=10u maxharm=100 truncharm=10 outharm={} from=1 to=500k mode="dec" points=10
+
+  // PNOISE over the same unified 10-spur grid, shooting-based counterpart of
+  // HBNOISE. It solves its own PSS (single tone, vin is still turned off)
+  // instead of reusing the stored HB solution.
+  analysis pnoise1 pnoise tper=1u tstab=10u truncharm=80 in="vin" out=["outp", "outn"] values=fnvals10
+
+  // HBNOISE equivalent of pnoise1, same unified grid, for direct comparison.
+  // Reuses the HB solution stored by HBAC.
+  analysis hbnoise2 hbnoise hbsolve=0 nodeset="hbsol" truncharm=15 in="vin" out=["outp", "outn"] values=fnvals10
 
   
   // PAC with the upper quad in switching mode (pulse LO).
@@ -118,6 +132,13 @@ control
   // Turn off vin again so it does not disturb the periodic operating point.
   alter instance("vin") ampl=0
   analysis pac2 pac tper=1u tstab=10u truncharm=20 outharm={} from=1 to=500k mode="dec" points=10
+
+  // PNOISE in switching mode, trimmed to the first 10 spurs (fnvals10).
+  // The LO edge (rise/fall=0.3u) and truncharm=80 were chosen together so
+  // the result is reasonably converged - see pss/pnoise truncharm discussion.
+  // Faster edges need far more harmonics than the current conversion-matrix
+  // solver can handle; a matrix-free/GMRES solver is planned to lift this.
+  analysis pnoise2 pnoise tper=1u tstab=10u truncharm=80 in="vin" out=["outp", "outn"] values=fnvals10
 
   postprocess(PYTHON, "runme.py")
 endc
@@ -259,15 +280,42 @@ ax_dict2["G"].legend(handles=[
 fig3, ax3 = plt.subplots(1, 1, figsize=(8,5), dpi=100) # 6,4
 hbnoise1 = rawread('hbnoise1.raw').get()
 f = np.real(hbnoise1['frequency'])
-ax3.loglog(f/1e6, np.sqrt(np.real(hbnoise1['onoise'])))
-ax3.set_title('Output noise, multiplier mode')
+ax3.semilogy(f/1e6, np.sqrt(np.real(hbnoise1['onoise'])))
+ax3.set_title('Output noise, multiplier mode (HBNOISE)')
 ax3.set_xlabel('f [MHz]')
 ax3.set_ylabel('output noise [V/sqrt(Hz)]')
 ax3.grid(True, which='both', alpha=0.3)
 
+# Fourth window: PNOISE vs. its HBNOISE equivalent, multiplier mode, over
+# the same unified 10-spur grid as hbnoise1/pnoise2.
+fig4, ax4 = plt.subplots(1, 1, figsize=(8,5), dpi=100)
+pnoise1 = rawread('pnoise1.raw').get()
+fp = np.real(pnoise1['frequency'])
+ax4.semilogy(fp/1e6, np.sqrt(np.real(pnoise1['onoise'])), color='blue', label='PNOISE')
+hbnoise2 = rawread('hbnoise2.raw').get()
+fhb = np.real(hbnoise2['frequency'])
+ax4.semilogy(fhb/1e6, np.sqrt(np.real(hbnoise2['onoise'])), color='red', label='HBNOISE')
+ax4.set_title('Output noise, multiplier mode (PNOISE vs HBNOISE)')
+ax4.set_xlabel('f [MHz]')
+ax4.set_ylabel('output noise [V/sqrt(Hz)]')
+ax4.grid(True, which='both', alpha=0.3)
+ax4.legend(loc='best')
+
+# Fifth window: PNOISE in switching mode, same unified 10-spur grid.
+fig5, ax5 = plt.subplots(1, 1, figsize=(8,5), dpi=100)
+pnoise2 = rawread('pnoise2.raw').get()
+fsw = np.real(pnoise2['frequency'])
+ax5.semilogy(fsw/1e6, np.sqrt(np.real(pnoise2['onoise'])))
+ax5.set_title('Output noise, switching mode (PNOISE)')
+ax5.set_xlabel('f [MHz]')
+ax5.set_ylabel('output noise [V/sqrt(Hz)]')
+ax5.grid(True, which='both', alpha=0.3)
+
 fig1.tight_layout()
 fig2.tight_layout()
 fig3.tight_layout()
+fig4.tight_layout()
+fig5.tight_layout()
 
 plt.show()
 >>>FILE
