@@ -58,3 +58,18 @@ SIMetrix/XSPICE designs go through the Xyce front end
 (`xyce/utils/simetrix_cosim.pl`), then through `xyce/utils/cir2vacask.py`, which
 translates the Xyce deck to VACASK. Run
 `ENGINE=vacask xyce/utils/test_simetrix_cosim/gen_run.sh design.net`.
+
+## Tuning
+
+- `COSIM_A2D_DV` (in volts, default 0.1) sets the A2D resolution. A probe
+  pauses the analog side once its node has moved this far since the probe's
+  last pause, so a threshold crossing is seen within DV/slope. On `hier.net`
+  (a 5 V/µs input ramp), 0.1 V gives edges 19 ns late and 0.01 V gives them
+  0.5 ns late. On the flyback, going from 0.1 V to 0.01 V takes the run from
+  17 s to 79 s.
+- `options tran_lteimplicit=0` keeps LTE control off the implicit equations
+  that OpenVAF adds for `ddt()` results in the SPICE-distilled models. Without
+  it, the UC3844 flyback collapses its timestep at the first switching cycles,
+  where a hard-switched BJT is involved. `cir2vacask.py` sets it.
+- `VACASK_COSIM_TRACE=1` prints every `simulateUntil` call (from, target,
+  reached). `options tran_debug=3` names the unknown that has the worst LTE.
