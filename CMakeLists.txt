@@ -17,6 +17,17 @@ endif()
 
 enable_testing()
 
+# C interface shared library for co-simulation (libvacaskcinterface), 
+# requires position independent code in simlib. 
+if (NOT WIN32)
+    option(VACASK_CINTERFACE "Build the C interface library for co-simulation" ON)
+else()
+    option(VACASK_CINTERFACE "Build the C interface library for co-simulation" OFF)
+endif()
+if (VACASK_CINTERFACE)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 # --- Rust netlist parser (optional; netlist-cxx via Corrosion) --------------
 # SPICE/Spectre netlist support is optional. When OFF (default), no Rust
 # toolchain is needed and foreign-format includes report a clean error; when
@@ -610,6 +621,9 @@ endif()
 
 add_subdirectory(lib)
 add_subdirectory(simulator)
+if (VACASK_CINTERFACE)
+    add_subdirectory(cinterface)
+endif()
 add_subdirectory(devices)
 add_subdirectory(inc)
 add_subdirectory(python)

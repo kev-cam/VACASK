@@ -13,6 +13,7 @@
 namespace NAMESPACE {
 
 class CommandInterpreter;
+class Analysis;
 
 enum class InterpreterExitStatus { 
     OK,            // returned by commands on success
@@ -20,6 +21,7 @@ enum class InterpreterExitStatus {
     HardFault,     // returned on an error that can't be masked
     RequestMCExit, // endmc command requests loop exit
     EndReached,    // end of commands reached
+    Paused,        // analysis stopped with pause on stop enabled, run() resumes it
 };
 
 typedef InterpreterExitStatus (*CommandFuncPtr)(CommandInterpreter& interpreter, PTCommand& cmd, Status& s);
@@ -95,8 +97,23 @@ public:
         }
     };
     void setAnalysisNamePrefix(const std::string& pfx) { analysisNamePrefix_ = pfx; };
-    
+
+    // With pause on stop enabled an analysis that stops (e.g. on a Verilog-A $stop
+    // or a TranSync request) is kept alive and run() returns Paused. The next
+    // run() call resumes it and then continues with the commands that follow.
+    void setPauseOnStop(bool b) { pauseOnStop_ = b; };
+    bool paused() const { return pausedAnalysis_!=nullptr; };
+    // Finish a paused analysis without resuming it (flushes its outputs)
+    bool abandonPaused(Status& s=Status::ignore);
+
 private:
+    InterpreterExitStatus runAnalysis(Analysis* an, bool resume, Status& s);
+    InterpreterExitStatus analysisDone(Analysis* an, bool ok, Status& s);
+
+    bool pauseOnStop_ {false};
+    Analysis* pausedAnalysis_ {nullptr};
+    Status pausedStatus_;
+
     size_t at_;
     std::unordered_set<Id> mcNames;
     std::string analysisNamePrefix_;

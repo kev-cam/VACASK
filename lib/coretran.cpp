@@ -7,6 +7,7 @@
 #include "tdnsdeflicker.h"
 #include "common.h"
 #include "densematrix.h"
+#include "extsource.h"
 #include <filesystem>
 #include <algorithm>
 
@@ -1051,6 +1052,12 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         co_yield CoreState::Aborted;
     }
 
+    // Co-simulation: external sources see the initial point,
+    // an installed TranSync hook may stop here.
+    auto extPause = ExtSource::notifyAccepted(0.0, solution.vector().data());
+    auto syncHook = TranSync::installed();
+    bool syncStop = syncHook && (syncHook->accepted(0.0) || extPause);
+
     // First buildNoiseResidual() call just prepares flicker noise coefficients
     // Noise samples are all 0 so the generated residual contribution would also be 0. 
     if (noisefmax) {
@@ -1070,6 +1077,7 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
     }
     finishFlag |= esInit.requests.finish;
     stopFlag |= esInit.requests.stop;
+    stopFlag |= syncStop;
     if (finishFlag) {
         co_yield CoreState::Finished;
     } else if (stopFlag) {
@@ -1107,6 +1115,11 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
     double nextBreakPoint = esInit.nextBreakPoint;
     updateBreakPoint(nextBreakPoint, params.stop, 0.0);
     updateBreakPoint(nextBreakPoint, params.start, 0.0);
+    if (syncHook) {
+        // External sources may have changed while we were stopped at t=0
+        updateBreakPoint(nextBreakPoint, ExtSource::nextBreakpoint(0.0), 0.0);
+        updateBreakPoint(nextBreakPoint, syncHook->nextBreakpoint(0.0), 0.0);
+    }
     // Due to stop time we definitely have a finite break point after 0.0
     breakPoints.add(nextBreakPoint);
 
@@ -1435,6 +1448,11 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         // Call the injectBreakpoint() function
         auto tInjected = injectBreakpoint(tSolve);
         updateBreakPoint(nextBreakPoint, tInjected, tSolve);
+
+        // Co-simulation breakpoint
+        if (syncHook) {
+            updateBreakPoint(nextBreakPoint, syncHook->nextBreakpoint(tSolve), tSolve);
+        }
 
         // Inject noise breakpoint
         if (params.noisefmax && params.noisebreak) {
@@ -1854,6 +1872,10 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
                 co_yield CoreState::Aborted;
             }
 
+            // Co-simulation: notify external sources, ask the hook if we should stop
+            extPause = ExtSource::notifyAccepted(tSolve, solution.vector().data());
+            syncStop = syncHook && (syncHook->accepted(tSolve) || extPause);
+
             // Store timestep
             pastTimesteps.add(hk);
 
@@ -1884,11 +1906,31 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
                 }
                 finished = true;
                 co_yield CoreState::Finished;
-            } else if (nrSolver.evalSetup().requests.stop) {
+            } else if (nrSolver.evalSetup().requests.stop || syncStop) {
                 if (debug) {
                     Simulator::dbg() << "Stoppings analysis on request.\n";
                 }
                 co_yield CoreState::Stopped;
+
+                // Resumed. While we were stopped a co-simulation master may have
+                // changed the external sources and the sync target. The next step
+                // was computed before that, cut it at the breakpoints they report.
+                if (syncStop) {
+                    updateBreakPoint(breakPoints.at(0), ExtSource::nextBreakpoint(tSolve), tSolve);
+                    if (syncHook) {
+                        updateBreakPoint(breakPoints.at(0), syncHook->nextBreakpoint(tSolve), tSolve);
+                    }
+                    // Same limit on the step as after an accepted breakpoint
+                    auto hmaxBr = options.tran_fbr*(breakPoints.at(0)-breakPoints.at(1));
+                    if (hkNew>hmaxBr) {
+                        hkNew = hmaxBr;
+                        tSolveNew = tSolve + hkNew;
+                    }
+                    if (tSolveNew>=breakPoints.at(0)) {
+                        hkNew = breakPoints.at(0) - tSolve;
+                        tSolveNew = breakPoints.at(0);
+                    }
+                }
             }
             
             // Advance history so that t_{k+1} (slot 0) becomes t_k (slot 1)

@@ -129,6 +129,7 @@ add_library(simlib STATIC
     acct.cpp
     libplatform.cpp 
     dynload.cpp 
+    extsource.cpp 
     limitfunctions.cpp
     status.cpp
     value.cpp

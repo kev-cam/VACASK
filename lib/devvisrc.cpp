@@ -53,6 +53,7 @@ template<> int Introspection<DevSourceInstanceParams>::setup() {
     registerMember(slopetol);
     registerMember(sloperel);
     registerMember(slopeglob);
+    registerMember(file);
     
     registerMember(modfreq);
     registerMember(modphase);
@@ -125,6 +126,7 @@ DevSourceInstanceParams::DevSourceInstanceParams() {
     slopetol = 0.0;
     sloperel = 0.0;
     slopeglob = 0.01;
+    file = "";
 
     // type="am" or "fm"
     // sinedc, ampl, freq, tdphase
@@ -197,6 +199,22 @@ std::tuple<bool, bool, bool> sourceSetup(InstanceParams& params, InstanceData& d
             s.set(Status::BadArguments, "Period of pulse transient must be greater than rise+fall+width.");
             s.extend(loc);
             return std::make_tuple(false, false, false);
+        }
+    } else if (p.type == typePwl && ExtSource::isUri(p.file)) {
+        // Externally driven source (co-simulation boundary)
+        d.typeCode = IndependentSourceType::Ext;
+        if (!d.ext || d.extUri!=p.file) {
+            constexpr bool isVoltageSource = std::is_same_v<std::decay_t<decltype(d)>, DevVSourceInstanceData>;
+            std::string err;
+            d.ext = nullptr;
+            d.ext = ExtSource::create(p.file, isVoltageSource, err);
+            if (!d.ext) {
+                d.extUri = "";
+                s.set(Status::BadArguments, err);
+                s.extend(loc);
+                return std::make_tuple(false, false, false);
+            }
+            d.extUri = p.file;
         }
     } else if (p.type == typePwl) {
         d.typeCode = IndependentSourceType::Pwl;
@@ -710,6 +728,14 @@ std::tuple<double, double> sourceCompute(const InstanceParams& params, InstanceD
     case IndependentSourceType::Dc:
         val = params.dc;
         break;
+    case IndependentSourceType::Ext: {
+        double nb;
+        val = data.ext->value(time, nb);
+        if (nb>time) {
+            nextBreak = nb;
+        }
+        break;
+    }
     case IndependentSourceType::Sine:
         if (time<params.delay) {
             // For t < delay the value is equal to value at t=delay
@@ -1192,6 +1218,9 @@ template<> bool BuiltinVSourceInstance::bindCore(
     // Unknown indices
     d.uP = nodes_[0]->unknownIndex();
     d.uN = nodes_[1]->unknownIndex();
+    if (d.ext) {
+        d.ext->setUnknowns(d.uP, d.uN);
+    }
     d.uFlow = nodes_[2]->unknownIndex();
 
     // Resistive Jacobian entry pointers
@@ -1219,6 +1248,9 @@ template<> bool BuiltinISourceInstance::bindCore(
     // Unknown indices
     d.uP = nodes_[0]->unknownIndex();
     d.uN = nodes_[1]->unknownIndex();
+    if (d.ext) {
+        d.ext->setUnknowns(d.uP, d.uN);
+    }
     
     // No Jacobian entries
     

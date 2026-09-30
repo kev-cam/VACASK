@@ -3,12 +3,13 @@
 
 #include "value.h"
 #include "devbuiltin.h"
+#include "extsource.h"
 #include "common.h"
 
 
 namespace NAMESPACE {
 
-enum class IndependentSourceType : char { Dc, Sine, Pulse, Sffm, Exp, Pwl, Am, Fm };
+enum class IndependentSourceType : char { Dc, Sine, Pulse, Sffm, Exp, Pwl, Am, Fm, Ext };
 
 struct DevSourceModelParams {
     DevSourceModelParams();
@@ -62,6 +63,8 @@ struct DevSourceInstanceParams {
     Real slopetol;  // break=auto: absolute slope change tolerance, default=0
     Real sloperel;  // break=auto: relative slope change tolerance, default=0
     Real slopeglob; // break=auto: global relative slope change tolerance, default=0
+    String file;    // code:<library>:<function>:<args> URI, source is driven 
+                    // by an external library (co-simulation), see extsource.h
     
     // AM, FM
     Real modfreq;
@@ -109,6 +112,9 @@ struct DevVSourceInstanceData {
     size_t npts;
     size_t lastPointIndex; // Helps find waveform points faster
 
+    std::shared_ptr<ExtSource> ext; // External (code:) source
+    String extUri;                  // URI ext is bound to
+
     DevVSourceInstanceData();
 };
 
@@ -128,6 +134,9 @@ struct DevISourceInstanceData {
     std::vector<size_t> nextBreakIndex;
     size_t npts;
     size_t lastPointIndex;
+
+    std::shared_ptr<ExtSource> ext; // External (code:) source
+    String extUri;                  // URI ext is bound to
 
     DevISourceInstanceData();
 };

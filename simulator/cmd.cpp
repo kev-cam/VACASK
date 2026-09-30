@@ -39,6 +39,7 @@ CommandInterpreter::CommandInterpreter(ParserTables& tables, PTControl& control,
 }
 
 CommandInterpreter::~CommandInterpreter() {
+    abandonPaused();
 }
 
 bool CommandInterpreter::clearVariables(Status& s) {
@@ -110,7 +111,72 @@ bool CommandInterpreter::elaborate(const std::vector<Id>& names, const std::stri
     return circuit_.elaborate(names, topDefName, topInstName, nullptr, s); 
 }
 
+InterpreterExitStatus CommandInterpreter::runAnalysis(Analysis* an, bool resume, Status& s) {
+    if (!resume) {
+        pausedStatus_.clear();
+        if (!an->start(pausedStatus_)) {
+            return analysisDone(an, false, s);
+        }
+    }
+    while (true) {
+        if (!an->isRunning()) {
+            pausedStatus_.set(Status::InternalError, "Internal error. Coroutine exited without yielding Aborted or Finished.");
+            an->finish();
+            return analysisDone(an, false, s);
+        }
+        auto state = an->resume();
+        if (state==AnalysisState::Aborted) {
+            // resume() has put the error in pausedStatus_
+            an->finish();
+            return analysisDone(an, false, s);
+        } else if (state==AnalysisState::Finished) {
+            Status fs;
+            auto ok = an->finish(fs);
+            if (!ok) {
+                pausedStatus_.set(fs);
+            }
+            return analysisDone(an, ok, s);
+        } else if (state==AnalysisState::Stopped) {
+            pausedAnalysis_ = an;
+            return InterpreterExitStatus::Paused;
+        }
+    }
+}
+
+InterpreterExitStatus CommandInterpreter::analysisDone(Analysis* an, bool ok, Status& s) {
+    delete an;
+    if (!ok) {
+        if (!mustAbort(idAnalysis)) {
+            Simulator::err() << pausedStatus_.message() << "\n";
+        } else {
+            s.set(pausedStatus_);
+            return InterpreterExitStatus::Error;
+        }
+    }
+    return InterpreterExitStatus::OK;
+}
+
+bool CommandInterpreter::abandonPaused(Status& s) {
+    if (!pausedAnalysis_) {
+        return true;
+    }
+    auto ok = pausedAnalysis_->finish(s);
+    delete pausedAnalysis_;
+    pausedAnalysis_ = nullptr;
+    return ok;
+}
+
 InterpreterExitStatus CommandInterpreter::run(size_t from, Status& s) {
+    // Resume a paused analysis, then continue with the command after it
+    if (pausedAnalysis_) {
+        auto an = pausedAnalysis_;
+        pausedAnalysis_ = nullptr;
+        auto st = runAnalysis(an, true, s);
+        if (st!=InterpreterExitStatus::OK) {
+            return st;
+        }
+        from = at_+1;
+    }
     for(at_ = from; at_<control_.size(); at_++) {
         auto& entry = control_[at_];
         if (std::holds_alternative<PTAnalysis>(entry)) {
@@ -146,6 +212,15 @@ InterpreterExitStatus CommandInterpreter::run(size_t from, Status& s) {
                 an->add(s);
             }
             
+            // Pause on stop: drive the analysis coroutine here so that it can outlive this call
+            if (pauseOnStop_) {
+                auto st = runAnalysis(an, false, s);
+                if (st!=InterpreterExitStatus::OK) {
+                    return st;
+                }
+                continue;
+            }
+
             // Analysis status message
             tmps.clear();
             // Progress reporter
