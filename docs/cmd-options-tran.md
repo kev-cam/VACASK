@@ -9,6 +9,7 @@
 | `tran_xmu` | real | 0.5 | 0-0.5 | Euler/trapezoidal mixture for Adams-Moulton order 2. 0 = pure Euler, 0.5 = pure trapezoidal. |
 | `tran_trapltefilter` | boolean | 1 | 0, 1 | Enable trap ringing filter for predictor and LTE computation (AM order 2 only). |
 | `tran_spicelte` | boolean | 0 | 0, 1 | Use SPICE-compatible (incorrect) LTE handling. |
+| `tran_lteimplicit` | boolean | 1 | 0, 1 | Apply LTE timestep control to implicit-equation unknowns (named `implicit_equation_<k>`), which OpenVAF-Reloaded introduces, for example, for `x=ddt(q)` used in an expression. Such an unknown holds a current, while SPICE controls the LTE of charges only. Set it to 0 when a hard-driven device makes such a current change abruptly and the timestep collapses. |
 
 - `am` = Adams-Moulton (AM),  
 - `bdf`/`gear` = backward differentiation (Gear, BDF), 

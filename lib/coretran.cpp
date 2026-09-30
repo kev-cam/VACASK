@@ -1214,7 +1214,23 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
 
     // Number of consecutive points computed with trapezoidal integration
     size_t trapHistory = 0;
-    
+
+    // Unknowns excluded from LTE control. With tran_lteimplicit=0 these are
+    // the implicit equations OpenVAF adds to a model (named implicit_equation_<k>),
+    // e.g. for x=ddt(q) used in an expression. Such an unknown holds a current,
+    // SPICE applies LTE control to the charge only. A current can change abruptly
+    // (e.g. a BJT driven hard by a switch), then its LTE estimate does not shrink
+    // with the timestep and the step collapses.
+    std::vector<char> lteSkip;
+    if (!options.tran_lteimplicit) {
+        lteSkip.assign(n+1, 0);
+        for(decltype(n) i=1; i<=n; i++) {
+            if (std::string(circuit.reprNode(i)->name()).find("implicit_equation")!=std::string::npos) {
+                lteSkip[i] = 1;
+            }
+        }
+    }
+
     // Initialize maximal past solution and residual contribution
     if (params.icmode==icmodeOp) {
         nrSolver.initializeMaxima(opCore_.solver());
@@ -1546,12 +1562,17 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
             // Go through all unknowns, except for the ground
             bool haveRatio = false;
             double maxRatio = 0.0;
+            decltype(n) maxRatioUnknown = 0;
 
             // LTE is computed based on filtered solution if tran_trapltefilter is enabled. 
             // Unfiltered solution is the noiseless solution in transient noise analysis 
             // and plain solution in ordinary transient analysis. 
             auto& unfilteredSolution = (computeNoiseContribution) ? noiselessSolution : solution.vector();
             for(decltype(n) i=1; i<=n; i++) {
+                // Skip unknowns excluded from LTE control (tran_lteimplicit=0)
+                if (!lteSkip.empty() && lteSkip[i]) {
+                    continue;
+                }
                 // Get unknown nature index
                 auto ndx = commons.unknown_natureIndex[i];
 
@@ -1626,6 +1647,7 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
                 // Looking for largest ratio (worst LTE)
                 if (ratio>maxRatio) {
                     maxRatio = ratio;
+                    maxRatioUnknown = i;
                 }
 
             }
@@ -1646,6 +1668,9 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
                 Simulator::dbg() << "  Maximal LTE/tol="+ss.str();
                 ss.str(""); ss << hkNew;
                 Simulator::dbg() << " suggests dt="+ss.str();
+                if (debug>2 && maxRatioUnknown>0) {
+                    Simulator::dbg() << ", worst unknown '"+std::string(circuit.reprNode(maxRatioUnknown)->name())+"'";
+                }
                 Simulator::dbg() << ".\n";
             }
             

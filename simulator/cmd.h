@@ -103,6 +103,8 @@ public:
     // run() call resumes it and then continues with the commands that follow.
     void setPauseOnStop(bool b) { pauseOnStop_ = b; };
     bool paused() const { return pausedAnalysis_!=nullptr; };
+    // Number of analyses run in pause on stop mode that failed
+    size_t failedAnalyses() const { return failedAnalyses_; };
     // Finish a paused analysis without resuming it (flushes its outputs)
     bool abandonPaused(Status& s=Status::ignore);
 
@@ -112,6 +114,7 @@ private:
 
     bool pauseOnStop_ {false};
     Analysis* pausedAnalysis_ {nullptr};
+    size_t failedAnalyses_ {0};
     Status pausedStatus_;
 
     size_t at_;

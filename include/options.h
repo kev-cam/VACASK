@@ -84,6 +84,7 @@ typedef struct SimulatorOptions  {
     Real tran_redofactor;
     Real tran_lteratio;
     Int tran_spicelte;
+    Int tran_lteimplicit;
     Real tran_xmu;
     Int tran_trapltefilter;
     Int tran_noisedebug;

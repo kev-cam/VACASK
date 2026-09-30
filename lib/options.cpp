@@ -186,6 +186,9 @@ SimulatorOptions::SimulatorOptions() {
     tran_lteratio = 3.5; // x>1, LTE overestimation factor (greater values mean more loose LTE tolerance)
     tran_spicelte = 0; // 0 .. correct LTE handling
                        // 1 .. (incorrect) SPICE-like LTE handling
+    tran_lteimplicit = 1; // 1 .. LTE control also on implicit equation unknowns
+                          // 0 .. skip them (OpenVAF introduces them e.g. for x=ddt(q)
+                          //      used in an expression; SPICE has LTE on charges only)
     tran_xmu = 0.5; // for trapezoidal algorithm (Adams-Moulton of order 2) chooses a mixture between trapezoidal and Euler
                     // 0 = pure Euler, 0.5 = pure trapezoidal
     tran_trapltefilter = 1; // enable trap ringing filter for predictor and LTE computation, 
@@ -317,6 +320,7 @@ template<> int Introspection<SimulatorOptions>::setup() {
     registerMember(tran_redofactor);
     registerMember(tran_lteratio);
     registerMember(tran_spicelte);
+    registerMember(tran_lteimplicit);
     registerMember(tran_xmu);
     registerMember(tran_trapltefilter);
     registerMember(tran_noisedebug);

@@ -14,6 +14,7 @@
 #include <memory>
 #include <cmath>
 #include <cstdlib>
+#include <cstdio>
 #include <unordered_set>
 
 using namespace NAMESPACE;
@@ -46,7 +47,13 @@ public:
     // Run the control block until it pauses in a transient or ends
     bool run() {
         Status s;
+        auto failedBefore = interp->failedAnalyses();
         auto st = interp->run(0, s);
+        if (interp->failedAnalyses()>failedBefore) {
+            // An analysis was aborted (the interpreter already reported why)
+            failed = true;
+            return false;
+        }
         if (st==InterpreterExitStatus::Paused) {
             return true;
         } else if (st==InterpreterExitStatus::EndReached) {
@@ -58,6 +65,16 @@ public:
         return false;
     }
 };
+
+// VACASK_COSIM_TRACE=1 traces every simulateUntil() call
+bool trace() {
+    static int t = -1;
+    if (t<0) {
+        auto e = std::getenv("VACASK_COSIM_TRACE");
+        t = e && *e && *e!='0' ? 1 : 0;
+    }
+    return t==1;
+}
 
 Session* session(void** ptr) {
     return ptr ? static_cast<Session*>(*ptr) : nullptr;
@@ -159,9 +176,16 @@ int vacask_simulateUntil(void** ptr, double t, double* actualTime) {
         return 0;
     }
     if (t>S->time) {
+        auto from = S->time;
         S->target = t;
         TranSync::install(S);
         S->run();
+        if (trace()) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "[vacask-cosim] %.15g -> target %.15g reached %.15g%s\n",
+                from, t, S->time, S->failed ? " FAILED" : "");
+            Simulator::dbg() << buf;
+        }
     }
     if (actualTime) {
         *actualTime = S->time;

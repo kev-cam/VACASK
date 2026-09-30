@@ -146,6 +146,7 @@ InterpreterExitStatus CommandInterpreter::runAnalysis(Analysis* an, bool resume,
 InterpreterExitStatus CommandInterpreter::analysisDone(Analysis* an, bool ok, Status& s) {
     delete an;
     if (!ok) {
+        failedAnalyses_++;
         if (!mustAbort(idAnalysis)) {
             Simulator::err() << pausedStatus_.message() << "\n";
         } else {
