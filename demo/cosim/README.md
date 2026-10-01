@@ -51,7 +51,7 @@ given with `--cosim-config=<file.boundary>`, which is an alias of
 process, and back out through a D2A source.
 
 ```sh
-NVCB=/usr/local/src/nvc-build VCB=/opt/build.VACASK/cosim ./run.sh a2d
+NVCB=/usr/local/src/nvc-build VCB=/opt/build.VACASK/Release ./run.sh a2d
 ```
 
 SIMetrix/XSPICE designs go through the Xyce front end

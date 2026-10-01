@@ -12,7 +12,7 @@ set -e
 cd "$(dirname "$0")"
 NVCB=${NVCB:-/usr/local/src/nvc-build}
 NVC=$NVCB/bin/nvc; LIBS=$NVCB/lib
-VCB=${VCB:-/opt/build.VACASK/cosim}
+VCB=${VCB:-/opt/build.VACASK/Release}
 export LD_LIBRARY_PATH=$NVCB/lib:$VCB/cinterface${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 export SIM_MODULE_PATH=${SIM_MODULE_PATH:-$VCB/devices}
 
