@@ -16,11 +16,12 @@ VCB=${VCB:-/opt/build.VACASK/Release}
 export LD_LIBRARY_PATH=$NVCB/lib:$VCB/cinterface${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 export SIM_MODULE_PATH=${SIM_MODULE_PATH:-$VCB/devices}
 
-TEST=${1:-min}   # 'min' (D2A square wave) or 'a2d' (A2D round trip)
+TEST=${1:-min}   # 'min' (D2A square wave), 'a2d' (A2D round trip), 'glitch' (D2A change mid-ramp)
 case $TEST in
+  glitch) VHD=cosim_glitch.vhd; TOP=cosim_glitch; SIM=glitch.sim; BND=glitch.boundary;;
   min) VHD=cosim_min.vhd; TOP=cosim_min; SIM=min.sim; BND=min.boundary;;
   a2d) VHD=cosim_a2d.vhd; TOP=cosim_a2d; SIM=a2d.sim; BND=a2d.boundary;;
-  *) echo "usage: $0 [min|a2d]"; exit 1;;
+  *) echo "usage: $0 [min|a2d|glitch]"; exit 1;;
 esac
 W=work_$TEST; rm -rf $W
 $NVC --std=2040 --work=$W:$W -L $LIBS -a $VHD
