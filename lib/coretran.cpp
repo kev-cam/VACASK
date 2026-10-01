@@ -1052,11 +1052,15 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         co_yield CoreState::Aborted;
     }
 
-    // Co-simulation: external sources see the initial point,
-    // an installed TranSync hook may stop here.
-    auto extPause = ExtSource::notifyAccepted(0.0, solution.vector().data());
+    // Co-simulation: the external sources' world (e.g. a digital simulator)
+    // sees the initial point; whatever it changes in response changes from
+    // t=0 on. An installed TranSync hook may stop here.
+    {
+        double tEvt;
+        ExtSource::preAccept(0.0, solution.vector().data(), 0.0, solution.vector().data(), tEvt);
+    }
     auto syncHook = TranSync::installed();
-    bool syncStop = syncHook && (syncHook->accepted(0.0) || extPause);
+    bool syncStop = syncHook && syncHook->accepted(0.0);
 
     // First buildNoiseResidual() call just prepares flicker noise coefficients
     // Noise samples are all 0 so the generated residual contribution would also be 0. 
@@ -1230,6 +1234,11 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
             }
         }
     }
+
+    // Co-simulation veto (see ExtSource::preAccept): the point to redo the
+    // step to, 0 when none is pending
+    double pendingEvent = 0.0;
+    bool vetoRedo = false;
 
     // Initialize maximal past solution and residual contribution
     if (params.icmode==icmodeOp) {
@@ -1464,6 +1473,11 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         // Call the injectBreakpoint() function
         auto tInjected = injectBreakpoint(tSolve);
         updateBreakPoint(nextBreakPoint, tInjected, tSolve);
+
+        // Co-simulation: a pending veto point not reached yet stays a breakpoint
+        if (pendingEvent>0) {
+            updateBreakPoint(nextBreakPoint, pendingEvent, tSolve);
+        }
 
         // Co-simulation breakpoint
         if (syncHook) {
@@ -1706,6 +1720,28 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
             }
         }
 
+        // Co-simulation: a point that is about to be accepted is first offered
+        // to the external sources' world. If that changed an input of the
+        // circuit at tEvt<tSolve (or at tk, in response to the step's start),
+        // the step is redone so that it ends at tEvt.
+        if (accept && solutionOk && ExtSource::count()>0) {
+            double tEvt;
+            if (ExtSource::preAccept(tk, solution.vector(1).data(), tSolve, solution.vector().data(), tEvt)) {
+                accept = false;
+                newOrder = order;
+                pendingEvent = tEvt>tk ? tEvt : 0.0;
+                vetoRedo = true;
+                if (debug) {
+                    ss.str(""); ss << tEvt;
+                    Simulator::dbg() << "Point vetoed by external sources, input changed at t="+ss.str()+".\n";
+                }
+            } else {
+                // An input may have started to change at tSolve (a ramp starts
+                // here): take the breakpoints the sources report now
+                updateBreakPoint(nextBreakPoint, ExtSource::nextBreakpoint(tSolve), tSolve);
+            }
+        }
+
         // 
         // Beyond this point we are no longer allowed to change accept
         // 
@@ -1746,6 +1782,11 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
             // Store last accepted boundStep and hmax value
             acceptedBoundStep = boundStep;
             acceptedHmax = hmax;
+
+            // Co-simulation: pending veto point reached
+            if (pendingEvent>0 && tSolve>=pendingEvent) {
+                pendingEvent = 0.0;
+            }
 
             // Timestep cutting origin is tSolve
             cutOrigin = tSolve;
@@ -1790,6 +1831,19 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
                 Simulator::dbg() << "  Timestep limited by hmax to dt="+ss.str()+".\n";
             }
             hkNew = std::min(hkNew, hmax);
+        }
+
+        // Co-simulation: redo the step so that it ends at the veto point
+        // (overshoot so that the cutting below snaps to it exactly),
+        // or the same step again if the input changed at its start
+        if (vetoRedo) {
+            if (pendingEvent>tk) {
+                breakPoints.at(0) = pendingEvent;
+                hkNew = 2*(pendingEvent-tk);
+            } else {
+                hkNew = hk;
+            }
+            vetoRedo = false;
         }
 
         // Timepoint (break point) to which hkNew should be cut
@@ -1897,9 +1951,8 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
                 co_yield CoreState::Aborted;
             }
 
-            // Co-simulation: notify external sources, ask the hook if we should stop
-            extPause = ExtSource::notifyAccepted(tSolve, solution.vector().data());
-            syncStop = syncHook && (syncHook->accepted(tSolve) || extPause);
+            // Co-simulation: ask the hook if we should stop
+            syncStop = syncHook && syncHook->accepted(tSolve);
 
             // Store timestep
             pastTimesteps.add(hk);

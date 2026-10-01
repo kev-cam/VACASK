@@ -16,15 +16,19 @@
 //   initfn(args, isVoltageSource, &src)
 // and must fill in the VacaskExtSource structure.
 //
-// Every such source also sees the accepted timepoints of transient analysis
-// (and the initial point at t=0) together with the voltage across its
-// terminals. A zero-current isource therefore acts as an analog probe
-// (analog to digital boundary) while a vsource acts as a driver
-// (digital to analog boundary).
+// The transient analysis is the master schedule of whatever the library
+// talks to (e.g. a digital simulator). Every converged step tk -> t is
+// offered to the library before it is accepted: each source gets
+// candidate() with the voltage across its terminals at both ends (a
+// zero-current isource is thus an analog probe, an analog to digital
+// boundary; a vsource is a driver, a digital to analog boundary), then the
+// library's optional vacask_extsource_step(t, &tEvt) runs. If it returns
+// nonzero, an input of the circuit (a driver) changed at tEvt, tk <= tEvt
+// < t, and the step is not accepted but redone so that it ends at tEvt.
 
 extern "C" {
 
-#define VACASK_EXTSRC_ABI 1
+#define VACASK_EXTSRC_ABI 2
 
 typedef struct VacaskExtSource {
     // Set by VACASK before calling init.
@@ -38,11 +42,10 @@ typedef struct VacaskExtSource {
     // *nextBreak receives the next breakpoint (>t), 0 for none.
     double (*value)(void* ctx, double t, double* nextBreak);
 
-    // Called at every accepted timepoint with v = V(p)-V(n). May be null.
-    // Return nonzero to request that the analysis pauses at this point so that
-    // a co-simulation master can react (honoured only when a TranSync hook is
-    // installed).
-    int (*accepted)(void* ctx, double t, double v);
+    // A step tPrev -> t has converged and is about to be accepted: the voltage
+    // across the terminals goes from vPrev to v. Also called for the initial
+    // point (tPrev == t). May be null.
+    void (*candidate)(void* ctx, double tPrev, double vPrev, double t, double v);
 
     // Called when the source is destroyed. May be null.
     void (*destroy)(void* ctx);
@@ -50,6 +53,12 @@ typedef struct VacaskExtSource {
 
 // Returns nonzero on success.
 typedef int (*VacaskExtSourceInit)(const char* args, int isVoltageSource, VacaskExtSource* src);
+
+// Optional, looked up by this name in the library: all sources have been
+// given their candidate() for time t. Returns nonzero if the step must be
+// redone to end at *tEvt (see above); *tEvt == tPrev redoes the same step.
+#define VACASK_EXTSRC_STEP "vacask_extsource_step"
+typedef int (*VacaskExtSourceStep)(double t, double* tEvt);
 
 }
 
@@ -75,9 +84,10 @@ public:
 
     void setUnknowns(UnknownIndex p, UnknownIndex n) { uP = p; uN = n; };
 
-    // Notify all live external sources of an accepted timepoint,
-    // returns true if any of them requested a pause
-    static bool notifyAccepted(double t, const double* solution);
+    // Offer a converged step tPrev -> t (solutions prev and cur) to all live
+    // external sources' libraries before accepting it. Returns true if the
+    // step must be redone to end at tEvt (tPrev <= tEvt < t).
+    static bool preAccept(double tPrev, const double* prev, double t, const double* cur, double& tEvt);
 
     // Earliest breakpoint after t reported by live external sources (0 for none)
     static double nextBreakpoint(double t);
@@ -91,6 +101,7 @@ private:
 
     VacaskExtSource src {};
     void* lib {nullptr};
+    VacaskExtSourceStep step {nullptr};
     UnknownIndex uP {0};
     UnknownIndex uN {0};
 };

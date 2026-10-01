@@ -51,6 +51,7 @@ std::shared_ptr<ExtSource> ExtSource::create(const std::string& uri, bool isVolt
 
     std::shared_ptr<ExtSource> ext(new ExtSource());
     ext->lib = handle;
+    ext->step = (VacaskExtSourceStep)dynamicLibrarySymbol(handle, VACASK_EXTSRC_STEP);
     ext->src.abi = VACASK_EXTSRC_ABI;
     if (!init(args.c_str(), isVoltageSource ? 1 : 0, &ext->src)) {
         err = "Initialization '"+fnName+"("+args+")' in '"+libName+"' failed.";
@@ -83,24 +84,43 @@ double ExtSource::nextBreakpoint(double t) {
     for(auto ext : registry()) {
         double nb;
         ext->value(t, nb);
-        if (nb>t && (tBr==0 || nb<tBr)) {
+        // A breakpoint within the time tolerance of t is this point, not the next one
+        if (nb-t>timeRelativeTolerance*t && (tBr==0 || nb<tBr)) {
             tBr = nb;
         }
     }
     return tBr;
 }
 
-bool ExtSource::notifyAccepted(double t, const double* solution) {
-    bool pause = false;
-    for(auto ext : registry()) {
-        if (ext->src.accepted) {
-            // Unknown 0 is the ground node, its value is always 0
-            if (ext->src.accepted(ext->src.ctx, t, solution[ext->uP]-solution[ext->uN])) {
-                pause = true;
-            }
+bool ExtSource::preAccept(double tPrev, const double* prev, double t, const double* cur, double& tEvt) {
+    auto& reg = registry();
+    if (reg.empty()) {
+        return false;
+    }
+    // Unknown 0 is the ground node, its value is always 0
+    for(auto ext : reg) {
+        if (ext->src.candidate) {
+            ext->src.candidate(ext->src.ctx, tPrev, prev[ext->uP]-prev[ext->uN], t, cur[ext->uP]-cur[ext->uN]);
         }
     }
-    return pause;
+    // One step call per library
+    bool veto = false;
+    std::vector<VacaskExtSourceStep> done;
+    for(auto ext : reg) {
+        auto fn = ext->step;
+        if (!fn || std::find(done.begin(), done.end(), fn)!=done.end()) {
+            continue;
+        }
+        done.push_back(fn);
+        double te = -1;
+        if (fn(t, &te) && te>=0) {
+            if (!veto || te<tEvt) {
+                tEvt = te;
+            }
+            veto = true;
+        }
+    }
+    return veto;
 }
 
 }
