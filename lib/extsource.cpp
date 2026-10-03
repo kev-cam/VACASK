@@ -92,7 +92,7 @@ double ExtSource::nextBreakpoint(double t) {
     return tBr;
 }
 
-bool ExtSource::preAccept(double tPrev, const double* prev, double t, const double* cur, double& tEvt) {
+bool ExtSource::preAccept(double tPrev, const double* prev, double t, const double* cur, double& tEvt, bool& finish) {
     auto& reg = registry();
     if (reg.empty()) {
         return false;
@@ -105,6 +105,7 @@ bool ExtSource::preAccept(double tPrev, const double* prev, double t, const doub
     }
     // One step call per library
     bool veto = false;
+    bool fin = false;
     std::vector<VacaskExtSourceStep> done;
     for(auto ext : reg) {
         auto fn = ext->step;
@@ -113,12 +114,19 @@ bool ExtSource::preAccept(double tPrev, const double* prev, double t, const doub
         }
         done.push_back(fn);
         double te = -1;
-        if (fn(t, &te) && te>=0) {
+        auto r = fn(t, &te);
+        if (r==VACASK_EXTSRC_FINISH) {
+            fin = true;
+        } else if (r!=VACASK_EXTSRC_ACCEPT && te>=0) {
             if (!veto || te<tEvt) {
                 tEvt = te;
             }
             veto = true;
         }
+    }
+    // A vetoed point is not accepted, so it cannot finish the analysis
+    if (fin && !veto) {
+        finish = true;
     }
     return veto;
 }

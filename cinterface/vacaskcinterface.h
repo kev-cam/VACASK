@@ -40,6 +40,14 @@ double vacask_getTime(void** ptr);
 // Finish (flush outputs) and free
 void vacask_close(void** ptr);
 
+// Version of the co-simulation protocol (VACASK_COSIM_ABI, extsource.h):
+// 2 = every converged step is offered to the external sources, which may
+// veto it or finish the transient (vacask_extsource_step returning 2: the
+// point is accepted and the analysis ends, as for a Verilog-A $finish; at
+// the t=0 point too). A co-simulation master checks it before it starts:
+// an older library reads a finish as an accepted step and never ends.
+int vacask_cosim_abi(void);
+
 #ifdef __cplusplus
 }
 #endif

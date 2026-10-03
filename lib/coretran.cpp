@@ -1054,10 +1054,13 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
 
     // Co-simulation: the external sources' world (e.g. a digital simulator)
     // sees the initial point; whatever it changes in response changes from
-    // t=0 on. An installed TranSync hook may stop here.
+    // t=0 on (a veto cannot be honoured here). If that world ends here
+    // (e.g. a $finish at t=0), the analysis finishes after this point, as
+    // for a Verilog-A $finish. An installed TranSync hook may stop here.
+    bool extFinish = false;
     {
         double tEvt;
-        ExtSource::preAccept(0.0, solution.vector().data(), 0.0, solution.vector().data(), tEvt);
+        ExtSource::preAccept(0.0, solution.vector().data(), 0.0, solution.vector().data(), tEvt, extFinish);
     }
     auto syncHook = TranSync::installed();
     bool syncStop = syncHook && syncHook->accepted(0.0);
@@ -1080,9 +1083,13 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         stopFlag |= opCore_.solver().evalSetup().requests.stop;
     }
     finishFlag |= esInit.requests.finish;
+    finishFlag |= extFinish;
     stopFlag |= esInit.requests.stop;
     stopFlag |= syncStop;
     if (finishFlag) {
+        if (debug && extFinish) {
+            Simulator::dbg() << "Finishing analysis at t=0 on request of external sources.\n";
+        }
         co_yield CoreState::Finished;
     } else if (stopFlag) {
         co_yield CoreState::Stopped;
@@ -1723,10 +1730,12 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
         // Co-simulation: a point that is about to be accepted is first offered
         // to the external sources' world. If that changed an input of the
         // circuit at tEvt<tSolve (or at tk, in response to the step's start),
-        // the step is redone so that it ends at tEvt.
+        // the step is redone so that it ends at tEvt. If that world has ended
+        // (extFinish), the point is accepted and the analysis then finishes.
+        extFinish = false;
         if (accept && solutionOk && ExtSource::count()>0) {
             double tEvt;
-            if (ExtSource::preAccept(tk, solution.vector(1).data(), tSolve, solution.vector().data(), tEvt)) {
+            if (ExtSource::preAccept(tk, solution.vector(1).data(), tSolve, solution.vector().data(), tEvt, extFinish)) {
                 accept = false;
                 newOrder = order;
                 pendingEvent = tEvt>tk ? tEvt : 0.0;
@@ -1977,10 +1986,12 @@ CoreCoroutine TranCore::coroutine(bool continuePrevious, ErrorConsumer& errors) 
 
             // Check Finish and Stop
             // Verilog-AMS LRM states that Finish and Stop should be taken into account
-            // at converged iterations (we assume that this means accepted timepoints in transient analysis). 
-            if (nrSolver.evalSetup().requests.finish) {
+            // at converged iterations (we assume that this means accepted timepoints in transient analysis).
+            // A finish requested by the external sources' world (co-simulation)
+            // is handled the same way: this point is accepted, the analysis ends.
+            if (nrSolver.evalSetup().requests.finish || extFinish) {
                 if (debug) {
-                    Simulator::dbg() << "Finishing analysis on request.\n";
+                    Simulator::dbg() << (extFinish ? "Finishing analysis on request of external sources.\n" : "Finishing analysis on request.\n");
                 }
                 finished = true;
                 co_yield CoreState::Finished;

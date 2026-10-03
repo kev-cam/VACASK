@@ -203,6 +203,10 @@ double vacask_getTime(void** ptr) {
     return S ? S->time : 0.0;
 }
 
+int vacask_cosim_abi(void) {
+    return VACASK_COSIM_ABI;
+}
+
 void vacask_close(void** ptr) {
     auto S = session(ptr);
     if (!S) {
