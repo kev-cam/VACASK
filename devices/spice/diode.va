@@ -229,6 +229,7 @@ module sp_diode(a, c);
   real DIOtVcrit = 0;
   real DIOtVcritSW = 0;
   real DIOtF1 = 0;
+  real DIOtF1SW = 0;
   real DIOtBrkdwnV = 0;
   real DIOtF2 = 0;
   real DIOtF3 = 0;
@@ -786,6 +787,10 @@ module sp_diode(a, c);
     xfc = ln(1-fc);
     xfcs = ln(1-fcs);
     DIOtF1 = DIOtJctPot*(1-exp((1-DIOtGradingCoeff)*xfc))/(1-DIOtGradingCoeff);
+    // the sidewall's own F1 (FCS, PHP, MJSW): ngspice's dioload.c adds czeroSW*DIOtF1, the
+    // area's, which makes the sidewall charge discontinuous at FCS*PHP unless FC=FCS, PB=PHP
+    // and M=MJSW
+    DIOtF1SW = DIOtJctSWPot*(1-exp((1-mjsw)*xfcs))/(1-mjsw);
     DIOtDepCap = fc*DIOtJctPot;
     DIOtDepSWCap = fcs*DIOtJctSWPot;
     totalSatCur = DIOtSatCur+DIOtSatSWCur;
@@ -1105,7 +1110,7 @@ module sp_diode(a, c);
       deplcapSW = czeroSW*sargSW;
     end else begin
       czof2SW = czeroSW/DIOtF2SW;
-      deplchargeSW = czeroSW*DIOtF1+czof2SW*(DIOtF3SW*(vdx-DIOtDepSWCap)+mjsw/(DIOtJctSWPot+DIOtJctSWPot)*(vdx*vdx-DIOtDepSWCap*DIOtDepSWCap));
+      deplchargeSW = czeroSW*DIOtF1SW+czof2SW*(DIOtF3SW*(vdx-DIOtDepSWCap)+mjsw/(DIOtJctSWPot+DIOtJctSWPot)*(vdx*vdx-DIOtDepSWCap*DIOtDepSWCap));
       deplcapSW = czof2SW*(DIOtF3SW+mjsw*vdx/DIOtJctSWPot);
     end
     if (revrec) begin

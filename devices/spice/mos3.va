@@ -156,6 +156,7 @@ module sp_mos3(d, g, s, b);
   (* desc = "Width effect on threshold" *) parameter real delta = 0;
   (* desc = "Vgs dependence on mobility" *) parameter real theta = 0;
   (* desc = "Kappa" *) parameter real kappa = 0.2;
+  (* desc = "Original SPICE channel-length modulation (as .option badmos3): no CLM below vdsat, dL=sqrt(kappa*alpha*(vds-vdsat)) with vmax=0, Ep without kappa with vmax>0" *) parameter real badmos3 = 0;
   (* desc = "Parameter measurement temperature" *) parameter real tnom = 0;
   (* desc = "Flicker noise coefficient" *) parameter real kf = 0;
   (* desc = "Flicker noise exponent" *) parameter real af = 1;
@@ -509,7 +510,7 @@ module sp_mos3(d, g, s, b);
   real CONSTe = exp(1.0);
   real VACONSTcharge = 1.6021766208e-19;
   real VACONSTboltz = 1.38064852e-23;
-  real badmos3 = $simparam("badmos3", 0);
+  real use_badmos3 = 0;
   real defad = $simparam("defad", 0);
   real defas = $simparam("defas", 0);
   real defl = $simparam("defl", 1e-4);
@@ -815,6 +816,7 @@ module sp_mos3(d, g, s, b);
 
     // Evaluation constants
     lc_gmin = $simparam("gmin", 1e-12);
+    use_badmos3 = (badmos3!=0||$simparam("badmos3", 0)!=0) ? 1 : 0;
 
     // Tag: setup, function: MOS3setup
     if (!$param_given(kp)) begin
@@ -1259,11 +1261,11 @@ module sp_mos3(d, g, s, b);
           Beta = Beta*fdrain;
         end
         if (MOS3mode*load_vds<=load_vdsat) begin
-          if (vmax>0.0||MOS3alpha==0.0||badmos3) begin
+          if (vmax>0.0||MOS3alpha==0.0||use_badmos3) begin
             goto_destination = line700;
           end else begin
             arga = MOS3mode*load_vds/load_vdsat;
-            delxl = sqrt(kappa*MOS3alpha*load_vdsat/8);
+            delxl = (kappa*MOS3alpha>0) ? sqrt(kappa*MOS3alpha*load_vdsat/8) : 0.0;
             dldvd = 4*delxl*arga*arga*arga/load_vdsat;
             arga = arga * (arga);
             arga = arga * (arga);
@@ -1292,7 +1294,7 @@ module sp_mos3(d, g, s, b);
               dgdvg = gdoncd*MOS3gm-gdonfd*dfddvg+gdonfg*dfgdvg;
               dgdvd = gdoncd*MOS3gds-gdonfd*dfddvd+gdonfg*dfgdvd;
               dgdvb = gdoncd*MOS3gmbs-gdonfd*dfddvb+gdonfg*dfgdvb;
-              if (badmos3) begin
+              if (use_badmos3) begin
                 emax = cdsat*oneoverxl/gdsat;
               end else begin
                 emax = kappa*cdsat*oneoverxl/gdsat;
@@ -1324,11 +1326,11 @@ module sp_mos3(d, g, s, b);
     end
     if (goto_destination<0||goto_destination==line510) begin
       goto_destination = -1;
-      if (badmos3) begin
-        delxl = sqrt(kappa*(MOS3mode*load_vds-load_vdsat)*MOS3alpha);
+      if (use_badmos3) begin
+        delxl = (kappa*MOS3alpha>0) ? sqrt(kappa*(MOS3mode*load_vds-load_vdsat)*MOS3alpha) : 0.0;
         dldvd = 0.5*delxl/(MOS3mode*load_vds-load_vdsat);
       end else begin
-        delxl = sqrt(kappa*MOS3alpha*(MOS3mode*load_vds-load_vdsat+load_vdsat/8));
+        delxl = (kappa*MOS3alpha>0) ? sqrt(kappa*MOS3alpha*(MOS3mode*load_vds-load_vdsat+load_vdsat/8)) : 0.0;
         dldvd = 0.5*delxl/(MOS3mode*load_vds-load_vdsat+load_vdsat/8);
       end
       ddldvg = 0.0;
