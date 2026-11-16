@@ -29,6 +29,12 @@ namespace NAMESPACE {
 bool findProgram(const std::string& prog, std::string& pathToProg) {
     static std::unordered_map<std::string, std::string> cache;
 
+    // An empty name (SIM_OPENVAF set to nothing) would be found below as the
+    // directory of the simulator executable
+    if (prog.empty()) {
+        return false;
+    }
+
     // Try cache
     auto it = cache.find(prog);
     if (it!=cache.end()) {
@@ -103,6 +109,9 @@ std::tuple<bool, std::string, std::string> runProcess(
         customEnv["SIM_PARENT_FILE_DIR"] = *parentFilePath;
     }
 
+    // A program that cannot be started (not executable, a directory, ...) makes
+    // the launcher throw; report it like any other failure to run the program
+    try {
     if (collect) {
         boost::asio::io_context ios;
         
@@ -174,6 +183,13 @@ std::tuple<bool, std::string, std::string> runProcess(
         }
 
         return std::make_tuple(ok, "", "");
+    }
+    } catch (const boost::system::system_error& e) {
+        s.set(Status::Process, "Cannot run '"+path+"': "+e.code().message()+".");
+        return std::make_tuple(false, "", "");
+    } catch (const std::exception& e) {
+        s.set(Status::Process, "Cannot run '"+path+"': "+e.what()+".");
+        return std::make_tuple(false, "", "");
     }
 }
 
