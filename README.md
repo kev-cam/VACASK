@@ -300,9 +300,9 @@ Unfortunately you will have to build your own Boost. We had problems with system
 cd tools/build
 ./bootstrap.sh gcc
 cd ../..
-tools/build/b2 --with-filesystem --with-process --with-asio link=static toolset=gcc
+tools/build/b2 --with-filesystem --with-process --with-asio link=static toolset=gcc cxxflags=-fPIC cflags=-fPIC
 ```
-Now Boost libraries are installed under `boost_1_88_0/stage` while the include files are in `boost_1_88_0`. 
+Now Boost libraries are installed under `boost_1_88_0/stage` while the include files are in `boost_1_88_0`. The `-fPIC` flags are for the C interface library (`cinterface/libvacaskcinterface.so`, used for co-simulation): it is a shared library and takes the static Boost libraries only if they are position independent. Without the flags the simulator still builds, but linking the C interface fails unless shared Boost libraries (`libboost_filesystem.so` and `libboost_process.so`) are found. Keep the Boost directory in a place that survives a reboot (not `/tmp`): the build system needs it every time the simulator is rebuilt. 
 
 You will also have to build SuperLU_MT from the sources. Do not use SuperLU_dist, it won't work well. You can download the original package from [https://portal.nersc.gov/project/sparse/superlu/](https://portal.nersc.gov/project/sparse/superlu/), but you will have to edit the `Makefile` and create the `lib` directory manually. Make sure you build the OpenMP version. To save you the trouble, we prepared a version of the sources where everything is ready for compiling [https://fides.fe.uni-lj.si/vacask/superlu_mt-4.0.0.tar.gz](https://fides.fe.uni-lj.si/vacask/superlu_mt-4.0.0.tar.gz). 
 Unpack the sources and run
