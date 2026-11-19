@@ -1,0 +1,3 @@
+{"commit": "da1b9371912ea91be977d58d35ceb8805450b23a", "date": "2026-11-19", "dir": "import", "kind": "refactor", "peer": "arpad", "subject": "Identified OMP data chokepoints.", "tests": ["compile", "full-regression"], "verdict": "applied"}
+{"commit": "42e60a5680b0edbd0df7c56b968380db52ca93ce", "date": "2026-11-19", "dir": "import", "kind": "feature", "peer": "arpad", "subject": "ErrorStack merging.", "tests": ["compile", "full-regression"], "verdict": "applied"}
+{"commit": "dfb34b4b7c3a8a5771b65efbf5ddb2474baec31f", "date": "2026-11-19", "dir": "import", "kind": "feature", "peer": "arpad", "subject": "Mutex in OSDI log callback.", "tests": ["compile", "full-regression"], "verdict": "applied"}
