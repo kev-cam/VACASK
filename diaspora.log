@@ -7,3 +7,10 @@
   test compile failed: simulator/cmd.cpp:219:39: error: cannot convert 'std::unique_ptr<sim::Analysis>' to 'sim::Analysis*'
   the run was aborted, not promoted
   => failed
+
+2026-11-19 run 20261119-152930 import arpad@f29d2b0ea571654f4f6805350b5f1eb364ab10ab Fixed a bug in PSS shoot ic.
+  cherry-pick: conflicts in .vscode/launch.json; agent: ported - Ported PSS shoot-IC/UIC sweep fix with both tests; launch.json kept as ours (sensitive-file edit blocked); not built or run locally.
+  test full-regression failed: 2 new failures: test_pss4.sim, test_tranicsweep.sim
+  agent repair: fixed - Switched new tests' Python imports to our flat rawfile/runtest modules; not run here, and test_pss4 still needs the absent IHP PDK (as test_pssosc2).
+  test full-regression failed: 1 new failure: test_pss4.sim
+  => failed
